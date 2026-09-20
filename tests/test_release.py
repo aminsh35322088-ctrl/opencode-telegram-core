@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts" / "verify-release.sh"
+PACKAGE = ROOT / "scripts" / "package-release.sh"
 
 UPSTREAM = "1" * 40
 CORE = "a" * 40
@@ -93,6 +94,16 @@ class ReleaseTests(unittest.TestCase):
     def verify(self, release, lock):
         env = os.environ | {"CORE_UPSTREAM_LOCK": str(lock)}
         return subprocess.run([str(VERIFY), str(release)], text=True, capture_output=True, env=env)
+
+    def test_packaging_rejects_dirty_source_tree(self):
+        probe = ROOT / ".release-dirty-probe"
+        probe.write_text("dirty\n")
+        try:
+            result = subprocess.run([str(PACKAGE)], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("source tree is dirty", result.stderr.lower())
+        finally:
+            probe.unlink(missing_ok=True)
 
     def test_valid_release_verifies(self):
         release, lock = self.fixture()

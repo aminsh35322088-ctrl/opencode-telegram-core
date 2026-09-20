@@ -7,6 +7,9 @@ sdk="$CORE_ROOT/dist/sdk"
 build_info="$CORE_ROOT/dist/build-info.json"
 release="$CORE_ROOT/dist/release"
 
+dirty="$(git -C "$CORE_ROOT" status --porcelain --untracked-files=normal)"
+[[ -z "$dirty" ]] || die "source tree is dirty; commit or clean changes before packaging"
+
 [[ -x "$runtime" ]] || die "runtime artifact missing"
 [[ -d "$sdk" ]] || die "SDK artifact missing"
 [[ -f "$sdk/UPSTREAM_REVISION" ]] || die "SDK revision marker missing"
