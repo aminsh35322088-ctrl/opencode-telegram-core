@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "scripts" / "verify-release.sh"
-PACKAGE = ROOT / "scripts" / "package-release.sh"
+COMMON = ROOT / "scripts" / "common.sh"
 
 UPSTREAM = "1" * 40
 CORE = "a" * 40
@@ -95,15 +95,21 @@ class ReleaseTests(unittest.TestCase):
         env = os.environ | {"CORE_UPSTREAM_LOCK": str(lock)}
         return subprocess.run([str(VERIFY), str(release)], text=True, capture_output=True, env=env)
 
-    def test_packaging_rejects_dirty_source_tree(self):
-        probe = ROOT / ".release-dirty-probe"
-        probe.write_text("dirty\n")
-        try:
-            result = subprocess.run([str(PACKAGE)], text=True, capture_output=True)
+    def test_source_tree_guard_rejects_untracked_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            (repo / "tracked").write_text("clean\n")
+            subprocess.run(["git", "-C", str(repo), "add", "tracked"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
+            (repo / "dirty").write_text("dirty\n")
+            command = f'source "{COMMON}"; assert_clean_source_tree "{repo}"'
+            result = subprocess.run(["bash", "-c", command], text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("source tree is dirty", result.stderr.lower())
-        finally:
-            probe.unlink(missing_ok=True)
 
     def test_valid_release_verifies(self):
         release, lock = self.fixture()

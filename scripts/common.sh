@@ -24,6 +24,13 @@ die() {
   exit 1
 }
 
+assert_clean_source_tree() {
+  local repo="$1"
+  local dirty
+  dirty="$(git -C "$repo" status --porcelain --untracked-files=normal)"
+  [[ -z "$dirty" ]] || die "source tree is dirty; commit or clean changes before packaging"
+}
+
 assert_safe_materialize_destination() {
   local target="$1"
   local home="$2"
