@@ -23,10 +23,18 @@ class ToolchainTests(unittest.TestCase):
             self.assertIn("expected Bun 1.3.14", result.stderr)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class BuildEnvironmentTests(unittest.TestCase):
+    def test_build_environment_propagates_lock_read_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "missing-lock.json"
+            command = (
+                f'source "{ROOT / "scripts" / "common.sh"}"; '
+                'export_upstream_build_environment'
+            )
+            env = os.environ | {"CORE_UPSTREAM_LOCK": str(missing)}
+            result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, env=env)
+            self.assertNotEqual(result.returncode, 0)
+
     def test_build_environment_uses_locked_release_version(self):
         command = (
             f'source "{ROOT / "scripts" / "common.sh"}"; '
@@ -36,3 +44,7 @@ class BuildEnvironmentTests(unittest.TestCase):
         result = subprocess.run(["bash", "-c", command], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "1.18.31")
+
+
+if __name__ == "__main__":
+    unittest.main()

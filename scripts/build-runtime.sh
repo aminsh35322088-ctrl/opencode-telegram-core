@@ -3,7 +3,8 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 BUN="$("$CORE_ROOT/scripts/ensure-bun.sh")"
-export PATH="$(dirname "$BUN"):$PATH"
+bun_dir="$(dirname "$BUN")"
+export PATH="$bun_dir:$PATH"
 export_upstream_build_environment
 tree="$CORE_ROOT/.work/opencode"
 
@@ -11,10 +12,17 @@ tree="$CORE_ROOT/.work/opencode"
 "$CORE_ROOT/scripts/apply-patches.sh" "$tree"
 "$BUN" install --cwd "$tree" --frozen-lockfile
 
-export OPENCODE_TELEGRAM_CORE_VERSION="$(json_get telegramCoreVersion)"
-export OPENCODE_TELEGRAM_CORE_COMMIT="${CORE_SOURCE_COMMIT:-$(git -C "$CORE_ROOT" rev-parse HEAD)}"
-export OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT="$(json_get commit)"
-export OPENCODE_TELEGRAM_CORE_SDK_REVISION="$(json_get commit)"
+telegram_core_version="$(json_get telegramCoreVersion)"
+upstream_commit="$(json_get commit)"
+if [[ -n "${CORE_SOURCE_COMMIT:-}" ]]; then
+  core_commit="$CORE_SOURCE_COMMIT"
+else
+  core_commit="$(git -C "$CORE_ROOT" rev-parse HEAD)"
+fi
+export OPENCODE_TELEGRAM_CORE_VERSION="$telegram_core_version"
+export OPENCODE_TELEGRAM_CORE_COMMIT="$core_commit"
+export OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT="$upstream_commit"
+export OPENCODE_TELEGRAM_CORE_SDK_REVISION="$upstream_commit"
 
 "$BUN" run --cwd "$tree/packages/opencode" script/build.ts --single
 

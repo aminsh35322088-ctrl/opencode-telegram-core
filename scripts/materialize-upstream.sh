@@ -7,7 +7,29 @@ repo="$(json_get repository)"
 tag="$(json_get tag)"
 expected="$(json_get commit)"
 
-rm -rf "$dest"
+target="$(python3 - "$dest" <<'PY'
+import os
+import sys
+print(os.path.realpath(os.path.abspath(sys.argv[1])))
+PY
+)"
+home="$(python3 - "${HOME:-}" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1])) if sys.argv[1] else print("")
+PY
+)"
+core="$(python3 - "$CORE_ROOT" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+
+assert_safe_materialize_destination "$target" "$home" "$core"
+
+rm -rf "$target"
+dest="$target"
 mkdir -p "$(dirname "$dest")"
 git init -q "$dest"
 git -C "$dest" remote add origin "$repo"

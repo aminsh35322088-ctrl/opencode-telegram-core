@@ -26,6 +26,27 @@ def free_port():
 class HttpError(RuntimeError):
     pass
 
+
+def isolated_environment(root):
+    env = {}
+    for key in ("PATH", "LANG", "LC_ALL", "SHELL", "TZ"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    for key, name in {
+        "HOME": "home",
+        "XDG_DATA_HOME": "data",
+        "XDG_CONFIG_HOME": "config",
+        "XDG_STATE_HOME": "state",
+        "XDG_CACHE_HOME": "cache",
+    }.items():
+        value = root / name
+        value.mkdir(parents=True, exist_ok=True)
+        env[key] = str(value)
+    env["NO_COLOR"] = "1"
+    return env
+
+
 class Server:
     def __init__(self, binary):
         self.binary = Path(binary).resolve()
@@ -38,17 +59,7 @@ class Server:
     def __enter__(self):
         self.temp = tempfile.TemporaryDirectory(prefix="opencode-core-compat-")
         root = Path(self.temp.name)
-        env = os.environ.copy()
-        for key, name in {
-            "HOME": "home",
-            "XDG_DATA_HOME": "data",
-            "XDG_CONFIG_HOME": "config",
-            "XDG_STATE_HOME": "state",
-            "XDG_CACHE_HOME": "cache",
-        }.items():
-            value = root / name
-            value.mkdir()
-            env[key] = str(value)
+        env = isolated_environment(root)
         port = free_port()
         self.base = f"http://127.0.0.1:{port}"
         self.process = subprocess.Popen(
@@ -176,6 +187,22 @@ def durable_identity(event):
     if not isinstance(aggregate, str) or not isinstance(seq, int):
         raise AssertionError(f"invalid durable identity: {event}")
     return aggregate, seq
+
+
+class HarnessIsolationTests(unittest.TestCase):
+    def test_server_environment_does_not_inherit_provider_secret(self):
+        key = "SENTINEL_PROVIDER_API_KEY"
+        previous = os.environ.get(key)
+        os.environ[key] = "must-not-leak"
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                env = isolated_environment(Path(td))
+            self.assertNotIn(key, env)
+        finally:
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
 
 
 class SessionContractTests(unittest.TestCase):

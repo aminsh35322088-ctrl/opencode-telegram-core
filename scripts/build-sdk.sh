@@ -3,7 +3,8 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 BUN="$("$CORE_ROOT/scripts/ensure-bun.sh")"
-export PATH="$(dirname "$BUN"):$PATH"
+bun_dir="$(dirname "$BUN")"
+export PATH="$bun_dir:$PATH"
 export_upstream_build_environment
 tree="$CORE_ROOT/.work/opencode"
 expected="$(json_get commit)"
