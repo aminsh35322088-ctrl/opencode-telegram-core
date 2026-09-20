@@ -13,6 +13,10 @@ with open(sys.argv[1], "r", encoding="utf-8") as fh:
 PY
 }
 
+export_upstream_build_environment() {
+  export OPENCODE_VERSION="$(json_get version)"
+}
+
 die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
