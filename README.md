@@ -1,1 +1,1 @@
-# opencode-telegram-core
+# OpenCode Telegram Core
