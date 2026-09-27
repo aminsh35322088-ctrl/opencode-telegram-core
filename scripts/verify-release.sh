@@ -57,6 +57,8 @@ for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegra
         raise SystemExit(f"build-info {key} does not match manifest")
 if manifest.get("runtimeProfile") != "telegram-headless":
     raise SystemExit("release runtime profile is not telegram-headless")
+if manifest.get("embeddedWebUi") is not False:
+    raise SystemExit("release unexpectedly embeds Web UI")
 runtime_bytes = manifest.get("runtimeBytes")
 runtime_max = manifest.get("runtimeMaxBytes")
 if not isinstance(runtime_bytes, int) or not isinstance(runtime_max, int) or runtime_bytes <= 0 or runtime_bytes > runtime_max:
@@ -82,7 +84,7 @@ import json
 import sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 runtime = json.load(open(sys.argv[2], encoding="utf-8"))
-for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegramCoreCommit", "sdkRevision", "runtimeProfile"]:
+for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegramCoreCommit", "sdkRevision", "runtimeProfile", "embeddedWebUi"]:
     if runtime.get(key) != manifest.get(key):
         raise SystemExit(f"runtime build-info {key} does not match manifest")
 PY
