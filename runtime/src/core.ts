@@ -28,6 +28,7 @@ export interface TelegramNativeCoreOptions {
   readonly outboundSink: OutboundSink;
   readonly richMessagePort: RichMessagePort;
   readonly abortRun: (run: RunIdentity, reason: "telegram_stop") => Promise<void>;
+  readonly cleanupBinding?: (binding: BindingIdentity) => Promise<void>;
   readonly admissionPolicy: TelegramAdmissionPolicy;
   readonly railwayPolicy: RailwayResourcePolicy;
   readonly stuckRepeatThreshold?: number;
@@ -69,6 +70,7 @@ export class TelegramNativeCore {
   static async open(options: TelegramNativeCoreOptions): Promise<TelegramNativeCore> {
     const core = new TelegramNativeCore(options);
     await core.bindings.load();
+    await core.reconcilePendingDeletes();
     return core;
   }
 
@@ -123,12 +125,20 @@ export class TelegramNativeCore {
 
   async revokeBinding(bindingId: string): Promise<void> {
     if (!this.bindings.registry.getById(bindingId)) return;
-    // Durable generation fence first. Any late output from the old worker is
-    // rejected before shutdown/cleanup begins.
-    await this.bindings.fence(bindingId);
+    // Persist DELETING + next generation first. A crash after this point can
+    // never resurrect the route on restart.
+    const tombstone = await this.bindings.beginDelete(bindingId);
     this.runs.fence(bindingId);
     await this.workers.stop(bindingId, "binding_revoked");
-    await this.bindings.remove(bindingId);
+    await this.options.cleanupBinding?.(tombstone);
+    await this.bindings.completeDelete(bindingId);
+  }
+
+  async reconcilePendingDeletes(): Promise<void> {
+    for (const tombstone of this.bindings.pendingDeletes()) {
+      await this.options.cleanupBinding?.(tombstone);
+      await this.bindings.completeDelete(tombstone.bindingId);
+    }
   }
 
   workerOutboundGate(bindingId: string, workerGeneration: number): WorkerOutboundGate {
