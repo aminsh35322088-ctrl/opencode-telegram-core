@@ -63,6 +63,15 @@ export class WorkerSupervisor {
     return this.#workers.size;
   }
 
+  idleCount(): number {
+    return [...this.#workers.values()].filter((slot) => slot.worker.idle).length;
+  }
+
+  async stopAll(reason: string): Promise<void> {
+    const bindingIds = [...this.#workers.keys()];
+    await Promise.all(bindingIds.map((bindingId) => this.stop(bindingId, reason)));
+  }
+
   async #makeRoom(): Promise<void> {
     if (this.#workers.size < this.options.maxWorkers) return;
     const idle = [...this.#workers.values()]
