@@ -80,7 +80,7 @@ export class AtomicBindingStore {
       ...current,
       bindingGeneration: current.bindingGeneration + 1,
     });
-    await this.replace(next, current.bindingGeneration);
+    await this.#replace(next, current.bindingGeneration);
     return next;
   }
 
