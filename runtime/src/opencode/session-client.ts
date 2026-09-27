@@ -87,6 +87,7 @@ export class OpenCodeSessionClient {
         throw new Error("OpenCode SSE stream closed");
       } catch (error) {
         if (signal?.aborted) return;
+        if (error instanceof SessionEventIntegrityError) throw error;
         reconnects += 1;
         if (reconnects > this.options.maxReconnects) {
           throw new SessionEventStreamLostError(reconnects - 1, error);
