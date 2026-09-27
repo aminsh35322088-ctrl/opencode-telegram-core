@@ -58,6 +58,55 @@ export class OpenCodeSessionClient {
     return result.data;
   }
 
+  async prompt(
+    sessionId: string,
+    prompt: {
+      readonly text: string;
+      readonly files?: readonly {
+        readonly uri: string;
+        readonly name?: string;
+        readonly description?: string;
+      }[];
+    },
+    options: {
+      readonly id?: string;
+      readonly delivery?: "steer" | "queue";
+      readonly resume?: boolean;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<{
+    readonly admittedSeq: number;
+    readonly id: string;
+    readonly sessionID: string;
+    readonly delivery: "steer" | "queue";
+    readonly timeCreated: number;
+  }> {
+    const body: Record<string, unknown> = {
+      prompt,
+      resume: options.resume ?? true,
+    };
+    if (options.id !== undefined) body.id = options.id;
+    if (options.delivery !== undefined) body.delivery = options.delivery;
+    const result = await this.#requestJson<{
+      data: {
+        admittedSeq: number;
+        id: string;
+        sessionID: string;
+        delivery: "steer" | "queue";
+        timeCreated: number;
+      };
+    }>(
+      "POST",
+      "/api/session/" + encodeURIComponent(sessionId) + "/prompt",
+      body,
+      options.signal,
+    );
+    if (result.data.sessionID !== sessionId) {
+      throw new SessionEventIntegrityError("prompt admission returned foreign session");
+    }
+    return result.data;
+  }
+
   async interrupt(sessionId: string, signal?: AbortSignal): Promise<void> {
     await this.#requestJson(
       "POST",
