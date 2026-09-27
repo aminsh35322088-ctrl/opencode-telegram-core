@@ -131,6 +131,34 @@ describe("TelegramNativeCore composition", () => {
     expect(aborted).toEqual(["stop-me"]);
   });
 
+  test("reopen reconciles an incomplete delete without exposing the route", async () => {
+    const { core } = await open();
+    await core.registerBinding(binding("a", 11));
+    await core.bindings.beginDelete("a");
+
+    const cleanup: string[] = [];
+    const reopened = await TelegramNativeCore.open({
+      bindingStorePath: path.join(root!, "bindings.json"),
+      workerFactory: (b, generation) => new FakeWorker(b.bindingId, generation),
+      outboundSink: { send: async () => undefined },
+      richMessagePort: new FakeRichPort(),
+      abortRun: async () => undefined,
+      cleanupBinding: async (target) => { cleanup.push(target.bindingId); },
+      admissionPolicy: () => "MODEL_ALLOWED",
+      railwayPolicy: {
+        softRssBytes: Number.MAX_SAFE_INTEGER - 1,
+        hardRssBytes: Number.MAX_SAFE_INTEGER,
+        maxWorkers: 8,
+        maxRestartsPerBinding: 3,
+        restartWindowMs: 60_000,
+      },
+    });
+
+    expect(reopened.bindings.registry.getById("a")).toBeNull();
+    expect(reopened.bindings.pendingDeletes()).toHaveLength(0);
+    expect(cleanup).toEqual(["a"]);
+  });
+
   test("shutdown stops all workers without cross-binding mutation", async () => {
     const { core, workers } = await open();
     await core.registerBinding(binding("a", 11));
