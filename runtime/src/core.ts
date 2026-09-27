@@ -1,0 +1,164 @@
+import { AtomicBindingStore } from "./runtime/atomic-binding-store.js";
+import type { BindingIdentity, RunIdentity } from "./runtime/identity.js";
+import { OutboundGateway, type OutboundSink } from "./runtime/outbound-gateway.js";
+import { RunLivenessTracker } from "./runtime/liveness-tracker.js";
+import { RunRegistry } from "./runtime/run-registry.js";
+import { PerRunStuckDetector } from "./runtime/stuck-detector.js";
+import { WorkerSupervisor, type WorkerFactory } from "./runtime/worker-supervisor.js";
+import { WorkerOutboundGate } from "./ipc/worker-outbound-gate.js";
+import {
+  RailwayResourceGovernor,
+  type RailwayResourceAction,
+  type RailwayResourcePolicy,
+} from "./railway/resource-governor.js";
+import {
+  TelegramRichStreamController,
+  type GenerationStoppedEvent,
+  type RichMessagePort,
+} from "./telegram/rich-stream.js";
+import {
+  requireModelAdmission,
+  type TelegramAdmissionPolicy,
+  type TelegramRoute,
+} from "./telegram/routes.js";
+
+export interface TelegramNativeCoreOptions {
+  readonly bindingStorePath: string;
+  readonly workerFactory: WorkerFactory;
+  readonly outboundSink: OutboundSink;
+  readonly richMessagePort: RichMessagePort;
+  readonly abortRun: (run: RunIdentity, reason: "telegram_stop") => Promise<void>;
+  readonly admissionPolicy: TelegramAdmissionPolicy;
+  readonly railwayPolicy: RailwayResourcePolicy;
+  readonly stuckRepeatThreshold?: number;
+}
+
+export class TelegramNativeCore {
+  readonly bindings: AtomicBindingStore;
+  readonly runs = new RunRegistry();
+  readonly workers: WorkerSupervisor;
+  readonly outbound: OutboundGateway;
+  readonly rich: TelegramRichStreamController;
+  readonly liveness: RunLivenessTracker;
+  readonly stuck: PerRunStuckDetector;
+  readonly resources: RailwayResourceGovernor;
+
+  private constructor(private readonly options: TelegramNativeCoreOptions) {
+    this.bindings = new AtomicBindingStore(options.bindingStorePath);
+    this.workers = new WorkerSupervisor(options.workerFactory, {
+      maxWorkers: options.railwayPolicy.maxWorkers,
+    });
+    this.outbound = new OutboundGateway(
+      this.bindings.registry,
+      this.runs,
+      options.outboundSink,
+    );
+    this.rich = new TelegramRichStreamController(
+      this.runs,
+      options.richMessagePort,
+      options.abortRun,
+    );
+    this.liveness = new RunLivenessTracker(this.runs);
+    this.stuck = new PerRunStuckDetector(
+      this.runs,
+      options.stuckRepeatThreshold ?? 5,
+    );
+    this.resources = new RailwayResourceGovernor(options.railwayPolicy);
+  }
+
+  static async open(options: TelegramNativeCoreOptions): Promise<TelegramNativeCore> {
+    const core = new TelegramNativeCore(options);
+    await core.bindings.load();
+    return core;
+  }
+
+  async registerBinding(binding: BindingIdentity): Promise<void> {
+    await this.bindings.register(binding);
+  }
+
+  async beginRun(bindingId: string, runId?: string): Promise<RunIdentity> {
+    const binding = this.bindings.registry.getById(bindingId);
+    if (!binding) throw new Error("cannot start run for unbound binding " + bindingId);
+
+    const action = this.resourceAction();
+    if (action === "EMERGENCY_SHUTDOWN" || action === "REJECT_NEW_WORK") {
+      throw new Error("Railway resource budget rejects new work: " + action);
+    }
+
+    const worker = await this.workers.ensure(binding);
+    const run = this.runs.start(binding, worker.generation, runId);
+    this.liveness.start(run);
+    return run;
+  }
+
+  finishRun(run: RunIdentity): boolean {
+    this.liveness.clear(run);
+    this.stuck.clear(run);
+    return this.runs.finish(run);
+  }
+
+  async rotateBinding(
+    bindingId: string,
+    next: {
+      readonly sessionId: string;
+      readonly normalizedDirectory: string;
+    },
+  ): Promise<BindingIdentity> {
+    const current = this.bindings.registry.getById(bindingId);
+    if (!current) throw new Error("unknown binding " + bindingId);
+
+    const replacement: BindingIdentity = {
+      ...current,
+      sessionId: next.sessionId,
+      normalizedDirectory: next.normalizedDirectory,
+      bindingGeneration: current.bindingGeneration + 1,
+    };
+
+    // Persist the new generation before old execution is allowed to stop/reuse.
+    await this.bindings.replace(replacement, current.bindingGeneration);
+    this.runs.fence(bindingId);
+    await this.workers.stop(bindingId, "binding_rotated");
+    return replacement;
+  }
+
+  async revokeBinding(bindingId: string): Promise<void> {
+    if (!this.bindings.registry.getById(bindingId)) return;
+    // Durable generation fence first. Any late output from the old worker is
+    // rejected before shutdown/cleanup begins.
+    await this.bindings.fence(bindingId);
+    this.runs.fence(bindingId);
+    await this.workers.stop(bindingId, "binding_revoked");
+    await this.bindings.remove(bindingId);
+  }
+
+  workerOutboundGate(bindingId: string, workerGeneration: number): WorkerOutboundGate {
+    return new WorkerOutboundGate(
+      { bindingId, workerGeneration },
+      this.outbound,
+    );
+  }
+
+  async modelAllowed(route: TelegramRoute, operation: string): Promise<boolean> {
+    return requireModelAdmission(this.options.admissionPolicy, { route, operation });
+  }
+
+  async handleGenerationStopped(event: GenerationStoppedEvent): Promise<boolean> {
+    return this.rich.stopped(event);
+  }
+
+  resourceAction(): RailwayResourceAction {
+    return this.resources.evaluate(
+      RailwayResourceGovernor.currentSnapshot(
+        this.workers.size(),
+        this.workers.idleCount(),
+      ),
+    );
+  }
+
+  async shutdown(): Promise<void> {
+    for (const binding of this.bindings.registry.list()) {
+      this.runs.fence(binding.bindingId);
+    }
+    await this.workers.stopAll("gateway_shutdown");
+  }
+}
