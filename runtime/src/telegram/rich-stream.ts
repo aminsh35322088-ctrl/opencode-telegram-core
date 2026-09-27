@@ -30,10 +30,30 @@ export interface RichMessagePort {
   ): Promise<void>;
 }
 
+export interface NativeMarkdownStreamPort {
+  streamMarkdown(
+    route: RichDraftRoute,
+    draftId: number,
+    chunks: AsyncIterable<string> | Iterable<string>,
+    options: {
+      readonly signal: AbortSignal;
+      readonly guard: () => boolean;
+    },
+  ): Promise<void>;
+}
+
+export class RichStreamFencedError extends Error {
+  constructor() {
+    super("rich stream fencing rejected outbound Telegram mutation");
+    this.name = "RichStreamFencedError";
+  }
+}
+
 interface DraftLease {
   readonly run: RunIdentity;
   readonly route: RichDraftRoute;
   readonly draftId: number;
+  readonly controller?: AbortController;
 }
 
 function routeKey(route: RichDraftRoute, draftId: number): string {
@@ -83,6 +103,41 @@ export class TelegramRichStreamController {
     this.#leases.set(routeKey(route, draftId), { run, route, draftId });
     await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
     return draftId;
+  }
+
+
+  async streamMarkdown(
+    run: RunIdentity,
+    route: RichDraftRoute,
+    chunks: AsyncIterable<string> | Iterable<string>,
+    streamPort: NativeMarkdownStreamPort,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (!this.#accepts(run)) return false;
+    const draftId = this.#allocateDraftId(run, route);
+    const controller = new AbortController();
+    const combinedSignal = signal === undefined
+      ? controller.signal
+      : AbortSignal.any([signal, controller.signal]);
+    const key = routeKey(route, draftId);
+    const lease: DraftLease = { run, route, draftId, controller };
+    this.#leases.set(key, lease);
+
+    try {
+      await streamPort.streamMarkdown(route, draftId, chunks, {
+        signal: combinedSignal,
+        guard: () => {
+          const current = this.#leases.get(key);
+          return current === lease && this.#accepts(run);
+        },
+      });
+      return this.#accepts(run);
+    } catch (error) {
+      if (error instanceof RichStreamFencedError) return false;
+      throw error;
+    } finally {
+      if (this.#leases.get(key) === lease) this.#leases.delete(key);
+    }
   }
 
   async updateMarkdown(
@@ -149,6 +204,7 @@ export class TelegramRichStreamController {
     const lease = this.#leases.get(key);
     if (!lease || !this.#accepts(lease.run)) return false;
     this.#leases.delete(key);
+    lease.controller?.abort(new DOMException("Telegram generation stopped", "AbortError"));
     // Fence the run before the network interrupt so late SSE/tool/Telegram
     // completions cannot race the user's Stop action.
     this.runs.finish(lease.run);
