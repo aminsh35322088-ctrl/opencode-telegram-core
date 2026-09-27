@@ -33,6 +33,8 @@ expected = {
     "telegramCoreVersion": lock["telegramCoreVersion"],
     "telegramCoreCommit": source_commit,
     "sdkRevision": lock["commit"],
+    "runtimeProfile": lock["runtimeProfile"],
+    "runtimeMaxBytes": lock["runtimeMaxBytes"],
 }
 for key, value in expected.items():
     if build.get(key) != value:
