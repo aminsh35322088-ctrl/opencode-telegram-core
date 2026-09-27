@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { BindingRegistry, type BindingIntegrityError } from "./binding-registry.js";
+import { BindingRegistry } from "./binding-registry.js";
 import type { BindingIdentity } from "./identity.js";
 
 export class AtomicBindingStore {
