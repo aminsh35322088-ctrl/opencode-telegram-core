@@ -18,6 +18,7 @@ interface WorkerSlot {
 export class WorkerSupervisor {
   readonly #workers = new Map<string, WorkerSlot>();
   readonly #generation = new Map<string, number>();
+  readonly #pending = new Map<string, Promise<TopicWorker>>();
 
   constructor(
     private readonly factory: WorkerFactory,
@@ -33,6 +34,24 @@ export class WorkerSupervisor {
       return existing.worker;
     }
 
+    const inflight = this.#pending.get(binding.bindingId);
+    if (inflight) return inflight;
+
+    const creation = this.#create(binding);
+    this.#pending.set(binding.bindingId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.#pending.get(binding.bindingId) === creation) {
+        this.#pending.delete(binding.bindingId);
+      }
+    }
+  }
+
+  // Only one creation per binding may be in flight: without this reservation
+  // two concurrent ensure calls both observe an empty slot, both start a
+  // worker, and the second insert silently leaks the first one.
+  async #create(binding: BindingIdentity): Promise<TopicWorker> {
     await this.#makeRoom();
     const generation = (this.#generation.get(binding.bindingId) ?? 0) + 1;
     this.#generation.set(binding.bindingId, generation);

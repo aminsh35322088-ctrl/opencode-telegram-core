@@ -18,10 +18,15 @@ interface PersistedBindingStoreV1 {
 export class AtomicBindingStore {
   readonly registry = new BindingRegistry();
   readonly #records = new Map<string, BindingRecord>();
+  #lock: Promise<void> = Promise.resolve();
 
   constructor(private readonly filePath: string) {}
 
   async load(): Promise<void> {
+    return this.#withLock(() => this.#load());
+  }
+
+  async #load(): Promise<void> {
     let raw: string;
     try {
       raw = await readFile(this.filePath, "utf8");
@@ -49,6 +54,10 @@ export class AtomicBindingStore {
   }
 
   async register(binding: BindingIdentity): Promise<void> {
+    return this.#withLock(() => this.#register(binding));
+  }
+
+  async #register(binding: BindingIdentity): Promise<void> {
     if (this.#records.has(binding.bindingId)) {
       throw new BindingIntegrityError("bindingId already exists: " + binding.bindingId);
     }
@@ -61,6 +70,10 @@ export class AtomicBindingStore {
   }
 
   async fence(bindingId: string): Promise<BindingIdentity> {
+    return this.#withLock(() => this.#fence(bindingId));
+  }
+
+  async #fence(bindingId: string): Promise<BindingIdentity> {
     const current = this.registry.getById(bindingId);
     if (!current) throw new Error("unknown active binding " + bindingId);
     const next = Object.freeze({
@@ -72,6 +85,13 @@ export class AtomicBindingStore {
   }
 
   async replace(
+    binding: BindingIdentity,
+    expectedGeneration: number,
+  ): Promise<void> {
+    return this.#withLock(() => this.#replace(binding, expectedGeneration));
+  }
+
+  async #replace(
     binding: BindingIdentity,
     expectedGeneration: number,
   ): Promise<void> {
@@ -93,6 +113,10 @@ export class AtomicBindingStore {
   }
 
   async beginDelete(bindingId: string): Promise<BindingIdentity> {
+    return this.#withLock(() => this.#beginDelete(bindingId));
+  }
+
+  async #beginDelete(bindingId: string): Promise<BindingIdentity> {
     const current = this.registry.getById(bindingId);
     if (!current) {
       const tombstone = this.#records.get(bindingId);
@@ -118,6 +142,10 @@ export class AtomicBindingStore {
   }
 
   async completeDelete(bindingId: string): Promise<void> {
+    return this.#withLock(() => this.#completeDelete(bindingId));
+  }
+
+  async #completeDelete(bindingId: string): Promise<void> {
     const record = this.#records.get(bindingId);
     if (!record) return;
     if (record.lifecycle !== "DELETING") {
@@ -136,8 +164,28 @@ export class AtomicBindingStore {
   }
 
   async remove(bindingId: string): Promise<void> {
-    if (this.registry.getById(bindingId)) await this.beginDelete(bindingId);
-    await this.completeDelete(bindingId);
+    return this.#withLock(() => this.#remove(bindingId));
+  }
+
+  async #remove(bindingId: string): Promise<void> {
+    if (this.registry.getById(bindingId)) await this.#beginDelete(bindingId);
+    await this.#completeDelete(bindingId);
+  }
+
+  // Every mutation runs behind this queue so a snapshot taken before an
+  // await can never be persisted over a change committed while it slept.
+  async #withLock<T>(operation: () => Promise<T>): Promise<T> {
+    const predecessor = this.#lock;
+    let release!: () => void;
+    this.#lock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await predecessor;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   #activeRegistryClone(): BindingRegistry {
