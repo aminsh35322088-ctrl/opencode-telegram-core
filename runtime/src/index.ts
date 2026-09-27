@@ -10,6 +10,7 @@ export * from "./runtime/worker-supervisor.js";
 export * from "./runtime/workspace-guard.js";
 export * from "./presentation/agent-document.js";
 export * from "./presentation/telegram-rich-renderer.js";
+export * from "./ipc/json-line-worker-channel.js";
 export * from "./ipc/worker-outbound-gate.js";
 export * from "./opencode/run-reconciler.js";
 export * from "./opencode/session-client.js";
