@@ -3,8 +3,7 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 BUN="$("$CORE_ROOT/scripts/ensure-bun.sh")"
-bun_dir="$(dirname "$BUN")"
-export PATH="$bun_dir:$PATH"
+export PATH="$(dirname "$BUN"):$PATH"
 export_upstream_build_environment
 tree="$CORE_ROOT/.work/opencode"
 
@@ -19,18 +18,27 @@ if [[ -n "${CORE_SOURCE_COMMIT:-}" ]]; then
 else
   core_commit="$(git -C "$CORE_ROOT" rev-parse HEAD)"
 fi
+
 export OPENCODE_TELEGRAM_CORE_VERSION="$telegram_core_version"
 export OPENCODE_TELEGRAM_CORE_COMMIT="$core_commit"
 export OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT="$upstream_commit"
 export OPENCODE_TELEGRAM_CORE_SDK_REVISION="$upstream_commit"
 
-"$BUN" run --cwd "$tree/packages/opencode" script/build.ts --single
-
-mapfile -t binaries < <(find "$tree/packages/opencode/dist" -type f -path '*/opencode-linux-x64/bin/opencode' -print)
-[[ "${#binaries[@]}" -eq 1 ]] || die "expected exactly one linux-x64 runtime, found ${#binaries[@]}"
-
+cp "$CORE_ROOT/runtime/upstream/telegram-headless.ts" "$tree/packages/opencode/src/telegram-headless.ts"
 mkdir -p "$CORE_ROOT/dist/runtime"
-cp "${binaries[0]}" "$CORE_ROOT/dist/runtime/opencode"
+export OPENCODE_PACKAGE_DIR="$tree/packages/opencode"
+export OPENCODE_HEADLESS_OUTPUT="$CORE_ROOT/dist/runtime/opencode"
+"$BUN" "$CORE_ROOT/scripts/build-headless-runtime.ts"
 chmod +x "$CORE_ROOT/dist/runtime/opencode"
+
 "$CORE_ROOT/dist/runtime/opencode" --version
 "$CORE_ROOT/dist/runtime/opencode" debug build-info > "$CORE_ROOT/dist/build-info.json"
+
+python3 - "$CORE_ROOT/dist/build-info.json" <<'PY'
+import json, sys
+info = json.load(open(sys.argv[1], encoding="utf-8"))
+if info.get("runtimeProfile") != "telegram-headless":
+    raise SystemExit("runtime profile mismatch")
+if info.get("embeddedWebUi") is not False:
+    raise SystemExit("embedded Web UI must be disabled")
+PY
