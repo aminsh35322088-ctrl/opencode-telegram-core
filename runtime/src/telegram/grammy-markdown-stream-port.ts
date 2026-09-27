@@ -1,34 +1,47 @@
 import { streamApi } from "@grammyjs/stream";
 import type { Api } from "grammy";
-import type { RichDraftRoute } from "./rich-stream.js";
+import {
+  RichStreamFencedError,
+  type NativeMarkdownStreamPort,
+  type RichDraftRoute,
+} from "./rich-stream.js";
 
-export interface NativeMarkdownStreamPort {
-  streamMarkdown(
-    route: RichDraftRoute,
-    draftId: number,
-    chunks: AsyncIterable<string> | Iterable<string>,
-    signal?: AbortSignal,
-  ): Promise<void>;
-}
+type StreamRawApi = Parameters<typeof streamApi>[0];
 
 export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort {
-  readonly #stream: ReturnType<typeof streamApi>;
-
-  constructor(api: Api) {
-    this.#stream = streamApi(api.raw);
-  }
+  constructor(private readonly api: Api) {}
 
   async streamMarkdown(
     route: RichDraftRoute,
     draftId: number,
     chunks: AsyncIterable<string> | Iterable<string>,
-    signal?: AbortSignal,
+    options: {
+      readonly signal: AbortSignal;
+      readonly guard: () => boolean;
+    },
   ): Promise<void> {
     const thread = route.messageThreadId === undefined
       ? {}
       : { message_thread_id: route.messageThreadId };
 
-    await this.#stream.streamMarkdown(
+    const raw = this.api.raw;
+    const guardedRaw = new Proxy(raw, {
+      get(target, property, receiver) {
+        const value: unknown = Reflect.get(target, property, receiver);
+        if (typeof value !== "function") return value;
+
+        if (property === "sendRichMessageDraft" || property === "sendRichMessage") {
+          return (...args: unknown[]) => {
+            if (!options.guard()) throw new RichStreamFencedError();
+            return Reflect.apply(value, target, args);
+          };
+        }
+        return value.bind(target);
+      },
+    }) as StreamRawApi;
+
+    const stream = streamApi(guardedRaw);
+    await stream.streamMarkdown(
       route.chatId,
       draftId,
       chunks,
@@ -39,7 +52,7 @@ export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort 
       },
       thread,
       undefined,
-      signal,
+      options.signal,
     );
   }
 }
