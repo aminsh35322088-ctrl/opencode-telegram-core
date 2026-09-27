@@ -24,18 +24,20 @@ export class SessionEventStreamLostError extends Error {
   }
 }
 
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export interface OpenCodeSessionClientOptions {
   readonly baseUrl: string;
   readonly requestTimeoutMs: number;
   readonly eventIdleTimeoutMs: number;
   readonly reconnectDelayMs: number;
   readonly maxReconnects: number;
-  readonly fetchImpl?: typeof fetch;
+  readonly fetchImpl?: FetchLike;
 }
 
 export class OpenCodeSessionClient {
   readonly #baseUrl: string;
-  readonly #fetch: typeof fetch;
+  readonly #fetch: FetchLike;
 
   constructor(private readonly options: OpenCodeSessionClientOptions) {
     this.#baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -128,12 +130,12 @@ export class OpenCodeSessionClient {
     signal?: AbortSignal,
   ): Promise<T> {
     return withDeadline(async (deadlineSignal) => {
-      const response = await this.#fetch(this.#url(path), {
-        method,
-        headers: body === undefined ? undefined : { "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: deadlineSignal,
-      });
+      const init: RequestInit = { method, signal: deadlineSignal };
+      if (body !== undefined) {
+        init.headers = { "content-type": "application/json" };
+        init.body = JSON.stringify(body);
+      }
+      const response = await this.#fetch(this.#url(path), init);
       if (!response.ok) {
         const text = await response.text();
         throw new Error("OpenCode " + method + " " + path + " -> " + response.status + ": " + text);
@@ -168,7 +170,7 @@ async function* readSseEvents(
       const timeout = abortableSleep(idleTimeoutMs, signal).then(() => {
         throw new Error("OpenCode SSE idle timeout");
       });
-      let result: ReadableStreamReadResult<Uint8Array>;
+      let result;
       try {
         result = await Promise.race([read, timeout]);
       } catch (error) {
