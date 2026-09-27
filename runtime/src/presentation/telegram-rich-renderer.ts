@@ -41,3 +41,18 @@ export function renderTelegramRichDocument(
   if (document.rtl !== undefined) result.is_rtl = document.rtl;
   return result;
 }
+
+export function renderTelegramRichMarkdown(
+  markdown: string,
+  options: {
+    readonly rtl?: boolean;
+    readonly skipEntityDetection?: boolean;
+  } = {},
+): InputRichMessageWithoutUpload {
+  const result: InputRichMessageWithoutUpload = { markdown };
+  if (options.rtl !== undefined) result.is_rtl = options.rtl;
+  if (options.skipEntityDetection !== undefined) {
+    result.skip_entity_detection = options.skipEntityDetection;
+  }
+  return result;
+}
