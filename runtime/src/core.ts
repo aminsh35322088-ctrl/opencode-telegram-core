@@ -55,6 +55,7 @@ export class TelegramNativeCore {
       options.outboundSink,
     );
     this.rich = new TelegramRichStreamController(
+      this.bindings.registry,
       this.runs,
       options.richMessagePort,
       options.abortRun,
