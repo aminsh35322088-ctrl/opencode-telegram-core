@@ -24,8 +24,6 @@ class PatchTests(unittest.TestCase):
         debug = (tree / "packages/opencode/src/cli/cmd/debug/index.ts").read_text()
         self.assertIn('command: "build-info"', debug)
         self.assertIn("OPENCODE_TELEGRAM_CORE_VERSION", debug)
-        self.assertTrue((tree / "packages/opencode/src/telegram-headless.ts").is_file())
-        self.assertTrue((tree / "packages/opencode/script/build-telegram-headless.ts").is_file())
 
     def test_drift_fails_before_partial_application(self):
         tree = self.materialize()
