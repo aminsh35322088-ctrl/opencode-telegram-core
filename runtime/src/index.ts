@@ -20,6 +20,7 @@ export * from "./ipc/worker-outbound-gate.js";
 export * from "./opencode/run-reconciler.js";
 export * from "./opencode/session-client.js";
 export * from "./opencode/session-event-pump.js";
+export * from "./opencode/topic-worker.js";
 export * from "./scheduler/task-dispatcher.js";
 export * from "./telegram/api-budget.js";
 export * from "./telegram/conformance.js";
