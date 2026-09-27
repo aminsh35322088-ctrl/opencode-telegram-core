@@ -1,6 +1,7 @@
 import type { InputRichMessageWithoutUpload } from "grammy/types";
 import type { AgentDocument } from "../presentation/agent-document.js";
 import { renderTelegramRichDocument, renderTelegramRichMarkdown } from "../presentation/telegram-rich-renderer.js";
+import type { BindingRegistry } from "../runtime/binding-registry.js";
 import type { RunIdentity } from "../runtime/identity.js";
 import type { RunRegistry } from "../runtime/run-registry.js";
 
@@ -52,6 +53,7 @@ export class TelegramRichStreamController {
   readonly #leases = new Map<string, DraftLease>();
 
   constructor(
+    private readonly bindings: BindingRegistry,
     private readonly runs: RunRegistry,
     private readonly port: RichMessagePort,
     private readonly abortRun: (run: RunIdentity, reason: "telegram_stop") => Promise<void>,
@@ -63,7 +65,7 @@ export class TelegramRichStreamController {
     document: AgentDocument,
     signal?: AbortSignal,
   ): Promise<number | null> {
-    if (!this.runs.accepts(run)) return null;
+    if (!this.#accepts(run)) return null;
     const draftId = this.#allocateDraftId(run, route);
     this.#leases.set(routeKey(route, draftId), { run, route, draftId });
     await this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal);
@@ -76,7 +78,7 @@ export class TelegramRichStreamController {
     markdown: string,
     signal?: AbortSignal,
   ): Promise<number | null> {
-    if (!this.runs.accepts(run)) return null;
+    if (!this.#accepts(run)) return null;
     const draftId = this.#allocateDraftId(run, route);
     this.#leases.set(routeKey(route, draftId), { run, route, draftId });
     await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
@@ -91,7 +93,7 @@ export class TelegramRichStreamController {
     signal?: AbortSignal,
   ): Promise<boolean> {
     const lease = this.#leases.get(routeKey(route, draftId));
-    if (!lease || lease.run.runId !== run.runId || !this.runs.accepts(run)) return false;
+    if (!lease || lease.run.runId !== run.runId || !this.#accepts(run)) return false;
     await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
     return true;
   }
@@ -105,7 +107,7 @@ export class TelegramRichStreamController {
   ): Promise<boolean> {
     const key = routeKey(route, draftId);
     const lease = this.#leases.get(key);
-    if (!lease || lease.run.runId !== run.runId || !this.runs.accepts(run)) return false;
+    if (!lease || lease.run.runId !== run.runId || !this.#accepts(run)) return false;
     await this.port.sendFinal(route, renderTelegramRichMarkdown(markdown), signal);
     this.#leases.delete(key);
     return true;
@@ -119,7 +121,7 @@ export class TelegramRichStreamController {
     signal?: AbortSignal,
   ): Promise<boolean> {
     const lease = this.#leases.get(routeKey(route, draftId));
-    if (!lease || lease.run.runId !== run.runId || !this.runs.accepts(run)) return false;
+    if (!lease || lease.run.runId !== run.runId || !this.#accepts(run)) return false;
     await this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal);
     return true;
   }
@@ -133,7 +135,7 @@ export class TelegramRichStreamController {
   ): Promise<boolean> {
     const key = routeKey(route, draftId);
     const lease = this.#leases.get(key);
-    if (!lease || lease.run.runId !== run.runId || !this.runs.accepts(run)) return false;
+    if (!lease || lease.run.runId !== run.runId || !this.#accepts(run)) return false;
     await this.port.sendFinal(route, renderTelegramRichDocument(document, { draft: false }), signal);
     this.#leases.delete(key);
     return true;
@@ -145,13 +147,17 @@ export class TelegramRichStreamController {
       : { chatId: event.chat.id, messageThreadId: event.message_thread_id };
     const key = routeKey(route, event.draft_id);
     const lease = this.#leases.get(key);
-    if (!lease || !this.runs.accepts(lease.run)) return false;
+    if (!lease || !this.#accepts(lease.run)) return false;
     this.#leases.delete(key);
     // Fence the run before the network interrupt so late SSE/tool/Telegram
     // completions cannot race the user's Stop action.
     this.runs.finish(lease.run);
     await this.abortRun(lease.run, "telegram_stop");
     return true;
+  }
+
+  #accepts(run: RunIdentity): boolean {
+    return this.bindings.getExact(run) !== null && this.runs.accepts(run);
   }
 
   #allocateDraftId(run: RunIdentity, route: RichDraftRoute): number {
