@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { InputRichMessageWithoutUpload } from "grammy/types";
 import {
   TelegramNativeCore,
   type BindingIdentity,
-  type InputRichMessageWithoutUpload,
   type RichDraftRoute,
   type RichMessagePort,
   type TopicWorker,
