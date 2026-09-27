@@ -58,6 +58,22 @@ class ReleaseTests(unittest.TestCase):
             for item in sdk_dir.iterdir():
                 tf.add(item, arcname=item.name)
 
+        native_dir = root / "native"
+        native_dir.mkdir()
+        (native_dir / "index.js").write_text("export {};\n")
+        native_info = {
+            "nativeRuntimeVersion": "0.1.0",
+            "telegramCoreCommit": CORE,
+            "grammyVersion": "1.46.0",
+            "bunVersion": "1.3.14",
+            "upstreamVersion": "1.0.0",
+            "upstreamCommit": UPSTREAM,
+        }
+        (native_dir / "runtime-info.json").write_text(json.dumps(native_info))
+        with tarfile.open(release / "opencode-telegram-native-runtime.tar.gz", "w:gz") as tf:
+            tf.add(native_dir / "index.js", arcname="index.js")
+            tf.add(native_dir / "runtime-info.json", arcname="runtime-info.json")
+
         build_info = {
             "upstreamVersion": "1.0.0",
             "upstreamCommit": UPSTREAM,
@@ -68,10 +84,12 @@ class ReleaseTests(unittest.TestCase):
         (release / "build-info.json").write_text(json.dumps(build_info))
         manifest = {
             **build_info,
+            "nativeRuntime": native_info,
             "platform": "linux-x64",
             "artifacts": [
                 "opencode-telegram-core-linux-x64.tar.gz",
                 "opencode-telegram-core-sdk.tar.gz",
+                "opencode-telegram-native-runtime.tar.gz",
             ],
         }
         (release / "release-manifest.json").write_text(json.dumps(manifest))
@@ -82,6 +100,7 @@ class ReleaseTests(unittest.TestCase):
         names = [
             "opencode-telegram-core-linux-x64.tar.gz",
             "opencode-telegram-core-sdk.tar.gz",
+            "opencode-telegram-native-runtime.tar.gz",
             "build-info.json",
             "release-manifest.json",
         ]
