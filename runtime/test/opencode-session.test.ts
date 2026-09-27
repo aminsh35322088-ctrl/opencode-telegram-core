@@ -5,6 +5,7 @@ import {
   RunRegistry,
   SessionEventIntegrityError,
   type BindingIdentity,
+  type FetchLike,
   type OpenCodeRunStatusPort,
 } from "../src/index.js";
 
@@ -33,7 +34,7 @@ function sse(event: unknown): Response {
 describe("OpenCode durable session event client", () => {
   test("reconnect resumes strictly after last durable sequence", async () => {
     const urls: string[] = [];
-    const fetchImpl: typeof fetch = async (input) => {
+    const fetchImpl: FetchLike = async (input) => {
       const url = String(input);
       urls.push(url);
       if (url.endsWith("after=0")) {
