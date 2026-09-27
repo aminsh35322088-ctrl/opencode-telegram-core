@@ -83,4 +83,23 @@ describe("atomic durable binding store", () => {
       normalizedDirectory: "/workspace/a/../b",
     })).rejects.toBeInstanceOf(BindingIntegrityError);
   });
+
+  test("concurrent mutations are serialized so reload never drops a completed write", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "otc-bindings-"));
+    const file = path.join(root, "bindings.json");
+    const store = new AtomicBindingStore(file);
+    await store.load();
+    await store.register(binding("a", 11));
+
+    await Promise.all([
+      store.register(binding("b", 12)),
+      store.beginDelete("a"),
+    ]);
+
+    const reloaded = new AtomicBindingStore(file);
+    await reloaded.load();
+    expect(reloaded.registry.getById("b")).not.toBeNull();
+    expect(reloaded.pendingDeletes()).toHaveLength(1);
+    expect(reloaded.pendingDeletes()[0]?.bindingId).toBe("a");
+  });
 });

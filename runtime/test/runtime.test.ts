@@ -170,6 +170,28 @@ describe("Railway-bounded worker supervisor", () => {
     expect(a2.generation).toBe(a1.generation + 1);
     expect((await supervisor.ensure(b)).generation).toBe(b1.generation);
   });
+
+  test("concurrent ensure of one binding builds exactly one worker and never leaks a slot", async () => {
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {}
+    }
+    const created: FakeWorker[] = [];
+    const supervisor = new WorkerSupervisor((b, g) => {
+      const worker = new FakeWorker(b.bindingId, g);
+      created.push(worker);
+      return worker;
+    }, { maxWorkers: 3 });
+    const a = binding({ bindingId: "a", threadId: 1 });
+
+    const [first, second] = await Promise.all([supervisor.ensure(a), supervisor.ensure(a)]);
+
+    expect(created).toHaveLength(1);
+    expect(first).toBe(second);
+    expect(supervisor.size()).toBe(1);
+  });
 });
 
 describe("workspace isolation", () => {
