@@ -5,11 +5,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 release="${1:-$CORE_ROOT/dist/release}"
 runtime_archive="$release/opencode-telegram-core-linux-x64.tar.gz"
 sdk_archive="$release/opencode-telegram-core-sdk.tar.gz"
+native_archive="$release/opencode-telegram-native-runtime.tar.gz"
 manifest="$release/release-manifest.json"
 build_info="$release/build-info.json"
 checksums="$release/SHA256SUMS"
 
-for file in "$runtime_archive" "$sdk_archive" "$manifest" "$build_info" "$checksums"; do
+for file in "$runtime_archive" "$sdk_archive" "$native_archive" "$manifest" "$build_info" "$checksums"; do
   [[ -f "$file" ]] || die "missing release file: $file"
 done
 
@@ -42,6 +43,7 @@ if manifest.get("platform") != "linux-x64":
 expected_artifacts = [
     "opencode-telegram-core-linux-x64.tar.gz",
     "opencode-telegram-core-sdk.tar.gz",
+    "opencode-telegram-native-runtime.tar.gz",
 ]
 if manifest.get("artifacts") != expected_artifacts:
     raise SystemExit("manifest artifact list mismatch")
@@ -55,9 +57,10 @@ PY
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/runtime" "$tmp/sdk"
+mkdir -p "$tmp/runtime" "$tmp/sdk" "$tmp/native"
 tar -xzf "$runtime_archive" -C "$tmp/runtime"
 tar -xzf "$sdk_archive" -C "$tmp/sdk"
+tar -xzf "$native_archive" -C "$tmp/native"
 runtime="$tmp/runtime/opencode"
 [[ -x "$runtime" ]] || die "runtime archive does not contain executable opencode"
 
@@ -80,5 +83,19 @@ PY
 sdk_revision="$(tr -d '\r\n' < "$tmp/sdk/UPSTREAM_REVISION")"
 expected_sdk="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sdkRevision"])' "$manifest")"
 [[ "$sdk_revision" == "$expected_sdk" ]] || die "SDK revision mismatch: expected $expected_sdk, got $sdk_revision"
+
+[[ -f "$tmp/native/index.js" ]] || die "native runtime archive missing index.js"
+[[ -f "$tmp/native/runtime-info.json" ]] || die "native runtime archive missing runtime-info.json"
+python3 - "$manifest" "$tmp/native/runtime-info.json" <<'PY'
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+native = json.load(open(sys.argv[2], encoding="utf-8"))
+if manifest.get("nativeRuntime") != native:
+    raise SystemExit("native runtime metadata does not match manifest")
+for key in ["telegramCoreCommit", "upstreamVersion", "upstreamCommit"]:
+    if native.get(key) != manifest.get(key):
+        raise SystemExit(f"native runtime {key} does not match release identity")
+PY
 
 printf 'release verified: %s\n' "$(basename "$release")"
