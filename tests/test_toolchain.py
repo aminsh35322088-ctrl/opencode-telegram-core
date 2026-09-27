@@ -43,7 +43,7 @@ class BuildEnvironmentTests(unittest.TestCase):
         )
         result = subprocess.run(["bash", "-c", command], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "1.18.31")
+        self.assertEqual(result.stdout, "1.18.32")
 
 
 if __name__ == "__main__":

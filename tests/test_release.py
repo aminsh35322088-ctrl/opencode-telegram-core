@@ -30,6 +30,9 @@ class ReleaseTests(unittest.TestCase):
             "version": "1.0.0",
             "bun": "1.3.14",
             "telegramCoreVersion": "1.0.0-bot.1",
+            "runtimeProfile": "telegram-headless",
+            "runtimeMaxBytes": 1048576,
+            "embeddedWebUi": False,
         }))
 
         runtime_dir = root / "runtime"
@@ -41,7 +44,7 @@ class ReleaseTests(unittest.TestCase):
             "if [[ \"$1\" == \"debug\" && \"$2\" == \"build-info\" ]]; then\n"
             f"  echo '{{\"upstreamVersion\":\"1.0.0\",\"upstreamCommit\":\"{UPSTREAM}\","
             f"\"telegramCoreVersion\":\"1.0.0-bot.1\",\"telegramCoreCommit\":\"{CORE}\","
-            f"\"sdkRevision\":\"{UPSTREAM}\"}}'\n"
+            f"\"sdkRevision\":\"{UPSTREAM}\",\"runtimeProfile\":\"telegram-headless\",\"embeddedWebUi\":false}}'\n"
             "  exit 0\n"
             "fi\nexit 2\n"
         )
@@ -80,6 +83,10 @@ class ReleaseTests(unittest.TestCase):
             "telegramCoreVersion": "1.0.0-bot.1",
             "telegramCoreCommit": CORE,
             "sdkRevision": UPSTREAM,
+            "runtimeProfile": "telegram-headless",
+            "runtimeBytes": 1024,
+            "runtimeMaxBytes": 1048576,
+            "embeddedWebUi": False,
         }
         (release / "build-info.json").write_text(json.dumps(build_info))
         manifest = {
@@ -148,6 +155,30 @@ class ReleaseTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text())
         manifest["upstreamCommit"] = "2" * 40
         manifest_path.write_text(json.dumps(manifest))
+        self.write_checksums(release)
+        result = self.verify(release, lock)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_wrong_runtime_profile_fails_identity(self):
+        release, lock = self.fixture()
+        manifest_path = release / "release-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["runtimeProfile"] = "full-cli"
+        manifest_path.write_text(json.dumps(manifest))
+        self.write_checksums(release)
+        result = self.verify(release, lock)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_runtime_size_over_budget_fails(self):
+        release, lock = self.fixture()
+        manifest_path = release / "release-manifest.json"
+        build_path = release / "build-info.json"
+        manifest = json.loads(manifest_path.read_text())
+        build = json.loads(build_path.read_text())
+        manifest["runtimeBytes"] = 2097152
+        build["runtimeBytes"] = 2097152
+        manifest_path.write_text(json.dumps(manifest))
+        build_path.write_text(json.dumps(build))
         self.write_checksums(release)
         result = self.verify(release, lock)
         self.assertNotEqual(result.returncode, 0)

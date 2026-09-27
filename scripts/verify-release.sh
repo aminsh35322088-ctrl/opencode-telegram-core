@@ -34,6 +34,8 @@ expected = {
     "upstreamCommit": lock["commit"],
     "telegramCoreVersion": lock["telegramCoreVersion"],
     "sdkRevision": lock["commit"],
+    "runtimeProfile": lock["runtimeProfile"],
+    "runtimeMaxBytes": lock["runtimeMaxBytes"],
 }
 for key, value in expected.items():
     if manifest.get(key) != value:
@@ -50,9 +52,17 @@ if manifest.get("artifacts") != expected_artifacts:
 core_commit = manifest.get("telegramCoreCommit", "")
 if not re.fullmatch(r"[0-9a-f]{40}", core_commit):
     raise SystemExit("manifest telegramCoreCommit is not a 40-hex commit")
-for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegramCoreCommit", "sdkRevision"]:
+for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegramCoreCommit", "sdkRevision", "runtimeProfile", "runtimeMaxBytes", "runtimeBytes"]:
     if build.get(key) != manifest.get(key):
         raise SystemExit(f"build-info {key} does not match manifest")
+if manifest.get("runtimeProfile") != "telegram-headless":
+    raise SystemExit("release runtime profile is not telegram-headless")
+if manifest.get("embeddedWebUi") is not False:
+    raise SystemExit("release unexpectedly embeds Web UI")
+runtime_bytes = manifest.get("runtimeBytes")
+runtime_max = manifest.get("runtimeMaxBytes")
+if not isinstance(runtime_bytes, int) or not isinstance(runtime_max, int) or runtime_bytes <= 0 or runtime_bytes > runtime_max:
+    raise SystemExit("release runtime size budget is invalid or exceeded")
 PY
 
 tmp="$(mktemp -d)"
@@ -74,7 +84,7 @@ import json
 import sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 runtime = json.load(open(sys.argv[2], encoding="utf-8"))
-for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegramCoreCommit", "sdkRevision"]:
+for key in ["upstreamVersion", "upstreamCommit", "telegramCoreVersion", "telegramCoreCommit", "sdkRevision", "runtimeProfile", "embeddedWebUi"]:
     if runtime.get(key) != manifest.get(key):
         raise SystemExit(f"runtime build-info {key} does not match manifest")
 PY
