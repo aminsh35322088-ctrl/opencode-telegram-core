@@ -32,6 +32,7 @@ class ReleaseTests(unittest.TestCase):
             "telegramCoreVersion": "1.0.0-bot.1",
             "runtimeProfile": "telegram-headless",
             "runtimeMaxBytes": 1048576,
+            "embeddedWebUi": False,
         }))
 
         runtime_dir = root / "runtime"
@@ -43,7 +44,7 @@ class ReleaseTests(unittest.TestCase):
             "if [[ \"$1\" == \"debug\" && \"$2\" == \"build-info\" ]]; then\n"
             f"  echo '{{\"upstreamVersion\":\"1.0.0\",\"upstreamCommit\":\"{UPSTREAM}\","
             f"\"telegramCoreVersion\":\"1.0.0-bot.1\",\"telegramCoreCommit\":\"{CORE}\","
-            f"\"sdkRevision\":\"{UPSTREAM}\",\"runtimeProfile\":\"telegram-headless\"}}'\n"
+            f"\"sdkRevision\":\"{UPSTREAM}\",\"runtimeProfile\":\"telegram-headless\",\"embeddedWebUi\":false}}'\n"
             "  exit 0\n"
             "fi\nexit 2\n"
         )
