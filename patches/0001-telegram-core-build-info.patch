@@ -1,0 +1,58 @@
+diff --git a/packages/opencode/script/build.ts b/packages/opencode/script/build.ts
+--- a/packages/opencode/script/build.ts
++++ b/packages/opencode/script/build.ts
+@@ -192,6 +192,10 @@ for (const item of targets) {
+     define: {
+       FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
+       OPENCODE_VERSION: `'${Script.version}'`,
++      OPENCODE_TELEGRAM_CORE_VERSION: JSON.stringify(process.env.OPENCODE_TELEGRAM_CORE_VERSION ?? "unknown"),
++      OPENCODE_TELEGRAM_CORE_COMMIT: JSON.stringify(process.env.OPENCODE_TELEGRAM_CORE_COMMIT ?? "unknown"),
++      OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT: JSON.stringify(process.env.OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT ?? "unknown"),
++      OPENCODE_TELEGRAM_CORE_SDK_REVISION: JSON.stringify(process.env.OPENCODE_TELEGRAM_CORE_SDK_REVISION ?? "unknown"),
+       OPENCODE_MODELS_DEV: generated.modelsData,
+       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + treeSitterWorkerPath,
+       OPENCODE_WORKER_PATH: workerPath,
+diff --git a/packages/opencode/src/cli/cmd/debug/index.ts b/packages/opencode/src/cli/cmd/debug/index.ts
+--- a/packages/opencode/src/cli/cmd/debug/index.ts
++++ b/packages/opencode/src/cli/cmd/debug/index.ts
+@@ -16,4 +16,9 @@ import { AgentCommand } from "./agent"
+ import { StartupCommand } from "./startup"
+ import { V2Command } from "./v2"
+ 
++declare const OPENCODE_TELEGRAM_CORE_VERSION: string
++declare const OPENCODE_TELEGRAM_CORE_COMMIT: string
++declare const OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT: string
++declare const OPENCODE_TELEGRAM_CORE_SDK_REVISION: string
++
+ export const DebugCommand = cmd({
+@@ -31,6 +36,7 @@ export const DebugCommand = cmd({
+       .command(StartupCommand)
+       .command(AgentCommand)
+       .command(V2Command)
++      .command(BuildInfoCommand)
+       .command(InfoCommand)
+       .command(PathsCommand)
+       .command(WaitCommand)
+@@ -39,6 +45,22 @@ export const DebugCommand = cmd({
+   async handler() {},
+ })
+ 
++const BuildInfoCommand = cmd({
++  command: "build-info",
++  describe: "show machine-readable build identity",
++  handler() {
++    console.log(
++      JSON.stringify({
++        upstreamVersion: InstallationVersion,
++        upstreamCommit: OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT,
++        telegramCoreVersion: OPENCODE_TELEGRAM_CORE_VERSION,
++        telegramCoreCommit: OPENCODE_TELEGRAM_CORE_COMMIT,
++        sdkRevision: OPENCODE_TELEGRAM_CORE_SDK_REVISION,
++      }),
++    )
++  },
++})
++
+ const WaitCommand = effectCmd({
+   command: "wait",
+   describe: "wait indefinitely (for debugging)",
