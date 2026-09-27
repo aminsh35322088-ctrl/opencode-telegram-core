@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   BindingRegistry,
+  RichStreamFencedError,
   RunRegistry,
   TelegramRichStreamController,
   renderTelegramRichDocument,
   type AgentDocument,
   type BindingIdentity,
+  type NativeMarkdownStreamPort,
   type RichDraftRoute,
   type RichMessagePort,
 } from "../src/index.js";
@@ -21,6 +23,23 @@ function binding(): BindingIdentity {
     normalizedDirectory: "/workspace/a",
     bindingGeneration: 1,
   };
+}
+
+class FakeNativeStreamPort implements NativeMarkdownStreamPort {
+  readonly chunks: string[] = [];
+
+  async streamMarkdown(
+    _route: RichDraftRoute,
+    _draftId: number,
+    chunks: AsyncIterable<string> | Iterable<string>,
+    options: { readonly signal: AbortSignal; readonly guard: () => boolean },
+  ): Promise<void> {
+    for await (const chunk of chunks) {
+      options.signal.throwIfAborted();
+      if (!options.guard()) throw new RichStreamFencedError();
+      this.chunks.push(chunk);
+    }
+  }
 }
 
 class FakePort implements RichMessagePort {
@@ -57,6 +76,27 @@ describe("Telegram-native rich rendering", () => {
     expect(port.drafts[0]?.message.markdown).toBe(markdown);
     expect(await controller.finalizeMarkdown(run, route, draftId!, markdown)).toBe(true);
     expect(port.finals[0]?.message.markdown).toBe(markdown);
+  });
+
+  test("native streaming revalidates durable binding before every pushed chunk", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    const run = runs.start(b, 1, "guarded-stream");
+    const port = new FakePort();
+    const streamPort = new FakeNativeStreamPort();
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
+    const route = { chatId: 100, messageThreadId: 11 };
+
+    async function* chunks() {
+      yield "first";
+      bindings.fence(b.bindingId);
+      yield "second";
+    }
+
+    expect(await controller.streamMarkdown(run, route, chunks(), streamPort)).toBe(false);
+    expect(streamPort.chunks).toEqual(["first"]);
   });
 
   test("draft supports thinking but final never persists thinking block", () => {
