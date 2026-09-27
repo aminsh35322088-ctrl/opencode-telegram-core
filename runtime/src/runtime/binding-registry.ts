@@ -1,3 +1,4 @@
+import path from "node:path";
 import { bindingKey, type BindingIdentity } from "./identity.js";
 
 export class BindingIntegrityError extends Error {
@@ -12,6 +13,7 @@ export class BindingRegistry {
   readonly #byRoute = new Map<string, string>();
 
   register(binding: BindingIdentity): void {
+    this.#validate(binding);
     if (!Number.isSafeInteger(binding.bindingGeneration) || binding.bindingGeneration < 1) {
       throw new BindingIntegrityError("bindingGeneration must be a positive safe integer");
     }
@@ -28,6 +30,26 @@ export class BindingRegistry {
 
     this.#byId.set(binding.bindingId, Object.freeze({ ...binding }));
     this.#byRoute.set(routeKey, binding.bindingId);
+  }
+
+  replace(binding: BindingIdentity, expectedGeneration: number): void {
+    this.#validate(binding);
+    const current = this.#byId.get(binding.bindingId);
+    if (!current) throw new BindingIntegrityError(`unknown binding ${binding.bindingId}`);
+    if (current.bindingGeneration !== expectedGeneration) {
+      throw new BindingIntegrityError("binding generation compare-and-swap failed");
+    }
+    if (
+      current.botId !== binding.botId ||
+      current.chatId !== binding.chatId ||
+      current.threadId !== binding.threadId
+    ) {
+      throw new BindingIntegrityError("binding route identity cannot change during replacement");
+    }
+    if (binding.bindingGeneration <= current.bindingGeneration) {
+      throw new BindingIntegrityError("replacement generation must increase monotonically");
+    }
+    this.#byId.set(binding.bindingId, Object.freeze({ ...binding }));
   }
 
   getExact(candidate: BindingIdentity): BindingIdentity | null {
@@ -48,7 +70,7 @@ export class BindingRegistry {
       ...current,
       bindingGeneration: current.bindingGeneration + 1,
     });
-    this.#byId.set(bindingId, next);
+    this.replace(next, current.bindingGeneration);
     return next;
   }
 
@@ -61,6 +83,12 @@ export class BindingRegistry {
 
   list(): readonly BindingIdentity[] {
     return [...this.#byId.values()];
+  }
+
+  #validate(binding: BindingIdentity): void {
+    if (!path.isAbsolute(binding.normalizedDirectory) || path.resolve(binding.normalizedDirectory) !== binding.normalizedDirectory) {
+      throw new BindingIntegrityError("normalizedDirectory must be an absolute canonical lexical path");
+    }
   }
 
   #exact(a: BindingIdentity, b: BindingIdentity): boolean {
