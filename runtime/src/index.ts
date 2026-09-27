@@ -1,3 +1,4 @@
+export * from "./core.js";
 export * from "./runtime/atomic-binding-store.js";
 export * from "./runtime/binding-registry.js";
 export * from "./runtime/deadline.js";
