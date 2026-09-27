@@ -27,7 +27,11 @@ describe("per-binding OpenCode TopicWorker", () => {
     const calls: Array<{ sessionId: string; id?: string; text: string }> = [];
     const client: OpenCodePromptPort = {
       prompt: async (sessionId, prompt, options) => {
-        calls.push({ sessionId, id: options?.id, text: prompt.text });
+        calls.push({
+          sessionId,
+          text: prompt.text,
+          ...(options?.id === undefined ? {} : { id: options.id }),
+        });
         return {
           admittedSeq: 1,
           id: options?.id ?? "generated",
@@ -88,7 +92,7 @@ describe("per-binding OpenCode TopicWorker", () => {
             timeCreated: 1,
           };
         }
-        return await new Promise((resolve, reject) => {
+        return await new Promise((_resolve, reject) => {
           const signal = options?.signal;
           signal?.addEventListener("abort", () => {
             aborted.push(sessionId);
