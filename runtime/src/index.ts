@@ -24,6 +24,7 @@ export * from "./opencode/topic-worker.js";
 export * from "./scheduler/task-dispatcher.js";
 export * from "./telegram/api-budget.js";
 export * from "./telegram/conformance.js";
+export * from "./telegram/grammy-markdown-stream-port.js";
 export * from "./telegram/grammy-rich-port.js";
 export * from "./telegram/grammy-transport.js";
 export * from "./telegram/rich-stream.js";
