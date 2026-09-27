@@ -1,6 +1,6 @@
 import type { InputRichMessageWithoutUpload } from "grammy/types";
 import type { AgentDocument } from "../presentation/agent-document.js";
-import { renderTelegramRichDocument } from "../presentation/telegram-rich-renderer.js";
+import { renderTelegramRichDocument, renderTelegramRichMarkdown } from "../presentation/telegram-rich-renderer.js";
 import type { RunIdentity } from "../runtime/identity.js";
 import type { RunRegistry } from "../runtime/run-registry.js";
 
@@ -68,6 +68,47 @@ export class TelegramRichStreamController {
     this.#leases.set(routeKey(route, draftId), { run, route, draftId });
     await this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal);
     return draftId;
+  }
+
+  async startMarkdown(
+    run: RunIdentity,
+    route: RichDraftRoute,
+    markdown: string,
+    signal?: AbortSignal,
+  ): Promise<number | null> {
+    if (!this.runs.accepts(run)) return null;
+    const draftId = this.#allocateDraftId(run, route);
+    this.#leases.set(routeKey(route, draftId), { run, route, draftId });
+    await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
+    return draftId;
+  }
+
+  async updateMarkdown(
+    run: RunIdentity,
+    route: RichDraftRoute,
+    draftId: number,
+    markdown: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const lease = this.#leases.get(routeKey(route, draftId));
+    if (!lease || lease.run.runId !== run.runId || !this.runs.accepts(run)) return false;
+    await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
+    return true;
+  }
+
+  async finalizeMarkdown(
+    run: RunIdentity,
+    route: RichDraftRoute,
+    draftId: number,
+    markdown: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const key = routeKey(route, draftId);
+    const lease = this.#leases.get(key);
+    if (!lease || lease.run.runId !== run.runId || !this.runs.accepts(run)) return false;
+    await this.port.sendFinal(route, renderTelegramRichMarkdown(markdown), signal);
+    this.#leases.delete(key);
+    return true;
   }
 
   async update(
