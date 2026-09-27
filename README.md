@@ -17,10 +17,10 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 ## Locked baseline
 
 - Upstream: `anomalyco/opencode`
-- Release: `v1.18.31`
-- Commit: `014614d35b397775e5d397a490fc72368c894ec2`
+- Release: `v1.18.32`
+- Commit: `545f51d26cc39a907d2867492d498d9607ea5fa4`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.31-bot.2`
+- Telegram Core version: `1.18.32-bot.3`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -59,9 +59,13 @@ Run from the repository root on a trusted Linux x64 build host:
 
 The scripts enforce the locked Bun version, materialize the exact upstream tag/commit, verify every downstream patch before applying any patch, install dependencies from locked inputs, and build the OpenCode and Telegram-native artifacts.
 
+The production runtime is now a Telegram-headless OpenCode server build. It preserves the complete server/session/provider/tool/MCP/skill/file API graph used by Telegram agents while excluding TUI, embedded Web UI, desktop and unrelated interactive CLI commands from the production binary. The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
+
+A hard size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release.
+
 Generated outputs include:
 
-- `dist/runtime/opencode`
+- `dist/runtime/opencode` (Telegram-headless production server)
 - `dist/build-info.json`
 - `dist/sdk/`
 - `dist/sdk/UPSTREAM_REVISION`
@@ -77,7 +81,7 @@ cat dist/sdk/UPSTREAM_REVISION
 cat dist/native-runtime/runtime-info.json
 ```
 
-For this baseline, `--version` must be exactly `1.18.31`; runtime, SDK, and native-runtime metadata must agree with the locked release identity.
+For this baseline, `--version` must be exactly `1.18.32`; runtime, SDK, and native-runtime metadata must agree with the locked release identity.
 
 ## Verification
 
