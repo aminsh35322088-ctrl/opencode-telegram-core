@@ -124,6 +124,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
       "prompt:" + run.runId,
       (taskSignal) => {
         const signal = AbortSignal.any([taskSignal, this.#controller.signal]);
+        signal.throwIfAborted();
         return this.client.prompt(
           run.sessionId,
           prompt,
@@ -153,13 +154,18 @@ export class OpenCodeTopicWorker implements TopicWorker {
 
     if (this.#inFlight.size === 0) return;
     const settled = Promise.allSettled([...this.#inFlight]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(
+      timer = setTimeout(
         () => reject(new WorkerStopTimeoutError(this.bindingId, this.options.stopTimeoutMs)),
         this.options.stopTimeoutMs,
       );
     });
-    await Promise.race([settled, timeout]);
+    try {
+      await Promise.race([settled, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   #assertRun(run: RunIdentity): void {
