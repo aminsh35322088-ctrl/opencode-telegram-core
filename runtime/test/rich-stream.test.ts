@@ -40,6 +40,21 @@ class FakePort implements RichMessagePort {
 }
 
 describe("Telegram-native rich rendering", () => {
+  test("native Rich Markdown is passed through without MarkdownV2 escaping", async () => {
+    const runs = new RunRegistry();
+    const run = runs.start(binding(), 1, "markdown-run");
+    const port = new FakePort();
+    const controller = new TelegramRichStreamController(runs, port, async () => undefined);
+    const route = { chatId: 100, messageThreadId: 11 };
+    const markdown = "# Heading\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n\`\`\`ts\nconst x = 1;\n\`\`\`";
+
+    const draftId = await controller.startMarkdown(run, route, markdown);
+    expect(draftId).not.toBeNull();
+    expect(port.drafts[0]?.message.markdown).toBe(markdown);
+    expect(await controller.finalizeMarkdown(run, route, draftId!, markdown)).toBe(true);
+    expect(port.finals[0]?.message.markdown).toBe(markdown);
+  });
+
   test("draft supports thinking but final never persists thinking block", () => {
     const document: AgentDocument = {
       blocks: [
