@@ -1,7 +1,7 @@
 import { DeadlineExceededError } from "./deadline.js";
 
 export class QueuePoisonedError extends Error {
-  constructor(message: string, readonly cause?: unknown) {
+  constructor(message: string, readonly rootCause?: unknown) {
     super(message);
     this.name = "QueuePoisonedError";
   }

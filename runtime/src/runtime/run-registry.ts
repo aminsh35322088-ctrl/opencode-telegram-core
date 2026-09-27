@@ -4,7 +4,7 @@ import { sameBinding, type BindingIdentity, type RunIdentity } from "./identity.
 export class RunRegistry {
   readonly #active = new Map<string, RunIdentity>();
 
-  start(binding: BindingIdentity, workerGeneration: number, runId = randomUUID()): RunIdentity {
+  start(binding: BindingIdentity, workerGeneration: number, runId: string = randomUUID()): RunIdentity {
     const run = Object.freeze({ ...binding, workerGeneration, runId });
     this.#active.set(binding.bindingId, run);
     return run;
