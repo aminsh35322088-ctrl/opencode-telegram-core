@@ -81,6 +81,8 @@ describe("per-binding OpenCode TopicWorker", () => {
 
   test("stopping worker A aborts its active prompt without touching worker B", async () => {
     const aborted: string[] = [];
+    let markStartedA!: () => void;
+    const startedA = new Promise<void>((resolve) => { markStartedA = resolve; });
     const client: OpenCodePromptPort = {
       prompt: async (sessionId, _prompt, options) => {
         if (sessionId === "session-b") {
@@ -92,8 +94,14 @@ describe("per-binding OpenCode TopicWorker", () => {
             timeCreated: 1,
           };
         }
+        markStartedA();
         return await new Promise((_resolve, reject) => {
           const signal = options?.signal;
+          if (signal?.aborted) {
+            aborted.push(sessionId);
+            reject(signal.reason);
+            return;
+          }
           signal?.addEventListener("abort", () => {
             aborted.push(sessionId);
             reject(signal.reason);
@@ -118,6 +126,7 @@ describe("per-binding OpenCode TopicWorker", () => {
 
     const promptA = workerA.executePrompt(runFor(a, 1, "a"), { text: "hang" });
     const promptB = workerB.executePrompt(runFor(b, 1, "b"), { text: "ok" });
+    await startedA;
     await workerA.stop("test");
 
     await expect(promptA).rejects.toThrow();
