@@ -54,6 +54,27 @@ describe("atomic durable binding store", () => {
     expect(await readFile(file, "utf8")).toBe(before);
   });
 
+  test("incomplete delete reloads as tombstone and never resurrects route", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "otc-bindings-"));
+    const file = path.join(root, "bindings.json");
+    const store = new AtomicBindingStore(file);
+    await store.register(binding());
+    const tombstone = await store.beginDelete("a");
+    expect(tombstone.bindingGeneration).toBe(2);
+    expect(store.registry.getById("a")).toBeNull();
+
+    const reloaded = new AtomicBindingStore(file);
+    await reloaded.load();
+    expect(reloaded.registry.getById("a")).toBeNull();
+    expect(reloaded.pendingDeletes()).toHaveLength(1);
+    expect(reloaded.pendingDeletes()[0]?.bindingGeneration).toBe(2);
+
+    await reloaded.completeDelete("a");
+    const finalReload = new AtomicBindingStore(file);
+    await finalReload.load();
+    expect(finalReload.pendingDeletes()).toHaveLength(0);
+  });
+
   test("non-canonical directory is rejected fail-closed", async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "otc-bindings-"));
     const store = new AtomicBindingStore(path.join(root, "bindings.json"));
