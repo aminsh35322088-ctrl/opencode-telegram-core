@@ -6,6 +6,7 @@ import type { InputRichMessageWithoutUpload } from "grammy/types";
 import {
   TelegramNativeCore,
   type BindingIdentity,
+  type NativeMarkdownStreamPort,
   type RichDraftRoute,
   type RichMessagePort,
   type TopicWorker,
@@ -29,6 +30,20 @@ class FakeWorker implements TopicWorker {
   constructor(readonly bindingId: string, readonly generation: number) {}
   async start(): Promise<void> {}
   async stop(): Promise<void> { this.stopped = true; }
+}
+
+class FakeNativeStreamPort implements NativeMarkdownStreamPort {
+  async streamMarkdown(
+    _route: RichDraftRoute,
+    _draftId: number,
+    chunks: AsyncIterable<string> | Iterable<string>,
+    options: { readonly signal: AbortSignal; readonly guard: () => boolean },
+  ): Promise<void> {
+    for await (const _chunk of chunks) {
+      options.signal.throwIfAborted();
+      if (!options.guard()) throw new Error("fenced");
+    }
+  }
 }
 
 class FakeRichPort implements RichMessagePort {
@@ -64,6 +79,7 @@ describe("TelegramNativeCore composition", () => {
       },
       outboundSink: { send: async () => undefined },
       richMessagePort: new FakeRichPort(),
+      nativeMarkdownStreamPort: new FakeNativeStreamPort(),
       abortRun: async (run) => { aborted.push(run.runId); },
       admissionPolicy: ({ operation }) =>
         operation === "model.prompt" ? "MODEL_ALLOWED" : "CONTROL_ONLY",
@@ -102,6 +118,7 @@ describe("TelegramNativeCore composition", () => {
       workerFactory: (b, generation) => new FakeWorker(b.bindingId, generation),
       outboundSink: { send: async () => undefined },
       richMessagePort: new FakeRichPort(),
+      nativeMarkdownStreamPort: new FakeNativeStreamPort(),
       abortRun: async () => undefined,
       admissionPolicy: () => "MODEL_ALLOWED",
       railwayPolicy: {
@@ -142,6 +159,7 @@ describe("TelegramNativeCore composition", () => {
       workerFactory: (b, generation) => new FakeWorker(b.bindingId, generation),
       outboundSink: { send: async () => undefined },
       richMessagePort: new FakeRichPort(),
+      nativeMarkdownStreamPort: new FakeNativeStreamPort(),
       abortRun: async () => undefined,
       cleanupBinding: async (target) => { cleanup.push(target.bindingId); },
       admissionPolicy: () => "MODEL_ALLOWED",
