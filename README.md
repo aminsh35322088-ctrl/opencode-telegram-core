@@ -61,7 +61,7 @@ The scripts enforce the locked Bun version, materialize the exact upstream tag/c
 
 The production runtime is now a Telegram-headless OpenCode server build. It preserves the complete server/session/provider/tool/MCP/skill/file API graph used by Telegram agents while excluding TUI, embedded Web UI, desktop and unrelated interactive CLI commands from the production binary. The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
 
-A hard size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release.
+A hard 140,000,000-byte size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release. The current v1.18.32 headless build is about 124 MB, roughly one third smaller than the previous full-CLI production binary.
 
 Generated outputs include:
 
@@ -82,6 +82,8 @@ cat dist/native-runtime/runtime-info.json
 ```
 
 For this baseline, `--version` must be exactly `1.18.32`; runtime, SDK, and native-runtime metadata must agree with the locked release identity.
+
+The SDK build also validates `runtime/compat/opencode-telegram-bot-sdk-surface.json`, a contract generated from the OpenCode client members currently used by `opencode-telegram-bot`. The release fails if any required session, MCP, permission, question, provider/config, project, skill/agent, event, path, command, or health API disappears.
 
 ## Verification
 
