@@ -4,11 +4,11 @@ export interface InboundEnvelope<T = unknown> extends RunIdentity {
   readonly operationId: string;
   readonly updateId?: number;
   readonly operation: string;
-  readonly payload: Readonly<T>;
+  readonly payload: T;
 }
 
 export interface OutboundEnvelope<T = unknown> extends RunIdentity {
   readonly operationId: string;
   readonly kind: string;
-  readonly payload: Readonly<T>;
+  readonly payload: T;
 }
