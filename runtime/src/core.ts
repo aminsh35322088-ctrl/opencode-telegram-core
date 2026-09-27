@@ -14,6 +14,8 @@ import {
 import {
   TelegramRichStreamController,
   type GenerationStoppedEvent,
+  type NativeMarkdownStreamPort,
+  type RichDraftRoute,
   type RichMessagePort,
 } from "./telegram/rich-stream.js";
 import {
@@ -27,6 +29,7 @@ export interface TelegramNativeCoreOptions {
   readonly workerFactory: WorkerFactory;
   readonly outboundSink: OutboundSink;
   readonly richMessagePort: RichMessagePort;
+  readonly nativeMarkdownStreamPort: NativeMarkdownStreamPort;
   readonly abortRun: (run: RunIdentity, reason: "telegram_stop") => Promise<void>;
   readonly cleanupBinding?: (binding: BindingIdentity) => Promise<void>;
   readonly admissionPolicy: TelegramAdmissionPolicy;
@@ -151,6 +154,21 @@ export class TelegramNativeCore {
 
   async modelAllowed(route: TelegramRoute, operation: string): Promise<boolean> {
     return requireModelAdmission(this.options.admissionPolicy, { route, operation });
+  }
+
+  async streamMarkdown(
+    run: RunIdentity,
+    route: RichDraftRoute,
+    chunks: AsyncIterable<string> | Iterable<string>,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return this.rich.streamMarkdown(
+      run,
+      route,
+      chunks,
+      this.options.nativeMarkdownStreamPort,
+      signal,
+    );
   }
 
   async handleGenerationStopped(event: GenerationStoppedEvent): Promise<boolean> {
