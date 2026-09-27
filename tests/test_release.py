@@ -86,6 +86,7 @@ class ReleaseTests(unittest.TestCase):
             "runtimeProfile": "telegram-headless",
             "runtimeBytes": 1024,
             "runtimeMaxBytes": 1048576,
+            "embeddedWebUi": False,
         }
         (release / "build-info.json").write_text(json.dumps(build_info))
         manifest = {
