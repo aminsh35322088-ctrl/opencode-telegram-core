@@ -147,6 +147,9 @@ export class TelegramRichStreamController {
     const lease = this.#leases.get(key);
     if (!lease || !this.runs.accepts(lease.run)) return false;
     this.#leases.delete(key);
+    // Fence the run before the network interrupt so late SSE/tool/Telegram
+    // completions cannot race the user's Stop action.
+    this.runs.finish(lease.run);
     await this.abortRun(lease.run, "telegram_stop");
     return true;
   }
