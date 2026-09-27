@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BindingRegistry,
   RunRegistry,
   TelegramRichStreamController,
   renderTelegramRichDocument,
@@ -41,10 +42,13 @@ class FakePort implements RichMessagePort {
 
 describe("Telegram-native rich rendering", () => {
   test("native Rich Markdown is passed through without MarkdownV2 escaping", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
     const runs = new RunRegistry();
-    const run = runs.start(binding(), 1, "markdown-run");
+    const run = runs.start(b, 1, "markdown-run");
     const port = new FakePort();
-    const controller = new TelegramRichStreamController(runs, port, async () => undefined);
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
     const route = { chatId: 100, messageThreadId: 11 };
     const markdown = "# Heading\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n\`\`\`ts\nconst x = 1;\n\`\`\`";
 
@@ -72,11 +76,15 @@ describe("Telegram-native rich rendering", () => {
   });
 
   test("Telegram stop update aborts only the exact draft run", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
     const runs = new RunRegistry();
-    const run = runs.start(binding(), 1, "run-a");
+    const run = runs.start(b, 1, "run-a");
     const port = new FakePort();
     const aborted: string[] = [];
     const controller = new TelegramRichStreamController(
+      bindings,
       runs,
       port,
       async (target) => { aborted.push(target.runId); },
@@ -96,11 +104,13 @@ describe("Telegram-native rich rendering", () => {
   });
 
   test("late draft update from superseded run is dropped", async () => {
-    const runs = new RunRegistry();
+    const bindings = new BindingRegistry();
     const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
     const oldRun = runs.start(b, 1, "old");
     const port = new FakePort();
-    const controller = new TelegramRichStreamController(runs, port, async () => undefined);
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
     const route = { chatId: 100, messageThreadId: 11 };
     const draftId = await controller.start(oldRun, route, {
       blocks: [{ type: "paragraph", text: "old" }],
