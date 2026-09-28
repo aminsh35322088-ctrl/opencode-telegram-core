@@ -1,6 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { describe, expect, test } from "bun:test";
 import {
   renderTelegramRichDocument,
   renderTelegramRichMarkdown,
@@ -13,14 +11,6 @@ function richTextOf(message: unknown): unknown {
   return blocks.length > 0 ? blocks[0]?.text : undefined;
 }
 
-async function withTemp<T>(run: () => Promise<T>): Promise<T> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "otc-rich-"));
-  try {
-    return await run();
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-}
 
 describe("inline rich text tree", () => {
   test("a plain string block stays a plain string, not a wrapper node", () => {
@@ -197,8 +187,3 @@ describe("inline rich text tree", () => {
   });
 });
 
-describe("temporary directories", () => {
-  test("withTemp cleans up", async () => {
-    await withTemp(async () => undefined);
-  });
-});
