@@ -9,8 +9,16 @@ import type {
   AgentTableCell,
 } from "./agent-document.js";
 
-type RichText = NonNullable<InputRichMessageWithoutUpload["text"]>;
 type DraftBlock = NonNullable<InputRichMessageWithoutUpload["blocks"]>[number];
+// InputRichMessage itself has no `text` field: the inline tree lives on each
+// block. Deriving it from a real block keeps this correct if grammy renames it.
+type ParagraphBlock = Extract<DraftBlock, { type: "paragraph" }>;
+type RichText = ParagraphBlock["text"];
+
+/** `Array.isArray` does not narrow a readonly array, so guard it explicitly. */
+function isInlineArray(value: AgentInline): value is readonly AgentInline[] {
+  return Array.isArray(value);
+}
 
 /**
  * Compiles the inline tree into the Bot API `RichText` shape, which is the
@@ -20,7 +28,7 @@ type DraftBlock = NonNullable<InputRichMessageWithoutUpload["blocks"]>[number];
  */
 export function compileInline(value: AgentInline): RichText {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(compileInline) as RichText;
+  if (isInlineArray(value)) return value.map(compileInline) as RichText;
   switch (value.type) {
     case "math":
       return { type: "mathematical_expression", expression: value.expression };
