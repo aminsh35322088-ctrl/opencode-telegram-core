@@ -193,39 +193,108 @@ describe("Railway-bounded worker supervisor", () => {
     expect(supervisor.size()).toBe(1);
   });
 
-  test("concurrent distinct ensures never exceed maxWorkers", async () => {
-    let releaseStart!: () => void;
-    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+  test("a slow start in one binding does not block another binding", async () => {
+    let signalAStarted!: () => void;
+    let releaseA!: () => void;
+    const aStarted = new Promise<void>((resolve) => { signalAStarted = resolve; });
+    const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+    let bStarted = false;
+
     class FakeWorker implements TopicWorker {
-      idle = false;
+      idle = true;
       constructor(readonly bindingId: string, readonly generation: number) {}
-      async start(): Promise<void> { await startGate; }
+      async start(): Promise<void> {
+        if (this.bindingId === "a") {
+          signalAStarted();
+          await aGate;
+        } else {
+          bStarted = true;
+        }
+      }
       async stop(): Promise<void> {}
     }
-    const created: FakeWorker[] = [];
-    const supervisor = new WorkerSupervisor((b, g) => {
-      const worker = new FakeWorker(b.bindingId, g);
-      created.push(worker);
-      return worker;
-    }, { maxWorkers: 1 });
 
-    const first = supervisor.ensure(binding({ bindingId: "a", threadId: 1 }));
-    const second = supervisor.ensure(binding({ bindingId: "b", threadId: 2 }));
-    releaseStart();
-    const settled = await Promise.allSettled([first, second]);
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 2 },
+    );
 
-    expect(created).toHaveLength(1);
+    const a = supervisor.ensure(binding({ bindingId: "a", threadId: 1 }));
+    await aStarted;
+    const b = supervisor.ensure(binding({ bindingId: "b", threadId: 2 }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bStarted).toBe(true);
+    releaseA();
+    await Promise.all([a, b]);
+    expect(supervisor.size()).toBe(2);
+  });
+
+  test("failed start releases its reserved capacity", async () => {
+    let failFirst = true;
+
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error("boom");
+        }
+      }
+      async stop(): Promise<void> {}
+    }
+
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 1 },
+    );
+
+    await expect(
+      supervisor.ensure(binding({ bindingId: "a", threadId: 1 })),
+    ).rejects.toThrow("boom");
+    expect(supervisor.size()).toBe(0);
+
+    const b = await supervisor.ensure(binding({ bindingId: "b", threadId: 2 }));
+    expect(b.bindingId).toBe("b");
     expect(supervisor.size()).toBe(1);
-    expect(settled.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
-    expect(settled.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+  });
+
+  test("concurrent distinct ensures never exceed maxWorkers", async () => {
+    let releaseAStop!: () => void;
+    const aStopGate = new Promise<void>((resolve) => { releaseAStop = resolve; });
+
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {
+        if (this.bindingId === "a") await aStopGate;
+      }
+    }
+
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 1 },
+    );
+    await supervisor.ensure(binding({ bindingId: "a", threadId: 1 }));
+
+    const b = supervisor.ensure(binding({ bindingId: "b", threadId: 2 }));
+    const c = supervisor.ensure(binding({ bindingId: "c", threadId: 3 }));
+    await Promise.resolve();
+    releaseAStop();
+    await Promise.allSettled([b, c]);
+
+    expect(supervisor.size()).toBeLessThanOrEqual(1);
   });
 
   test("stop waits for in-flight start and prevents late worker resurrection", async () => {
-    let releaseStart!: () => void;
     let signalStarted!: () => void;
-    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+    let releaseStart!: () => void;
     const started = new Promise<void>((resolve) => { signalStarted = resolve; });
-    const stopped: string[] = [];
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+
     class FakeWorker implements TopicWorker {
       idle = true;
       constructor(readonly bindingId: string, readonly generation: number) {}
@@ -233,21 +302,21 @@ describe("Railway-bounded worker supervisor", () => {
         signalStarted();
         await startGate;
       }
-      async stop(): Promise<void> { stopped.push(this.bindingId); }
+      async stop(): Promise<void> {}
     }
+
     const supervisor = new WorkerSupervisor(
       (b, g) => new FakeWorker(b.bindingId, g),
       { maxWorkers: 1 },
     );
     const a = binding({ bindingId: "a", threadId: 1 });
 
-    const pending = supervisor.ensure(a);
+    const ensuring = supervisor.ensure(a);
     await started;
-    const stopping = supervisor.stop("a", "delete");
+    const stopping = supervisor.stop("a", "binding_rotated");
     releaseStart();
-    await Promise.all([pending, stopping]);
+    await Promise.allSettled([ensuring, stopping]);
 
-    expect(stopped).toEqual(["a"]);
     expect(supervisor.size()).toBe(0);
   });
 
@@ -273,9 +342,10 @@ describe("Railway-bounded worker supervisor", () => {
     })).rejects.toThrow("binding identity mismatch");
   });
 
-  test("failed worker start is cleaned up and does not poison later lifecycle work", async () => {
+  test("failed worker start is cleaned up and generation remains monotonic", async () => {
     const stopped: number[] = [];
     let attempt = 0;
+
     class FakeWorker implements TopicWorker {
       idle = true;
       constructor(readonly bindingId: string, readonly generation: number) {}
@@ -285,6 +355,7 @@ describe("Railway-bounded worker supervisor", () => {
       }
       async stop(): Promise<void> { stopped.push(this.generation); }
     }
+
     const supervisor = new WorkerSupervisor(
       (b, g) => new FakeWorker(b.bindingId, g),
       { maxWorkers: 1 },

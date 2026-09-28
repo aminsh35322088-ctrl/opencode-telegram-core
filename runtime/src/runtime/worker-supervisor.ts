@@ -16,10 +16,18 @@ interface WorkerSlot {
   lastUsedAt: number;
 }
 
+interface PendingCreation {
+  binding: BindingIdentity;
+  cancelled: boolean;
+  promise: Promise<TopicWorker>;
+}
+
 export class WorkerSupervisor {
   readonly #workers = new Map<string, WorkerSlot>();
   readonly #generation = new Map<string, number>();
-  #lifecycleLock: Promise<void> = Promise.resolve();
+  readonly #pending = new Map<string, PendingCreation>();
+  readonly #retiring = new Map<string, Promise<void>>();
+  #reservedStarts = 0;
 
   constructor(
     private readonly factory: WorkerFactory,
@@ -29,41 +37,96 @@ export class WorkerSupervisor {
   }
 
   async ensure(binding: BindingIdentity): Promise<TopicWorker> {
-    return this.#withLifecycleLock(async () => {
-      const existing = this.#workers.get(binding.bindingId);
-      if (existing) {
-        if (!sameBinding(existing.binding, binding)) {
-          throw new Error(
-            "worker binding identity mismatch; stop or replace the stale worker before reuse",
-          );
-        }
-        existing.lastUsedAt = Date.now();
-        return existing.worker;
+    const retiring = this.#retiring.get(binding.bindingId);
+    if (retiring) {
+      await retiring;
+      return this.ensure(binding);
+    }
+
+    const existing = this.#workers.get(binding.bindingId);
+    if (existing) {
+      this.#assertSameBinding(existing.binding, binding);
+      existing.lastUsedAt = Date.now();
+      return existing.worker;
+    }
+
+    const inflight = this.#pending.get(binding.bindingId);
+    if (inflight) {
+      this.#assertSameBinding(inflight.binding, binding);
+      return inflight.promise;
+    }
+
+    const state = {
+      binding: Object.freeze({ ...binding }),
+      cancelled: false,
+      promise: undefined as unknown as Promise<TopicWorker>,
+    };
+    const creation = Promise.resolve().then(() => this.#create(state));
+    state.promise = creation;
+    this.#pending.set(binding.bindingId, state);
+
+    try {
+      return await creation;
+    } finally {
+      if (this.#pending.get(binding.bindingId) === state) {
+        this.#pending.delete(binding.bindingId);
       }
-      return this.#createUnlocked(binding);
-    });
+    }
   }
 
   async replace(binding: BindingIdentity, reason: string): Promise<TopicWorker> {
-    return this.#withLifecycleLock(async () => {
-      await this.#stopUnlocked(binding.bindingId, reason);
-      return this.#createUnlocked(binding);
-    });
+    await this.stop(binding.bindingId, reason);
+    return this.ensure(binding);
   }
 
   async stop(bindingId: string, reason: string): Promise<void> {
-    return this.#withLifecycleLock(() => this.#stopUnlocked(bindingId, reason));
+    const pending = this.#pending.get(bindingId);
+    if (pending) pending.cancelled = true;
+
+    const existingRetirement = this.#retiring.get(bindingId);
+    const slot = this.#workers.get(bindingId);
+    if (slot) {
+      this.#workers.delete(bindingId);
+      await this.#retire(slot, reason);
+    } else if (existingRetirement) {
+      await existingRetirement;
+    }
+
+    if (pending) {
+      await pending.promise.catch(() => undefined);
+    }
+  }
+
+  async stopIfCurrent(
+    binding: BindingIdentity,
+    worker: TopicWorker,
+    reason: string,
+  ): Promise<boolean> {
+    const slot = this.#workers.get(binding.bindingId);
+    if (!slot || slot.worker !== worker || !sameBinding(slot.binding, binding)) {
+      return false;
+    }
+    this.#workers.delete(binding.bindingId);
+    await this.#retire(slot, reason);
+    return true;
   }
 
   async workerCrashed(binding: BindingIdentity): Promise<TopicWorker> {
-    return this.#withLifecycleLock(async () => {
-      this.#workers.delete(binding.bindingId);
-      return this.#createUnlocked(binding);
-    });
+    await this.stop(binding.bindingId, "worker_crashed");
+    return this.ensure(binding);
+  }
+
+  isCurrent(binding: BindingIdentity, worker: TopicWorker): boolean {
+    const slot = this.#workers.get(binding.bindingId);
+    return Boolean(
+      slot &&
+      slot.worker === worker &&
+      sameBinding(slot.binding, binding),
+    );
   }
 
   size(): number {
-    return this.#workers.size;
+    return this.#workers.size + this.#reservedStarts;
   }
 
   idleCount(): number {
@@ -71,64 +134,93 @@ export class WorkerSupervisor {
   }
 
   async stopAll(reason: string): Promise<void> {
-    return this.#withLifecycleLock(async () => {
-      const bindingIds = [...this.#workers.keys()];
-      await Promise.all(
-        bindingIds.map((bindingId) => this.#stopUnlocked(bindingId, reason)),
-      );
-    });
+    const bindingIds = new Set([
+      ...this.#workers.keys(),
+      ...this.#pending.keys(),
+      ...this.#retiring.keys(),
+    ]);
+    await Promise.all([...bindingIds].map((bindingId) => this.stop(bindingId, reason)));
   }
 
-  async #createUnlocked(binding: BindingIdentity): Promise<TopicWorker> {
-    await this.#makeRoomUnlocked();
-    const generation = (this.#generation.get(binding.bindingId) ?? 0) + 1;
-    this.#generation.set(binding.bindingId, generation);
+  async #create(state: PendingCreation): Promise<TopicWorker> {
+    if (state.cancelled) throw new Error("worker creation cancelled before start");
+    const eviction = this.#reserveSlot();
 
-    const worker = this.factory(binding, generation);
     try {
-      await worker.start(binding);
-    } catch (error) {
-      await worker.stop("worker_start_failed").catch(() => undefined);
-      throw error;
+      if (eviction) {
+        await eviction;
+      }
+      if (state.cancelled) {
+        throw new Error("worker creation cancelled before start");
+      }
+
+      const binding = state.binding;
+      const generation = (this.#generation.get(binding.bindingId) ?? 0) + 1;
+      this.#generation.set(binding.bindingId, generation);
+      const worker = this.factory(binding, generation);
+
+      try {
+        await worker.start(binding);
+      } catch (error) {
+        await worker.stop("worker_start_failed").catch(() => undefined);
+        throw error;
+      }
+
+      if (state.cancelled) {
+        await worker.stop("worker_creation_cancelled").catch(() => undefined);
+        throw new Error("worker creation cancelled during start");
+      }
+
+      this.#workers.set(binding.bindingId, {
+        worker,
+        binding,
+        lastUsedAt: Date.now(),
+      });
+      return worker;
+    } finally {
+      this.#reservedStarts -= 1;
+    }
+  }
+
+  #reserveSlot(): Promise<void> | null {
+    if (this.#workers.size + this.#reservedStarts < this.options.maxWorkers) {
+      this.#reservedStarts += 1;
+      return null;
     }
 
-    this.#workers.set(binding.bindingId, {
-      worker,
-      binding: Object.freeze({ ...binding }),
-      lastUsedAt: Date.now(),
-    });
-    return worker;
-  }
-
-  async #stopUnlocked(bindingId: string, reason: string): Promise<void> {
-    const slot = this.#workers.get(bindingId);
-    if (!slot) return;
-    this.#workers.delete(bindingId);
-    await slot.worker.stop(reason);
-  }
-
-  async #makeRoomUnlocked(): Promise<void> {
-    if (this.#workers.size < this.options.maxWorkers) return;
     const idle = [...this.#workers.values()]
       .filter((slot) => slot.worker.idle)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
     if (!idle) {
       throw new Error("worker capacity exhausted: no idle worker can be evicted");
     }
-    await this.#stopUnlocked(idle.worker.bindingId, "railway_resource_budget");
+
+    this.#workers.delete(idle.worker.bindingId);
+    this.#reservedStarts += 1;
+    return this.#retire(idle, "railway_resource_budget");
   }
 
-  async #withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {
-    const predecessor = this.#lifecycleLock;
-    let release!: () => void;
-    this.#lifecycleLock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await predecessor;
-    try {
-      return await operation();
-    } finally {
-      release();
+  #retire(slot: WorkerSlot, reason: string): Promise<void> {
+    const bindingId = slot.binding.bindingId;
+    const existing = this.#retiring.get(bindingId);
+    if (existing) return existing;
+
+    const retirement = Promise.resolve()
+      .then(() => slot.worker.stop(reason))
+      .finally(() => {
+        if (this.#retiring.get(bindingId) === retirement) {
+          this.#retiring.delete(bindingId);
+        }
+      });
+    this.#retiring.set(bindingId, retirement);
+    return retirement;
+  }
+
+  #assertSameBinding(actual: BindingIdentity, expected: BindingIdentity): void {
+    if (!sameBinding(actual, expected)) {
+      throw new Error(
+        "worker binding identity mismatch; stop or replace the stale worker before reuse",
+      );
     }
   }
 }

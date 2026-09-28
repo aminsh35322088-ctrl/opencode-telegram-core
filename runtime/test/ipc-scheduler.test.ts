@@ -134,6 +134,49 @@ describe("scheduled task admission", () => {
     expect(executions).toBe(0);
   });
 
+  test("binding change during worker start is revalidated before scheduled execution", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    let executions = 0;
+    let started!: () => void;
+    let releaseStart!: () => void;
+    const startEntered = new Promise<void>((resolve) => { started = resolve; });
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+
+    class DelayedWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {
+        started();
+        await startGate;
+      }
+      async stop(): Promise<void> {}
+    }
+
+    const supervisor = new WorkerSupervisor(
+      (current, generation) => new DelayedWorker(current.bindingId, generation),
+      { maxWorkers: 2 },
+    );
+    const dispatcher = new ScheduledTaskDispatcher(
+      bindings,
+      runs,
+      supervisor,
+      new InMemoryExecutionLedger(),
+      { execute: async () => { executions += 1; } },
+    );
+
+    const dispatching = dispatcher.dispatch(taskFor(b));
+    await startEntered;
+    bindings.fence(b.bindingId);
+    releaseStart();
+
+    expect(await dispatching).toBe("stale_binding");
+    expect(executions).toBe(0);
+    expect(runs.current(b.bindingId)).toBeNull();
+  });
+
   test("duplicate durable execution id is idempotently suppressed", async () => {
     const bindings = new BindingRegistry();
     const b = binding();
