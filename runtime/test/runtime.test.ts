@@ -170,6 +170,134 @@ describe("Railway-bounded worker supervisor", () => {
     expect(a2.generation).toBe(a1.generation + 1);
     expect((await supervisor.ensure(b)).generation).toBe(b1.generation);
   });
+
+  test("concurrent ensure of one binding builds exactly one worker and never leaks a slot", async () => {
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {}
+    }
+    const created: FakeWorker[] = [];
+    const supervisor = new WorkerSupervisor((b, g) => {
+      const worker = new FakeWorker(b.bindingId, g);
+      created.push(worker);
+      return worker;
+    }, { maxWorkers: 3 });
+    const a = binding({ bindingId: "a", threadId: 1 });
+
+    const [first, second] = await Promise.all([supervisor.ensure(a), supervisor.ensure(a)]);
+
+    expect(created).toHaveLength(1);
+    expect(first).toBe(second);
+    expect(supervisor.size()).toBe(1);
+  });
+
+  test("concurrent distinct ensures never exceed maxWorkers", async () => {
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+    class FakeWorker implements TopicWorker {
+      idle = false;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> { await startGate; }
+      async stop(): Promise<void> {}
+    }
+    const created: FakeWorker[] = [];
+    const supervisor = new WorkerSupervisor((b, g) => {
+      const worker = new FakeWorker(b.bindingId, g);
+      created.push(worker);
+      return worker;
+    }, { maxWorkers: 1 });
+
+    const first = supervisor.ensure(binding({ bindingId: "a", threadId: 1 }));
+    const second = supervisor.ensure(binding({ bindingId: "b", threadId: 2 }));
+    releaseStart();
+    const settled = await Promise.allSettled([first, second]);
+
+    expect(created).toHaveLength(1);
+    expect(supervisor.size()).toBe(1);
+    expect(settled.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+  });
+
+  test("stop waits for in-flight start and prevents late worker resurrection", async () => {
+    let releaseStart!: () => void;
+    let signalStarted!: () => void;
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const stopped: string[] = [];
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {
+        signalStarted();
+        await startGate;
+      }
+      async stop(): Promise<void> { stopped.push(this.bindingId); }
+    }
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 1 },
+    );
+    const a = binding({ bindingId: "a", threadId: 1 });
+
+    const pending = supervisor.ensure(a);
+    await started;
+    const stopping = supervisor.stop("a", "delete");
+    releaseStart();
+    await Promise.all([pending, stopping]);
+
+    expect(stopped).toEqual(["a"]);
+    expect(supervisor.size()).toBe(0);
+  });
+
+  test("ensure fails closed instead of reusing a stale binding lease", async () => {
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {}
+    }
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 2 },
+    );
+    const first = binding({ bindingId: "a", threadId: 1 });
+    await supervisor.ensure(first);
+
+    await expect(supervisor.ensure({
+      ...first,
+      sessionId: "session-a-next",
+      normalizedDirectory: "/workspace/a-next",
+      bindingGeneration: first.bindingGeneration + 1,
+    })).rejects.toThrow("binding identity mismatch");
+  });
+
+  test("failed worker start is cleaned up and does not poison later lifecycle work", async () => {
+    const stopped: number[] = [];
+    let attempt = 0;
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {
+        attempt += 1;
+        if (attempt === 1) throw new Error("start failed");
+      }
+      async stop(): Promise<void> { stopped.push(this.generation); }
+    }
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 1 },
+    );
+    const a = binding({ bindingId: "a", threadId: 1 });
+
+    await expect(supervisor.ensure(a)).rejects.toThrow("start failed");
+    const recovered = await supervisor.ensure(a);
+
+    expect(stopped).toEqual([1]);
+    expect(recovered.generation).toBe(2);
+    expect(supervisor.size()).toBe(1);
+  });
 });
 
 describe("workspace isolation", () => {
