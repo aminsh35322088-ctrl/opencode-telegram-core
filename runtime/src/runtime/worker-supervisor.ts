@@ -22,11 +22,16 @@ interface PendingCreation {
   promise: Promise<TopicWorker>;
 }
 
+interface Retirement {
+  promise: Promise<void>;
+  capacityClaimed: boolean;
+}
+
 export class WorkerSupervisor {
   readonly #workers = new Map<string, WorkerSlot>();
   readonly #generation = new Map<string, number>();
   readonly #pending = new Map<string, PendingCreation>();
-  readonly #retiring = new Map<string, Promise<void>>();
+  readonly #retiring = new Map<string, Retirement>();
   readonly #lifecycleEpoch = new Map<string, number>();
   #reservedStarts = 0;
 
@@ -40,7 +45,7 @@ export class WorkerSupervisor {
   async ensure(binding: BindingIdentity): Promise<TopicWorker> {
     const retiring = this.#retiring.get(binding.bindingId);
     if (retiring) {
-      await retiring;
+      await retiring.promise;
       return this.ensure(binding);
     }
 
@@ -89,9 +94,9 @@ export class WorkerSupervisor {
     const slot = this.#workers.get(bindingId);
     if (slot) {
       this.#workers.delete(bindingId);
-      await this.#retire(slot, reason);
+      await this.#retire(slot, reason).promise;
     } else if (existingRetirement) {
-      await existingRetirement;
+      await existingRetirement.promise;
     }
 
     if (pending) {
@@ -110,7 +115,7 @@ export class WorkerSupervisor {
     }
     this.#bumpLifecycleEpoch(binding.bindingId);
     this.#workers.delete(binding.bindingId);
-    await this.#retire(slot, reason);
+    await this.#retire(slot, reason).promise;
     return true;
   }
 
@@ -129,7 +134,7 @@ export class WorkerSupervisor {
 
     const lifecycleEpoch = this.#lifecycleEpoch.get(binding.bindingId) ?? 0;
     this.#workers.delete(binding.bindingId);
-    await this.#retire(slot, "worker_crashed");
+    await this.#retire(slot, "worker_crashed").promise;
 
     if ((this.#lifecycleEpoch.get(binding.bindingId) ?? 0) !== lifecycleEpoch) {
       throw new Error("worker crash recovery superseded by lifecycle change");
@@ -147,7 +152,11 @@ export class WorkerSupervisor {
   }
 
   size(): number {
-    return this.#workers.size + this.#reservedStarts;
+    return (
+      this.#workers.size +
+      this.#reservedStarts +
+      this.#unclaimedRetirementCount()
+    );
   }
 
   idleCount(): number {
@@ -204,9 +213,26 @@ export class WorkerSupervisor {
   }
 
   #reserveSlot(): Promise<void> | null {
-    if (this.#workers.size + this.#reservedStarts < this.options.maxWorkers) {
+    const occupied =
+      this.#workers.size +
+      this.#reservedStarts +
+      this.#unclaimedRetirementCount();
+
+    if (occupied < this.options.maxWorkers) {
       this.#reservedStarts += 1;
       return null;
+    }
+
+    // A worker that is still stopping still consumes Railway capacity. Claim
+    // that future slot atomically before waiting so only one new start can use
+    // the capacity released by this retirement.
+    const retirement = [...this.#retiring.values()].find(
+      (entry) => !entry.capacityClaimed,
+    );
+    if (retirement) {
+      retirement.capacityClaimed = true;
+      this.#reservedStarts += 1;
+      return retirement.promise;
     }
 
     const idle = [...this.#workers.values()]
@@ -218,15 +244,26 @@ export class WorkerSupervisor {
 
     this.#workers.delete(idle.worker.bindingId);
     this.#reservedStarts += 1;
-    return this.#retire(idle, "railway_resource_budget");
+    return this.#retire(idle, "railway_resource_budget", true).promise;
   }
 
-  #retire(slot: WorkerSlot, reason: string): Promise<void> {
+  #retire(
+    slot: WorkerSlot,
+    reason: string,
+    capacityClaimed = false,
+  ): Retirement {
     const bindingId = slot.binding.bindingId;
     const existing = this.#retiring.get(bindingId);
-    if (existing) return existing;
+    if (existing) {
+      if (capacityClaimed) existing.capacityClaimed = true;
+      return existing;
+    }
 
-    const retirement = Promise.resolve()
+    const retirement: Retirement = {
+      promise: undefined as unknown as Promise<void>,
+      capacityClaimed,
+    };
+    retirement.promise = Promise.resolve()
       .then(() => slot.worker.stop(reason))
       .finally(() => {
         if (this.#retiring.get(bindingId) === retirement) {
@@ -235,6 +272,14 @@ export class WorkerSupervisor {
       });
     this.#retiring.set(bindingId, retirement);
     return retirement;
+  }
+
+  #unclaimedRetirementCount(): number {
+    let count = 0;
+    for (const retirement of this.#retiring.values()) {
+      if (!retirement.capacityClaimed) count += 1;
+    }
+    return count;
   }
 
   #bumpLifecycleEpoch(bindingId: string): void {

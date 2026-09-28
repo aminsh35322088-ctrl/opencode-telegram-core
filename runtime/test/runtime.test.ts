@@ -378,6 +378,61 @@ describe("Railway-bounded worker supervisor", () => {
     expect(supervisor.size()).toBeLessThanOrEqual(1);
   });
 
+  test("retiring worker keeps capacity until stop resolves", async () => {
+    let alive = 0;
+    let maxAlive = 0;
+    let signalStopEntered!: () => void;
+    let releaseStop!: () => void;
+    const stopEntered = new Promise<void>((resolve) => {
+      signalStopEntered = resolve;
+    });
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    let bStarted = false;
+
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      started = false;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {
+        this.started = true;
+        alive += 1;
+        maxAlive = Math.max(maxAlive, alive);
+        if (this.bindingId === "b") bStarted = true;
+      }
+      async stop(): Promise<void> {
+        if (this.bindingId === "a") {
+          signalStopEntered();
+          await stopGate;
+        }
+        if (this.started) alive -= 1;
+      }
+    }
+
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 1 },
+    );
+    await supervisor.ensure(binding({ bindingId: "a", threadId: 1 }));
+
+    const stopping = supervisor.stop("a", "binding_revoked");
+    await stopEntered;
+    const startingB = supervisor.ensure(binding({ bindingId: "b", threadId: 2 }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(supervisor.size()).toBe(1);
+    expect(bStarted).toBe(false);
+    expect(maxAlive).toBe(1);
+
+    releaseStop();
+    await Promise.all([stopping, startingB]);
+    expect(bStarted).toBe(true);
+    expect(maxAlive).toBe(1);
+    expect(supervisor.size()).toBe(1);
+  });
+
   test("stop waits for in-flight start and prevents late worker resurrection", async () => {
     let signalStarted!: () => void;
     let releaseStart!: () => void;
