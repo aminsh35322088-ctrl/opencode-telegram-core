@@ -181,7 +181,7 @@ describe("streamed draft lease lifetime", () => {
     const { run, port, controller, route } = setup();
     let draftId = 0;
     await controller.streamMarkdown(run, route, ["hello "], {
-      async streamMarkdown(_route, id) { draftId = id; },
+      async streamMarkdown(_route: RichDraftRoute, id: number) { draftId = id; },
     } as never);
 
     // A draft is an ephemeral preview; only a separate final send persists it.
@@ -195,7 +195,7 @@ describe("streamed draft lease lifetime", () => {
     const { run, port, controller, route } = setup();
     let draftId = 0;
     const fenced = await controller.streamMarkdown(run, route, ["x"], {
-      async streamMarkdown(_route, id) {
+      async streamMarkdown(_route: RichDraftRoute, id: number) {
         draftId = id;
         throw new RichStreamFencedError();
       },
@@ -211,7 +211,7 @@ describe("streamed draft lease lifetime", () => {
     let draftId = 0;
     await expect(
       controller.streamMarkdown(run, route, ["x"], {
-        async streamMarkdown(_route, id) {
+        async streamMarkdown(_route: RichDraftRoute, id: number) {
           draftId = id;
           throw new Error("network down");
         },
@@ -225,7 +225,7 @@ describe("streamed draft lease lifetime", () => {
     const { bindings, b, runs, run, port, controller, route } = setup();
     let draftId = 0;
     const result = await controller.streamMarkdown(run, route, ["x"], {
-      async streamMarkdown(_route, id) {
+      async streamMarkdown(_route: RichDraftRoute, id: number) {
         draftId = id;
         bindings.fence(b.bindingId);
         runs.start({ ...b, bindingGeneration: 2 }, 1, "replacement");
@@ -241,7 +241,7 @@ describe("streamed draft lease lifetime", () => {
     const { run, port, controller, route } = setup();
     let draftId = 0;
     await controller.streamMarkdown(run, route, ["x"], {
-      async streamMarkdown(_route, id) { draftId = id; },
+      async streamMarkdown(_route: RichDraftRoute, id: number) { draftId = id; },
     } as never);
 
     expect(controller.releaseDraft(run, route, draftId)).toBe(true);
@@ -254,7 +254,7 @@ describe("streamed draft lease lifetime", () => {
     const { run, controller, route } = setup();
     let draftId = 0;
     await controller.streamMarkdown(run, route, ["x"], {
-      async streamMarkdown(_route, id) { draftId = id; },
+      async streamMarkdown(_route: RichDraftRoute, id: number) { draftId = id; },
     } as never);
 
     expect(controller.releaseDraft({ ...run, runId: "someone-else" }, route, draftId)).toBe(false);
