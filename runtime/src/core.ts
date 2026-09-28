@@ -92,6 +92,13 @@ export class TelegramNativeCore {
     }
 
     const worker = await this.workers.ensure(binding);
+    if (
+      !this.bindings.registry.getExact(binding) ||
+      !this.workers.isCurrent(binding, worker)
+    ) {
+      await this.workers.stopIfCurrent(binding, worker, "stale_binding_admission");
+      throw new Error("binding or worker changed during admission: " + bindingId);
+    }
     const run = this.runs.start(binding, worker.generation, runId);
     this.liveness.start(run);
     return run;

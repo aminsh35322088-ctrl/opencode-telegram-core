@@ -50,6 +50,14 @@ export class ScheduledTaskDispatcher {
 
     try {
       const worker = await this.supervisor.ensure(current);
+      if (
+        !this.bindings.getExact(current) ||
+        !this.supervisor.isCurrent(current, worker)
+      ) {
+        await this.supervisor.stopIfCurrent(current, worker, "stale_scheduled_admission");
+        await this.ledger.release(task.executionId);
+        return "stale_binding";
+      }
       const run = this.runs.start(current, worker.generation, "scheduled:" + task.executionId);
       await this.port.execute(task, run);
       await this.ledger.complete(task.executionId);

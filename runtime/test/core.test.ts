@@ -148,6 +148,61 @@ describe("TelegramNativeCore composition", () => {
     expect(aborted).toEqual(["stop-me"]);
   });
 
+  test("rotate during worker start cannot admit a stale run", async () => {
+    let signalStarted!: () => void;
+    let releaseStart!: () => void;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+
+    class DelayedWorker implements TopicWorker {
+      idle = false;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {
+        signalStarted();
+        await startGate;
+      }
+      async stop(): Promise<void> {}
+    }
+
+    root = await mkdtemp(path.join(os.tmpdir(), "otc-core-"));
+    const core = await TelegramNativeCore.open({
+      bindingStorePath: path.join(root, "bindings.json"),
+      workerFactory: (b, generation) => new DelayedWorker(b.bindingId, generation),
+      outboundSink: { send: async () => undefined },
+      richMessagePort: new FakeRichPort(),
+      nativeMarkdownStreamPort: new FakeNativeStreamPort(),
+      abortRun: async () => undefined,
+      admissionPolicy: () => "MODEL_ALLOWED",
+      railwayPolicy: {
+        softRssBytes: Number.MAX_SAFE_INTEGER - 1,
+        hardRssBytes: Number.MAX_SAFE_INTEGER,
+        maxWorkers: 2,
+        maxRestartsPerBinding: 3,
+        restartWindowMs: 60_000,
+      },
+    });
+    await core.registerBinding(binding("a", 11));
+
+    const beginning = core.beginRun("a", "stale-run");
+    await started;
+    const rotating = core.rotateBinding("a", {
+      sessionId: "session-a-2",
+      normalizedDirectory: "/workspace/a2",
+    });
+
+    for (let i = 0; i < 100; i += 1) {
+      if (core.bindings.registry.getById("a")?.bindingGeneration === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(core.bindings.registry.getById("a")?.bindingGeneration).toBe(2);
+    releaseStart();
+
+    const [beginResult, rotateResult] = await Promise.allSettled([beginning, rotating]);
+    expect(rotateResult.status).toBe("fulfilled");
+    expect(beginResult.status).toBe("rejected");
+    expect(core.runs.current("a")).toBeNull();
+  });
+
   test("reopen reconciles an incomplete delete without exposing the route", async () => {
     const { core } = await open();
     await core.registerBinding(binding("a", 11));

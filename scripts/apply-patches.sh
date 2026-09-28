@@ -5,12 +5,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 tree="${1:?usage: apply-patches.sh WORKTREE}"
 series="$CORE_ROOT/patches/series"
 
-# An unreadable or effectively empty series must abort: process substitution
-# hides sed's failure and would otherwise leave an empty loop that exits 0
-# while silently shipping an unpatched upstream.
+# Read and filter the series through command substitution so sed's exit status
+# is observable by the parent shell. Process substitution would mask a partial
+# read failure and could otherwise ship only a prefix of the intended patches.
 [[ -r "$series" ]] || die "missing or unreadable patch series: $series"
-mapfile -t patches < <(sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' "$series")
-(( ${#patches[@]} > 0 )) || die "patch series lists no patches: $series"
+filtered="$(sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' "$series")" ||
+  die "failed to read patch series: $series"
+[[ -n "$filtered" ]] || die "patch series lists no patches: $series"
+mapfile -t patches <<< "$filtered"
 
 for patch in "${patches[@]}"; do
   git -C "$tree" apply --check "$CORE_ROOT/patches/$patch"
