@@ -39,11 +39,15 @@ export function compileInline(value: AgentInline): RichText {
     case "phone":
       return { type: "phone_number", text: compileInline(value.text), phone_number: value.phone };
     case "mention":
-      return { type: "mention", text: compileInline(value.text), user_id: value.userId };
+      return { type: "mention", text: compileInline(value.text), username: value.username };
     case "text_mention":
-      return { type: "text_mention", text: compileInline(value.text), user_id: value.userId };
+      return { type: "text_mention", text: compileInline(value.text), user: value.user };
     case "custom_emoji":
-      return { type: "custom_emoji", custom_emoji_id: value.customEmojiId, text: value.fallback };
+      return {
+        type: "custom_emoji",
+        custom_emoji_id: value.customEmojiId,
+        alternative_text: value.alternativeText,
+      };
     default:
       return { type: value.type, text: compileInline(value.text) } as RichText;
   }

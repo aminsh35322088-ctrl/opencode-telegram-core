@@ -1,3 +1,5 @@
+import type { User } from "grammy/types";
+
 /**
  * Inline rich text, mirroring the Bot API `RichText` tree.
  *
@@ -8,7 +10,7 @@
  *
  * The node set is the subset a bot may *send*; the remaining `RichText*`
  * variants Telegram only produces (references, bank cards, date times,
- * mentions, hashtags, cashtags, bot commands, buttons) are not authorable.
+ * hashtags, cashtags, bot commands, buttons and anchors) are not authorable.
  */
 export type AgentInline =
   | string
@@ -26,6 +28,10 @@ export type AgentInline =
   | { readonly type: "url"; readonly text: AgentInline; readonly url: string }
   | { readonly type: "email"; readonly text: AgentInline; readonly email: string }
   | { readonly type: "phone"; readonly text: AgentInline; readonly phone: string }
-  | { readonly type: "mention"; readonly text: AgentInline; readonly userId: number }
-  | { readonly type: "text_mention"; readonly text: AgentInline; readonly userId: number }
-  | { readonly type: "custom_emoji"; readonly customEmojiId: string; readonly fallback: string };
+  | { readonly type: "mention"; readonly text: AgentInline; readonly username: string }
+  | { readonly type: "text_mention"; readonly text: AgentInline; readonly user: User }
+  | {
+      readonly type: "custom_emoji";
+      readonly customEmojiId: string;
+      readonly alternativeText: string;
+    };
