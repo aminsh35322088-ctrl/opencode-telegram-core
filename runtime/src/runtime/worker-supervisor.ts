@@ -1,4 +1,4 @@
-import type { BindingIdentity } from "./identity.js";
+import { sameBinding, type BindingIdentity } from "./identity.js";
 
 export interface TopicWorker {
   readonly bindingId: string;
@@ -12,13 +12,14 @@ export type WorkerFactory = (binding: BindingIdentity, generation: number) => To
 
 interface WorkerSlot {
   worker: TopicWorker;
+  binding: BindingIdentity;
   lastUsedAt: number;
 }
 
 export class WorkerSupervisor {
   readonly #workers = new Map<string, WorkerSlot>();
   readonly #generation = new Map<string, number>();
-  readonly #pending = new Map<string, Promise<TopicWorker>>();
+  #lifecycleLock: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly factory: WorkerFactory,
@@ -28,54 +29,37 @@ export class WorkerSupervisor {
   }
 
   async ensure(binding: BindingIdentity): Promise<TopicWorker> {
-    const existing = this.#workers.get(binding.bindingId);
-    if (existing) {
-      existing.lastUsedAt = Date.now();
-      return existing.worker;
-    }
-
-    const inflight = this.#pending.get(binding.bindingId);
-    if (inflight) return inflight;
-
-    const creation = this.#create(binding);
-    this.#pending.set(binding.bindingId, creation);
-    try {
-      return await creation;
-    } finally {
-      if (this.#pending.get(binding.bindingId) === creation) {
-        this.#pending.delete(binding.bindingId);
+    return this.#withLifecycleLock(async () => {
+      const existing = this.#workers.get(binding.bindingId);
+      if (existing) {
+        if (!sameBinding(existing.binding, binding)) {
+          throw new Error(
+            "worker binding identity mismatch; stop or replace the stale worker before reuse",
+          );
+        }
+        existing.lastUsedAt = Date.now();
+        return existing.worker;
       }
-    }
-  }
-
-  // Only one creation per binding may be in flight: without this reservation
-  // two concurrent ensure calls both observe an empty slot, both start a
-  // worker, and the second insert silently leaks the first one.
-  async #create(binding: BindingIdentity): Promise<TopicWorker> {
-    await this.#makeRoom();
-    const generation = (this.#generation.get(binding.bindingId) ?? 0) + 1;
-    this.#generation.set(binding.bindingId, generation);
-    const worker = this.factory(binding, generation);
-    await worker.start(binding);
-    this.#workers.set(binding.bindingId, { worker, lastUsedAt: Date.now() });
-    return worker;
+      return this.#createUnlocked(binding);
+    });
   }
 
   async replace(binding: BindingIdentity, reason: string): Promise<TopicWorker> {
-    await this.stop(binding.bindingId, reason);
-    return this.ensure(binding);
+    return this.#withLifecycleLock(async () => {
+      await this.#stopUnlocked(binding.bindingId, reason);
+      return this.#createUnlocked(binding);
+    });
   }
 
   async stop(bindingId: string, reason: string): Promise<void> {
-    const slot = this.#workers.get(bindingId);
-    if (!slot) return;
-    this.#workers.delete(bindingId);
-    await slot.worker.stop(reason);
+    return this.#withLifecycleLock(() => this.#stopUnlocked(bindingId, reason));
   }
 
   async workerCrashed(binding: BindingIdentity): Promise<TopicWorker> {
-    this.#workers.delete(binding.bindingId);
-    return this.ensure(binding);
+    return this.#withLifecycleLock(async () => {
+      this.#workers.delete(binding.bindingId);
+      return this.#createUnlocked(binding);
+    });
   }
 
   size(): number {
@@ -87,16 +71,64 @@ export class WorkerSupervisor {
   }
 
   async stopAll(reason: string): Promise<void> {
-    const bindingIds = [...this.#workers.keys()];
-    await Promise.all(bindingIds.map((bindingId) => this.stop(bindingId, reason)));
+    return this.#withLifecycleLock(async () => {
+      const bindingIds = [...this.#workers.keys()];
+      await Promise.all(
+        bindingIds.map((bindingId) => this.#stopUnlocked(bindingId, reason)),
+      );
+    });
   }
 
-  async #makeRoom(): Promise<void> {
+  async #createUnlocked(binding: BindingIdentity): Promise<TopicWorker> {
+    await this.#makeRoomUnlocked();
+    const generation = (this.#generation.get(binding.bindingId) ?? 0) + 1;
+    this.#generation.set(binding.bindingId, generation);
+
+    const worker = this.factory(binding, generation);
+    try {
+      await worker.start(binding);
+    } catch (error) {
+      await worker.stop("worker_start_failed").catch(() => undefined);
+      throw error;
+    }
+
+    this.#workers.set(binding.bindingId, {
+      worker,
+      binding: Object.freeze({ ...binding }),
+      lastUsedAt: Date.now(),
+    });
+    return worker;
+  }
+
+  async #stopUnlocked(bindingId: string, reason: string): Promise<void> {
+    const slot = this.#workers.get(bindingId);
+    if (!slot) return;
+    this.#workers.delete(bindingId);
+    await slot.worker.stop(reason);
+  }
+
+  async #makeRoomUnlocked(): Promise<void> {
     if (this.#workers.size < this.options.maxWorkers) return;
     const idle = [...this.#workers.values()]
       .filter((slot) => slot.worker.idle)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
-    if (!idle) throw new Error("worker capacity exhausted: no idle worker can be evicted");
-    await this.stop(idle.worker.bindingId, "railway_resource_budget");
+    if (!idle) {
+      throw new Error("worker capacity exhausted: no idle worker can be evicted");
+    }
+    await this.#stopUnlocked(idle.worker.bindingId, "railway_resource_budget");
+  }
+
+  async #withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {
+    const predecessor = this.#lifecycleLock;
+    let release!: () => void;
+    this.#lifecycleLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await predecessor;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 }
