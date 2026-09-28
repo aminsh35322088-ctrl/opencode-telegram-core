@@ -165,10 +165,99 @@ describe("Railway-bounded worker supervisor", () => {
     const b = binding({ bindingId: "b", threadId: 2 });
     const a1 = await supervisor.ensure(a);
     const b1 = await supervisor.ensure(b);
-    const a2 = await supervisor.workerCrashed(a);
+    const a2 = await supervisor.workerCrashed(a, a1.generation);
 
     expect(a2.generation).toBe(a1.generation + 1);
     expect((await supervisor.ensure(b)).generation).toBe(b1.generation);
+  });
+
+  test("late crash from a retired generation cannot replace the current worker", async () => {
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {}
+    }
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 2 },
+    );
+    const firstBinding = binding({ bindingId: "a", threadId: 1 });
+    const first = await supervisor.ensure(firstBinding);
+    await supervisor.stop("a", "binding_rotated");
+
+    const replacementBinding = {
+      ...firstBinding,
+      sessionId: "session-a-next",
+      normalizedDirectory: "/workspace/a-next",
+      bindingGeneration: firstBinding.bindingGeneration + 1,
+    };
+    const replacement = await supervisor.ensure(replacementBinding);
+
+    await expect(
+      supervisor.workerCrashed(firstBinding, first.generation),
+    ).rejects.toThrow("stale worker crash");
+    expect(supervisor.isCurrent(replacementBinding, replacement)).toBe(true);
+    expect(first.generation).not.toBe(replacement.generation);
+  });
+
+  test("duplicate crash from an old worker generation cannot kill its replacement", async () => {
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {}
+    }
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 2 },
+    );
+    const a = binding({ bindingId: "a", threadId: 1 });
+
+    const first = await supervisor.ensure(a);
+    const replacement = await supervisor.workerCrashed(a, first.generation);
+
+    await expect(
+      supervisor.workerCrashed(a, first.generation),
+    ).rejects.toThrow("stale worker crash");
+    expect(supervisor.isCurrent(a, replacement)).toBe(true);
+  });
+
+  test("intentional stop supersedes an in-flight crash recovery", async () => {
+    let signalRetiring!: () => void;
+    let releaseRetirement!: () => void;
+    const retiring = new Promise<void>((resolve) => { signalRetiring = resolve; });
+    const retirementGate = new Promise<void>((resolve) => { releaseRetirement = resolve; });
+
+    class FakeWorker implements TopicWorker {
+      idle = true;
+      constructor(readonly bindingId: string, readonly generation: number) {}
+      async start(): Promise<void> {}
+      async stop(): Promise<void> {
+        signalRetiring();
+        await retirementGate;
+      }
+    }
+    const supervisor = new WorkerSupervisor(
+      (b, g) => new FakeWorker(b.bindingId, g),
+      { maxWorkers: 1 },
+    );
+    const a = binding({ bindingId: "a", threadId: 1 });
+    const first = await supervisor.ensure(a);
+
+    const recovery = supervisor.workerCrashed(a, first.generation);
+    const recoveryResult = recovery.then(
+      () => "fulfilled" as const,
+      () => "rejected" as const,
+    );
+    await retiring;
+
+    const stopping = supervisor.stop("a", "binding_rotated");
+    releaseRetirement();
+    await stopping;
+
+    expect(await recoveryResult).toBe("rejected");
+    expect(supervisor.size()).toBe(0);
   });
 
   test("concurrent ensure of one binding builds exactly one worker and never leaks a slot", async () => {

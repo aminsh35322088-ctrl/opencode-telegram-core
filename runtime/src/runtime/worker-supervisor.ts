@@ -27,6 +27,7 @@ export class WorkerSupervisor {
   readonly #generation = new Map<string, number>();
   readonly #pending = new Map<string, PendingCreation>();
   readonly #retiring = new Map<string, Promise<void>>();
+  readonly #lifecycleEpoch = new Map<string, number>();
   #reservedStarts = 0;
 
   constructor(
@@ -80,6 +81,7 @@ export class WorkerSupervisor {
   }
 
   async stop(bindingId: string, reason: string): Promise<void> {
+    this.#bumpLifecycleEpoch(bindingId);
     const pending = this.#pending.get(bindingId);
     if (pending) pending.cancelled = true;
 
@@ -106,13 +108,32 @@ export class WorkerSupervisor {
     if (!slot || slot.worker !== worker || !sameBinding(slot.binding, binding)) {
       return false;
     }
+    this.#bumpLifecycleEpoch(binding.bindingId);
     this.#workers.delete(binding.bindingId);
     await this.#retire(slot, reason);
     return true;
   }
 
-  async workerCrashed(binding: BindingIdentity): Promise<TopicWorker> {
-    await this.stop(binding.bindingId, "worker_crashed");
+  async workerCrashed(
+    binding: BindingIdentity,
+    workerGeneration: number,
+  ): Promise<TopicWorker> {
+    const slot = this.#workers.get(binding.bindingId);
+    if (
+      !slot ||
+      slot.worker.generation !== workerGeneration ||
+      !sameBinding(slot.binding, binding)
+    ) {
+      throw new Error("stale worker crash notification");
+    }
+
+    const lifecycleEpoch = this.#lifecycleEpoch.get(binding.bindingId) ?? 0;
+    this.#workers.delete(binding.bindingId);
+    await this.#retire(slot, "worker_crashed");
+
+    if ((this.#lifecycleEpoch.get(binding.bindingId) ?? 0) !== lifecycleEpoch) {
+      throw new Error("worker crash recovery superseded by lifecycle change");
+    }
     return this.ensure(binding);
   }
 
@@ -214,6 +235,13 @@ export class WorkerSupervisor {
       });
     this.#retiring.set(bindingId, retirement);
     return retirement;
+  }
+
+  #bumpLifecycleEpoch(bindingId: string): void {
+    this.#lifecycleEpoch.set(
+      bindingId,
+      (this.#lifecycleEpoch.get(bindingId) ?? 0) + 1,
+    );
   }
 
   #assertSameBinding(actual: BindingIdentity, expected: BindingIdentity): void {
