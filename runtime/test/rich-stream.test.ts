@@ -163,3 +163,102 @@ describe("Telegram-native rich rendering", () => {
     expect(port.drafts).toHaveLength(1);
   });
 });
+
+describe("streamed draft lease lifetime", () => {
+  function setup() {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    const run = runs.start(b, 1, "stream-lease");
+    const port = new FakePort();
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
+    const route = { chatId: 100, messageThreadId: 11 };
+    return { bindings, b, runs, run, port, controller, route };
+  }
+
+  test("a streamed draft can be persisted afterwards", async () => {
+    const { run, port, controller, route } = setup();
+    let draftId = 0;
+    await controller.streamMarkdown(run, route, ["hello "], {
+      async streamMarkdown(_route, id) { draftId = id; },
+    } as never);
+
+    // A draft is an ephemeral preview; only a separate final send persists it.
+    const persisted = await controller.finalizeMarkdown(run, route, draftId, "hello world");
+    expect(persisted).toBe(true);
+    expect(port.finals).toHaveLength(1);
+    expect(port.finals[0]?.message.markdown).toBe("hello world");
+  });
+
+  test("a fenced stream leaves no lease and no final message", async () => {
+    const { run, port, controller, route } = setup();
+    let draftId = 0;
+    const fenced = await controller.streamMarkdown(run, route, ["x"], {
+      async streamMarkdown(_route, id) {
+        draftId = id;
+        throw new RichStreamFencedError();
+      },
+    } as never);
+
+    expect(fenced).toBe(false);
+    expect(await controller.finalizeMarkdown(run, route, draftId, "x")).toBe(false);
+    expect(port.finals).toHaveLength(0);
+  });
+
+  test("a non-fence error propagates and still leaves no lease", async () => {
+    const { run, port, controller, route } = setup();
+    let draftId = 0;
+    await expect(
+      controller.streamMarkdown(run, route, ["x"], {
+        async streamMarkdown(_route, id) {
+          draftId = id;
+          throw new Error("network down");
+        },
+      } as never),
+    ).rejects.toThrow("network down");
+    expect(await controller.finalizeMarkdown(run, route, draftId, "x")).toBe(false);
+    expect(port.finals).toHaveLength(0);
+  });
+
+  test("a superseded run cannot finalize the draft it streamed", async () => {
+    const { bindings, b, runs, run, port, controller, route } = setup();
+    let draftId = 0;
+    const result = await controller.streamMarkdown(run, route, ["x"], {
+      async streamMarkdown(_route, id) {
+        draftId = id;
+        bindings.fence(b.bindingId);
+        runs.start({ ...b, bindingGeneration: 2 }, 1, "replacement");
+      },
+    } as never);
+
+    expect(result).toBe(false);
+    expect(await controller.finalizeMarkdown(run, route, draftId, "x")).toBe(false);
+    expect(port.finals).toHaveLength(0);
+  });
+
+  test("releaseDraft drops the lease without sending anything", async () => {
+    const { run, port, controller, route } = setup();
+    let draftId = 0;
+    await controller.streamMarkdown(run, route, ["x"], {
+      async streamMarkdown(_route, id) { draftId = id; },
+    } as never);
+
+    expect(controller.releaseDraft(run, route, draftId)).toBe(true);
+    expect(await controller.finalizeMarkdown(run, route, draftId, "x")).toBe(false);
+    expect(port.finals).toHaveLength(0);
+    expect(port.drafts).toHaveLength(0);
+  });
+
+  test("releaseDraft is idempotent and rejects a foreign run", async () => {
+    const { run, controller, route } = setup();
+    let draftId = 0;
+    await controller.streamMarkdown(run, route, ["x"], {
+      async streamMarkdown(_route, id) { draftId = id; },
+    } as never);
+
+    expect(controller.releaseDraft({ ...run, runId: "someone-else" }, route, draftId)).toBe(false);
+    expect(controller.releaseDraft(run, route, draftId)).toBe(true);
+    expect(controller.releaseDraft(run, route, draftId)).toBe(false);
+  });
+});
