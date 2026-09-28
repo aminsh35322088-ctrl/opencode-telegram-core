@@ -25,6 +25,15 @@ class PatchTests(unittest.TestCase):
         self.assertIn('command: "build-info"', debug)
         self.assertIn("OPENCODE_TELEGRAM_CORE_VERSION", debug)
 
+        anonymous = (tree / "packages/opencode/src/provider/telegram-anonymous.ts").read_text()
+        self.assertIn("TELEGRAM_ANONYMOUS_PROVIDERS", anonymous)
+        self.assertIn("https://api.kilo.ai/api/gateway", anonymous)
+        self.assertIn("https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", anonymous)
+
+        provider = (tree / "packages/opencode/src/provider/provider.ts").read_text()
+        self.assertIn("discoverAnonymousModels", provider)
+        self.assertIn("Anonymous access", anonymous)
+
     def test_drift_fails_before_partial_application(self):
         tree = self.materialize()
         build = tree / "packages/opencode/script/build.ts"

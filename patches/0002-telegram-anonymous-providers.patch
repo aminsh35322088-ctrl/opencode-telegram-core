@@ -1,0 +1,602 @@
+diff --git a/packages/opencode/src/provider/provider.ts b/packages/opencode/src/provider/provider.ts
+index 867ef2c..a58a174 100644
+--- a/packages/opencode/src/provider/provider.ts
++++ b/packages/opencode/src/provider/provider.ts
+@@ -31,6 +31,12 @@ import { ModelV2 } from "@opencode-ai/core/model"
+ import { ModelStatus } from "./model-status"
+ import { RuntimeFlags } from "@/effect/runtime-flags"
+ import { ProviderError } from "./error"
++import {
++  TELEGRAM_ANONYMOUS_PROVIDERS,
++  discoverAnonymousModels,
++  type AnonymousModelSpec,
++  type AnonymousProviderSpec,
++} from "./telegram-anonymous"
+ 
+ const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
+ 
+@@ -1346,6 +1352,75 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
+   }
+ }
+ 
++function fromAnonymousModel(provider: AnonymousProviderSpec, item: AnonymousModelSpec): Model {
++  const base: Model = {
++    id: ModelV2.ID.make(item.id),
++    providerID: ProviderV2.ID.make(provider.id),
++    api: {
++      id: item.id,
++      url: provider.baseURL,
++      npm: "@ai-sdk/openai-compatible",
++    },
++    name: item.name,
++    family: item.family,
++    status: "active",
++    headers: {},
++    options: {},
++    cost: {
++      input: 0,
++      output: 0,
++      cache: {
++        read: 0,
++        write: 0,
++      },
++    },
++    limit: {
++      context: item.context,
++      output: item.output,
++    },
++    capabilities: {
++      temperature: item.temperature,
++      reasoning: item.reasoning,
++      attachment: item.input.audio || item.input.image || item.input.video || item.input.pdf,
++      toolcall: item.toolcall,
++      input: {
++        ...item.input,
++      },
++      output: {
++        text: true,
++        audio: false,
++        image: false,
++        video: false,
++        pdf: false,
++      },
++      interleaved: false,
++    },
++    release_date: item.releaseDate ?? "",
++    variants: item.variants ? mapValues(item.variants, (value) => ({ ...value })) : {},
++  }
++
++  if (Object.keys(base.variants ?? {}).length === 0) {
++    base.variants = mapValues(ProviderTransform.variants(base), (value) => value)
++  }
++  return base
++}
++
++function fromAnonymousProvider(provider: AnonymousProviderSpec): Info {
++  const models = Object.fromEntries(
++    provider.fallbackModels.map((item) => [item.id, fromAnonymousModel(provider, item)]),
++  )
++  return {
++    id: ProviderV2.ID.make(provider.id),
++    source: "custom",
++    name: provider.name,
++    env: [],
++    options: {
++      baseURL: provider.baseURL,
++    },
++    models,
++  }
++}
++
+ function modeOptions(model: Model, body: Record<string, unknown> | undefined) {
+   if (!body) return model.options
+   const options = Object.fromEntries(
+@@ -1402,7 +1477,11 @@ const layer = Layer.effect(
+         const bridge = yield* EffectBridge.make()
+         const cfg = yield* config.get()
+         const modelsDev = yield* modelsDevSvc.get()
+-        const catalog = mapValues(modelsDev, fromModelsDevProvider)
++        const catalog: Record<string, Info> = mapValues(modelsDev, fromModelsDevProvider)
++        for (const provider of TELEGRAM_ANONYMOUS_PROVIDERS) {
++          const providerID = ProviderV2.ID.make(provider.id)
++          catalog[providerID] = fromAnonymousProvider(provider)
++        }
+         const database = mapValues(catalog, toPublicInfo)
+ 
+         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
+@@ -1644,6 +1723,21 @@ const layer = Layer.effect(
+           }
+         }
+ 
++        // Telegram Core ships official anonymous OpenAI-compatible providers as
++        // first-class runtime sources. They never synthesize credentials: the SDK
++        // omits Authorization when provider.key/options.apiKey are absent.
++        for (const provider of TELEGRAM_ANONYMOUS_PROVIDERS) {
++          const providerID = ProviderV2.ID.make(provider.id)
++          if (!isProviderAllowed(providerID)) continue
++          mergeProvider(providerID, { source: "custom" })
++          discoveryLoaders[providerID] = async () => {
++            const discovered = await discoverAnonymousModels(provider)
++            return Object.fromEntries(
++              discovered.map((item) => [item.id, fromAnonymousModel(provider, item)]),
++            )
++          }
++        }
++
+         // load config - re-apply with updated data
+         for (const [id, provider] of configProviders) {
+           const providerID = ProviderV2.ID.make(id)
+@@ -1654,14 +1748,30 @@ const layer = Layer.effect(
+           mergeProvider(providerID, partial)
+         }
+ 
+-        const gitlab = ProviderV2.ID.make("gitlab")
+-        if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
++        for (const [id, loader] of Object.entries(discoveryLoaders)) {
++          const providerID = ProviderV2.ID.make(id)
++          if (!providers[providerID] || !isProviderAllowed(providerID)) continue
++
+           yield* Effect.promise(async () => {
+             try {
+-              const discovered = await discoveryLoaders[gitlab]()
+-              for (const [modelID, model] of Object.entries(discovered)) {
+-                if (!providers[gitlab].models[modelID]) {
+-                  providers[gitlab].models[modelID] = model
++              const discovered = await loader()
++              const entries = Object.entries(discovered)
++              if (entries.length === 0) return
++
++              const anonymous = TELEGRAM_ANONYMOUS_PROVIDERS.some((item) => item.id === providerID)
++              const hasConfiguredModels = Object.keys(cfg.provider?.[providerID]?.models ?? {}).length > 0
++              if (anonymous && !hasConfiguredModels) {
++                // A successful official catalog refresh is authoritative. Static
++                // fallbacks exist only for temporary catalog/network outages.
++                providers[providerID].models = discovered
++                return
++              }
++
++              // Preserve the existing append-only discovery contract used by
++              // providers such as GitLab and by user-configured anonymous models.
++              for (const [modelID, model] of entries) {
++                if (!providers[providerID].models[modelID]) {
++                  providers[providerID].models[modelID] = model
+                 }
+               }
+             } catch (e) {}
+diff --git a/packages/opencode/src/provider/telegram-anonymous.ts b/packages/opencode/src/provider/telegram-anonymous.ts
+new file mode 100644
+index 0000000..294f47d
+--- /dev/null
++++ b/packages/opencode/src/provider/telegram-anonymous.ts
+@@ -0,0 +1,309 @@
++export interface AnonymousModelSpec {
++  readonly id: string
++  readonly name: string
++  readonly family?: string
++  readonly context: number
++  readonly output: number
++  readonly releaseDate?: string
++  readonly temperature: boolean
++  readonly reasoning: boolean
++  readonly toolcall: boolean
++  readonly input: {
++    readonly text: boolean
++    readonly audio: boolean
++    readonly image: boolean
++    readonly video: boolean
++    readonly pdf: boolean
++  }
++  readonly variants?: Record<string, Record<string, unknown>>
++}
++
++export interface AnonymousProviderSpec {
++  readonly id: "kilo" | "ovh"
++  readonly name: string
++  readonly baseURL: string
++  readonly catalogURL: string
++  readonly notice: string
++  readonly fallbackModels: readonly AnonymousModelSpec[]
++  readonly parse: (payload: unknown) => AnonymousModelSpec[]
++}
++
++const textInput = {
++  text: true,
++  audio: false,
++  image: false,
++  video: false,
++  pdf: false,
++} as const
++
++function model(
++  id: string,
++  name: string,
++  context: number,
++  output: number,
++  options: Partial<Omit<AnonymousModelSpec, "id" | "name" | "context" | "output" | "input">> & {
++    input?: Partial<AnonymousModelSpec["input"]>
++  } = {},
++): AnonymousModelSpec {
++  return {
++    id,
++    name,
++    context,
++    output,
++    temperature: options.temperature ?? true,
++    reasoning: options.reasoning ?? false,
++    toolcall: options.toolcall ?? false,
++    input: { ...textInput, ...(options.input ?? {}) },
++    ...(options.family ? { family: options.family } : {}),
++    ...(options.releaseDate ? { releaseDate: options.releaseDate } : {}),
++    ...(options.variants ? { variants: options.variants } : {}),
++  }
++}
++
++const KILO_FALLBACK: readonly AnonymousModelSpec[] = [
++  model("kilo-auto/free", "Auto Free", 256_000, 32_768, { reasoning: true, toolcall: true }),
++  model("stealth/space-bunny-alpha", "Space Bunny Alpha", 1_000_000, 524_288, {
++    reasoning: true,
++    toolcall: true,
++    input: { image: true, video: true },
++  }),
++  model("poolside/laguna-s-2.1:free", "Poolside: Laguna S 2.1 (free)", 262_144, 32_768, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("nvidia/nemotron-3-ultra-550b-a55b:free", "NVIDIA: Nemotron 3 Ultra (free)", 1_000_000, 65_536, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("dots-studio/dots-3-note-preview:free", "Dots Studio: Dots3-Note Preview (free)", 512_000, 460_800, {
++    reasoning: true,
++    toolcall: true,
++    input: { image: true },
++  }),
++  model("inclusionai/ling-3.0-flash-sante:free", "inclusionAI: Ling 3.0 Flash Sante (free)", 262_144, 32_768, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("inclusionai/ling-3.0-flash-fin:free", "inclusionAI: Ling 3.0 Flash Fin (free)", 262_144, 32_768, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("qwen/qwen3.8-27b:free", "Qwen: Qwen3.8 27B (free)", 262_144, 235_929, {
++    reasoning: true,
++    toolcall: true,
++    input: { image: true, video: true },
++  }),
++  model("liquid/lfm-2.5-2.6b:free", "LiquidAI: LFM2.5-2.6B (free)", 65_536, 8_192, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("nvidia/nemotron-3.5-lightning:free", "NVIDIA: Nemotron 3.5 Lightning (free)", 1_000_000, 65_536, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("thinkingmachines/inkling-small:free", "Thinking Machines: Inkling Small (free)", 1_048_576, 262_144, {
++    reasoning: true,
++    toolcall: true,
++    input: { image: true, audio: true },
++  }),
++  model("poolside/laguna-xs-2.1:free", "Poolside: Laguna XS 2.1 (free)", 262_144, 32_768, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("cohere/north-mini-code:free", "Cohere: North Mini Code (free)", 256_000, 64_000, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model(
++    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
++    "NVIDIA: Nemotron 3 Nano Omni (free)",
++    256_000,
++    65_536,
++    { reasoning: true, toolcall: true, input: { image: true, audio: true, video: true } },
++  ),
++  model("nvidia/nemotron-3-super-120b-a12b:free", "NVIDIA: Nemotron 3 Super (free)", 262_144, 235_929, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("openrouter/free", "OpenRouter Free Models Router", 200_000, 32_768, {
++    reasoning: true,
++    toolcall: true,
++    input: { image: true },
++  }),
++  model("stepfun/step-3.7-flash:free", "StepFun: Step 3.7 Flash (free)", 262_144, 262_144, {
++    reasoning: true,
++    toolcall: true,
++    input: { image: true },
++  }),
++]
++
++const OVH_FALLBACK: readonly AnonymousModelSpec[] = [
++  model("Qwen3.6-27B", "Qwen3.6 27B", 262_144, 262_144, { reasoning: true, toolcall: true }),
++  model("Qwen3.5-9B", "Qwen3.5 9B", 262_144, 262_144, { reasoning: true, toolcall: true }),
++  model("Qwen3.8-27B", "Qwen3.8 27B", 262_144, 262_144, { reasoning: true, toolcall: true }),
++  model("Qwen3-Coder-30B-A3B-Instruct", "Qwen3 Coder 30B A3B Instruct", 262_144, 262_144, {
++    reasoning: true,
++    toolcall: true,
++  }),
++  model("Meta-Llama-3_3-70B-Instruct", "Llama 3.3 70B Instruct", 131_072, 131_072, { toolcall: true }),
++  model("Mistral-Small-3.2-24B-Instruct-2506", "Mistral Small 3.2 24B Instruct", 131_072, 131_072, {
++    toolcall: true,
++  }),
++  model("Qwen3.5-397B-A17B", "Qwen3.5 397B A17B", 262_144, 262_144, { reasoning: true, toolcall: true }),
++  model("gpt-oss-120b", "GPT-OSS 120B", 131_072, 131_072, { reasoning: true, toolcall: true }),
++  model("Mistral-7B-Instruct-v0.3", "Mistral 7B Instruct v0.3", 65_536, 65_536),
++  model("Qwen2.5-VL-72B-Instruct", "Qwen2.5 VL 72B Instruct", 32_768, 32_768, {
++    input: { image: true },
++  }),
++  model("Mistral-Nemo-Instruct-2407", "Mistral Nemo Instruct 2407", 65_536, 65_536),
++  model("gpt-oss-20b", "GPT-OSS 20B", 131_072, 131_072, { reasoning: true, toolcall: true }),
++]
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === "object" && value !== null && !Array.isArray(value)
++}
++
++function records(value: unknown): Record<string, unknown>[] {
++  return Array.isArray(value) ? value.filter(isRecord) : []
++}
++
++function strings(value: unknown): string[] {
++  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
++}
++
++function number(value: unknown): number | undefined {
++  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
++}
++
++function dateFromUnix(value: unknown): string | undefined {
++  const seconds = number(value)
++  if (!seconds) return undefined
++  return new Date(seconds * 1000).toISOString().slice(0, 10)
++}
++
++function safeVariants(value: unknown): Record<string, Record<string, unknown>> | undefined {
++  if (!isRecord(value)) return undefined
++  const out: Record<string, Record<string, unknown>> = {}
++  for (const [key, item] of Object.entries(value)) {
++    if (isRecord(item)) out[key] = item
++  }
++  return Object.keys(out).length ? out : undefined
++}
++
++function excludedAssistantModel(id: string, name: string) {
++  return /(guard|safety|moderation|embedding|rerank)/i.test(id + " " + name)
++}
++
++export function parseKiloAnonymousModels(payload: unknown): AnonymousModelSpec[] {
++  if (!isRecord(payload)) return []
++  const result: AnonymousModelSpec[] = []
++
++  for (const item of records(payload.data)) {
++    const id = typeof item.id === "string" ? item.id : ""
++    const name = typeof item.name === "string" ? item.name : id
++    if (!id || item.isFree !== true || excludedAssistantModel(id, name)) continue
++
++    const architecture = isRecord(item.architecture) ? item.architecture : {}
++    const outputs = strings(architecture.output_modalities)
++    if (outputs.length > 0 && !outputs.includes("text")) continue
++
++    const context = number(item.context_length)
++    const top = isRecord(item.top_provider) ? item.top_provider : {}
++    const output = number(top.max_completion_tokens) ?? (context ? Math.min(context, 32_768) : undefined)
++    if (!context || !output) continue
++
++    const params = new Set(strings(item.supported_parameters))
++    const inputs = strings(architecture.input_modalities)
++    const opencode = isRecord(item.opencode) ? item.opencode : {}
++    result.push(
++      model(id, name, context, output, {
++        releaseDate: dateFromUnix(item.created),
++        temperature: params.has("temperature"),
++        reasoning: params.has("reasoning") || params.has("reasoning_effort"),
++        toolcall: params.has("tools"),
++        input: {
++          text: inputs.length === 0 || inputs.includes("text"),
++          image: inputs.includes("image"),
++          audio: inputs.includes("audio"),
++          video: inputs.includes("video"),
++        },
++        variants: safeVariants(opencode.variants),
++      }),
++    )
++  }
++
++  return result
++}
++
++function ovhToolCall(id: string) {
++  return (
++    /^Qwen3(?!Guard)/i.test(id) ||
++    /^gpt-oss-/i.test(id) ||
++    /^Meta-Llama-3_3-/i.test(id) ||
++    /^Mistral-Small-/i.test(id)
++  )
++}
++
++function ovhReasoning(id: string) {
++  return /^Qwen3(?!Guard)/i.test(id) || /^gpt-oss-/i.test(id)
++}
++
++export function parseOvhAnonymousModels(payload: unknown): AnonymousModelSpec[] {
++  if (!isRecord(payload)) return []
++  const result: AnonymousModelSpec[] = []
++
++  for (const item of records(payload.data)) {
++    const id = typeof item.id === "string" ? item.id : ""
++    if (!id || excludedAssistantModel(id, id)) continue
++    const context = number(item.context_length)
++    const output = number(item.max_completion_tokens)
++    if (!context || !output) continue
++
++    result.push(
++      model(id, id, context, output, {
++        releaseDate: dateFromUnix(item.created),
++        reasoning: ovhReasoning(id),
++        toolcall: ovhToolCall(id),
++        input: {
++          image: /^Qwen2\.5-VL-/i.test(id),
++        },
++      }),
++    )
++  }
++
++  return result
++}
++
++export const TELEGRAM_ANONYMOUS_PROVIDERS: readonly AnonymousProviderSpec[] = [
++  {
++    id: "kilo",
++    name: "Kilo Gateway (Anonymous)",
++    baseURL: "https://api.kilo.ai/api/gateway",
++    catalogURL: "https://api.kilo.ai/api/gateway/models",
++    notice:
++      "Anonymous free routes are rate limited per IP. Kilo and upstream providers may log prompts/outputs for model improvement; do not use sensitive data.",
++    fallbackModels: KILO_FALLBACK,
++    parse: parseKiloAnonymousModels,
++  },
++  {
++    id: "ovh",
++    name: "OVHcloud AI Endpoints (Anonymous)",
++    baseURL: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
++    catalogURL: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models",
++    notice: "Anonymous access is intentionally low-throughput and intended as a fallback tier.",
++    fallbackModels: OVH_FALLBACK,
++    parse: parseOvhAnonymousModels,
++  },
++]
++
++export async function discoverAnonymousModels(provider: AnonymousProviderSpec): Promise<AnonymousModelSpec[]> {
++  const response = await fetch(provider.catalogURL, {
++    headers: {
++      Accept: "application/json",
++      "User-Agent": "opencode-telegram-core/anonymous-provider-discovery",
++    },
++    signal: AbortSignal.timeout(5_000),
++  })
++  if (!response.ok) throw new Error(`${provider.id} anonymous model discovery failed: HTTP ${response.status}`)
++  return provider.parse(await response.json())
++}
+diff --git a/packages/opencode/test/provider/telegram-anonymous.test.ts b/packages/opencode/test/provider/telegram-anonymous.test.ts
+new file mode 100644
+index 0000000..b37a352
+--- /dev/null
++++ b/packages/opencode/test/provider/telegram-anonymous.test.ts
+@@ -0,0 +1,116 @@
++import { expect, test } from "bun:test"
++import {
++  TELEGRAM_ANONYMOUS_PROVIDERS,
++  parseKiloAnonymousModels,
++  parseOvhAnonymousModels,
++} from "@/provider/telegram-anonymous"
++
++test("Kilo parser keeps only free assistant models and maps live capabilities", () => {
++  const models = parseKiloAnonymousModels({
++    data: [
++      {
++        id: "qwen/qwen3.8-27b:free",
++        name: "Qwen 3.8",
++        isFree: true,
++        context_length: 262144,
++        created: 1786722910,
++        architecture: {
++          input_modalities: ["text", "image", "video"],
++          output_modalities: ["text"],
++        },
++        supported_parameters: ["temperature", "reasoning", "reasoning_effort", "tools"],
++        top_provider: { max_completion_tokens: 235929 },
++        opencode: {
++          variants: {
++            high: { reasoning: { effort: "high", enabled: true } },
++          },
++        },
++      },
++      {
++        id: "openrouter/free",
++        name: "OpenRouter Free Models Router",
++        isFree: true,
++        context_length: 200000,
++        architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
++        supported_parameters: ["temperature", "reasoning", "tools"],
++        top_provider: { max_completion_tokens: null },
++      },
++      {
++        id: "google/lyria-3-pro-preview",
++        name: "Lyria",
++        isFree: false,
++        context_length: 1048576,
++        architecture: { input_modalities: ["text"], output_modalities: ["text", "audio"] },
++        supported_parameters: ["temperature"],
++        top_provider: { max_completion_tokens: 65536 },
++      },
++      {
++        id: "nvidia/nemotron-3.5-content-safety:free",
++        name: "Content Safety",
++        isFree: true,
++        context_length: 128000,
++        architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
++        supported_parameters: ["temperature"],
++        top_provider: { max_completion_tokens: 8192 },
++      },
++    ],
++  })
++
++  expect(models).toHaveLength(2)
++  expect(models[0].id).toBe("qwen/qwen3.8-27b:free")
++  expect(models[0].toolcall).toBe(true)
++  expect(models[0].reasoning).toBe(true)
++  expect(models[0].input.image).toBe(true)
++  expect(models[0].input.video).toBe(true)
++  expect(models[0].variants?.high).toEqual({ reasoning: { effort: "high", enabled: true } })
++  expect(models[1].id).toBe("openrouter/free")
++  expect(models[1].output).toBe(32_768)
++})
++
++test("OVH parser excludes non-chat and guard models and stays conservative", () => {
++  const models = parseOvhAnonymousModels({
++    data: [
++      {
++        id: "gpt-oss-120b",
++        created: 1756386145,
++        context_length: 131072,
++        max_completion_tokens: 131072,
++      },
++      {
++        id: "Qwen2.5-VL-72B-Instruct",
++        created: 1743423983,
++        context_length: 32768,
++        max_completion_tokens: 32768,
++      },
++      {
++        id: "Qwen3Guard-Gen-8B",
++        context_length: 32768,
++        max_completion_tokens: 16384,
++      },
++      {
++        id: "Qwen3-Embedding-8B",
++        context_length: 32768,
++        max_completion_tokens: 0,
++      },
++    ],
++  })
++
++  expect(models.map((item) => item.id)).toEqual(["gpt-oss-120b", "Qwen2.5-VL-72B-Instruct"])
++  expect(models[0].toolcall).toBe(true)
++  expect(models[0].reasoning).toBe(true)
++  expect(models[1].toolcall).toBe(false)
++  expect(models[1].input.image).toBe(true)
++})
++
++test("anonymous providers ship credential-free fallback catalogs", () => {
++  const kilo = TELEGRAM_ANONYMOUS_PROVIDERS.find((item) => item.id === "kilo")
++  const ovh = TELEGRAM_ANONYMOUS_PROVIDERS.find((item) => item.id === "ovh")
++
++  expect(kilo?.baseURL).toBe("https://api.kilo.ai/api/gateway")
++  expect(kilo?.fallbackModels.some((item) => item.id === "kilo-auto/free")).toBe(true)
++  expect(kilo?.fallbackModels.some((item) => item.id === "qwen/qwen3.8-27b:free")).toBe(true)
++
++  expect(ovh?.baseURL).toBe("https://oai.endpoints.kepler.ai.cloud.ovh.net/v1")
++  expect(ovh?.fallbackModels.some((item) => item.id === "gpt-oss-120b")).toBe(true)
++  expect(ovh?.fallbackModels.some((item) => item.id === "Qwen3.8-27B")).toBe(true)
++})

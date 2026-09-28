@@ -149,13 +149,16 @@ OpenCode runtime, generated SDK, and Telegram-native runtime form one compatibil
 
 ## Downstream OpenCode patch scope
 
-The downstream OpenCode patch remains deliberately small. It currently adds machine-readable build identity:
+The downstream OpenCode patch set remains deliberately small and auditable:
 
-```bash
-opencode debug build-info
-```
+- machine-readable build identity via `opencode debug build-info`,
+- built-in anonymous providers for the official Kilo Gateway and OVHcloud AI Endpoints anonymous APIs.
 
-Provider behavior and OpenCode session semantics remain upstream-owned. The Telegram-native runtime composes those public contracts instead of forking their implementation.
+The anonymous-provider patch does not add a sidecar, scrape a consumer web app, synthesize credentials, or persist a hidden token. It uses the upstream bundled OpenAI-compatible SDK without an API key, keeps a pinned fallback catalog for cold/offline startup, and refreshes model availability from each provider's public model endpoint with a bounded timeout. A successful live refresh replaces the fallback catalog; a discovery outage leaves the fallback usable. Normal `enabled_providers` / `disabled_providers` policy still applies.
+
+Kilo anonymous/free traffic is rate-limited per IP and Kilo/upstream providers may log prompts or outputs for model improvement. OVH anonymous access is intentionally low-throughput (documented as 2 requests/minute per IP per model). These sources should be treated as free fallback capacity, not an SLA-backed production backend.
+
+OpenCode session semantics remain upstream-owned. The Telegram-native runtime composes those public contracts instead of forking their implementation.
 
 ## Licensing and design
 
