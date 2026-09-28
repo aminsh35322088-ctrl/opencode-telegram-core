@@ -4,6 +4,7 @@ import {
   OpenCodeSessionClient,
   RunRegistry,
   SessionEventIntegrityError,
+  SessionEventStreamLostError,
   type BindingIdentity,
   type FetchLike,
   type OpenCodeRunStatusPort,
@@ -78,6 +79,91 @@ describe("OpenCode durable session event client", () => {
     const iterator = client.events("session-a", 0);
 
     await expect(iterator.next()).rejects.toBeInstanceOf(SessionEventIntegrityError);
+  });
+
+  test("a stream that yields one event per connection still exhausts the reconnect budget", async () => {
+    let attempts = 0;
+    const client = new OpenCodeSessionClient({
+      baseUrl: "http://127.0.0.1:4096",
+      requestTimeoutMs: 100,
+      eventIdleTimeoutMs: 100,
+      reconnectDelayMs: 1,
+      maxReconnects: 2,
+      fetchImpl: async () => {
+        attempts += 1;
+        return sse({ durable: { aggregateID: "session-a", seq: attempts }, type: "flap" });
+      },
+    });
+
+    let delivered = 0;
+    const iterator = client.events("session-a", 0);
+    const drain = (async () => {
+      for await (const _ of iterator) {
+        delivered += 1;
+        if (delivered > 10) return;
+      }
+    })();
+
+    await expect(drain).rejects.toBeInstanceOf(SessionEventStreamLostError);
+    expect(attempts).toBeLessThanOrEqual(3);
+  });
+
+  test("streaming many events leaves no idle timer pending per event", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let created = 0;
+    let cleared = 0;
+    globalThis.setTimeout = ((handler: never, ms?: number, ...rest: never[]) => {
+      if ((ms ?? 0) >= 1000) created += 1;
+      return (realSetTimeout as never as (...a: never[]) => unknown)(handler, ms, ...rest);
+    }) as never;
+    globalThis.clearTimeout = ((handle: never) => {
+      cleared += 1;
+      return (realClearTimeout as never as (h: never) => void)(handle);
+    }) as never;
+
+    try {
+      const total = 40;
+      let sent = 0;
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          for (let seq = 1; seq <= total; seq += 1) {
+            sent = seq;
+            controller.enqueue(encoder.encode(
+              "data: " + JSON.stringify({ durable: { aggregateID: "session-a", seq } }) + "\n\n",
+            ));
+            await new Promise((resolve) => { realSetTimeout(resolve, 0); });
+          }
+          controller.close();
+        },
+      });
+      const client = new OpenCodeSessionClient({
+        baseUrl: "http://127.0.0.1:4096",
+        requestTimeoutMs: 60_000,
+        eventIdleTimeoutMs: 30_000,
+        reconnectDelayMs: 1,
+        maxReconnects: 0,
+        fetchImpl: async () => new Response(body, { status: 200 }),
+      });
+
+      const iterator = client.events("session-a", 0);
+      let received = 0;
+      try {
+        for await (const _ of iterator) {
+          received += 1;
+          if (received >= total) break;
+        }
+      } catch {
+        // maxReconnects 0 refuses the follow-up connection; not under test here.
+      }
+
+      expect(received).toBe(total);
+      expect(created - cleared).toBeLessThanOrEqual(1);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
   });
 });
 

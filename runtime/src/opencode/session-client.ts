@@ -131,7 +131,6 @@ export class OpenCodeSessionClient {
           validateEvent(event, sessionId, cursor);
           if (event.durable.seq <= cursor) continue;
           cursor = event.durable.seq;
-          reconnects = 0;
           yield event;
         }
         if (signal?.aborted) return;
@@ -216,7 +215,15 @@ async function* readSseEvents(
   try {
     while (!signal?.aborted) {
       const read = reader.read();
-      const timeout = abortableSleep(idleTimeoutMs, signal).then(() => {
+      // Give the idle window its own controller so the timer and the abort
+      // listener are released as soon as the read wins the race. Without this
+      // every streamed event left one live timer and one listener behind for
+      // the whole idle window.
+      const idleController = new AbortController();
+      const idleSignal = signal === undefined
+        ? idleController.signal
+        : AbortSignal.any([signal, idleController.signal]);
+      const timeout = abortableSleep(idleTimeoutMs, idleSignal).then(() => {
         throw new Error("OpenCode SSE idle timeout");
       });
       let result;
@@ -225,6 +232,8 @@ async function* readSseEvents(
       } catch (error) {
         await reader.cancel(error).catch(() => undefined);
         throw error;
+      } finally {
+        idleController.abort();
       }
       if (result.done) break;
       buffer += decoder.decode(result.value, { stream: true });
