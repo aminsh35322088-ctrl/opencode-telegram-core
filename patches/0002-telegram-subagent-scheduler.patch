@@ -1,0 +1,417 @@
+diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
+index 0f85d44..7ace3fb 100644
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -44,7 +44,7 @@ import { decodeDataUrl } from "@/util/data-url"
+ import { Process } from "@/util/process"
+ import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+ import { InstanceState } from "@/effect/instance-state"
+-import { TaskTool, type TaskPromptOps } from "@/tool/task"
++import { TaskTool, TELEGRAM_SUBAGENT_CONCURRENCY, type TaskPromptOps } from "@/tool/task"
+ import { SessionRunState } from "./run-state"
+ import { RuntimeFlags } from "@/effect/runtime-flags"
+ import { EventV2Bridge } from "@/event-v2-bridge"
+@@ -396,7 +396,10 @@ const layer = Layer.effect(
+       assistantMessage.time.completed = Date.now()
+       yield* sessions.updateMessage(assistantMessage)
+ 
+-      if (result && part.state.status === "running") {
++      const resultMetadata = result?.metadata as Record<string, unknown> | undefined
++      const isolatedTaskFailure = resultMetadata?.failed === true
++
++      if (result && !isolatedTaskFailure && part.state.status === "running") {
+         yield* sessions.updatePart({
+           ...part,
+           state: {
+@@ -411,17 +414,21 @@ const layer = Layer.effect(
+         } satisfies SessionV1.ToolPart)
+       }
+ 
+-      if (!result) {
++      if ((!result || isolatedTaskFailure) && part.state.status === "running") {
++        const failure =
++          isolatedTaskFailure && typeof resultMetadata?.failure === "string"
++            ? resultMetadata.failure
++            : error?.message
+         yield* sessions.updatePart({
+           ...part,
+           state: {
+             status: "error",
+-            error: error ? `Tool execution failed: ${error.message}` : "Tool execution failed",
++            error: failure ? `Tool execution failed: ${failure}` : "Tool execution failed",
+             time: {
+-              start: part.state.status === "running" ? part.state.time.start : Date.now(),
++              start: part.state.time.start,
+               end: Date.now(),
+             },
+-            metadata: part.state.status === "pending" ? undefined : part.state.metadata,
++            metadata: resultMetadata ?? part.state.metadata,
+             input: part.state.input,
+           },
+         } satisfies SessionV1.ToolPart)
+@@ -1139,10 +1146,32 @@ const layer = Layer.effect(
+             }).pipe(Effect.ignore, Effect.forkIn(scope))
+ 
+           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+-          const task = tasks.pop()
++          const task = tasks.at(-1)
+ 
+           if (task?.type === "subtask") {
+-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
++            const batch: SessionV1.SubtaskPart[] = []
++            for (let index = tasks.length - 1; index >= 0; index--) {
++              const candidate = tasks[index]
++              if (!candidate || candidate.type !== "subtask") break
++              batch.push(candidate)
++            }
++
++            const exits = yield* Effect.forEach(
++              batch,
++              (subtask) =>
++                handleSubtask({ task: subtask, model, lastUser, sessionID, session, msgs }).pipe(Effect.exit),
++              { concurrency: TELEGRAM_SUBAGENT_CONCURRENCY },
++            )
++            const failures = exits.filter(Exit.isFailure)
++            if (failures.length === exits.length && failures[0]) {
++              return yield* Effect.failCause(failures[0].cause)
++            }
++            for (const failure of failures) {
++              yield* Effect.logError("parallel subtask failed without cancelling siblings", {
++                "session.id": sessionID,
++                error: Cause.squash(failure.cause),
++              })
++            }
+             continue
+           }
+ 
+diff --git a/packages/opencode/src/tool/task.ts b/packages/opencode/src/tool/task.ts
+index d8ca640..a1ea730 100644
+--- a/packages/opencode/src/tool/task.ts
++++ b/packages/opencode/src/tool/task.ts
+@@ -10,7 +10,7 @@ import { Agent } from "../agent/agent"
+ import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+ import type { SessionPrompt } from "../session/prompt"
+ import { Config } from "@/config/config"
+-import { Effect, Exit, Schema, Scope } from "effect"
++import { Effect, Exit, Schema, Scope, Semaphore } from "effect"
+ import { EffectBridge } from "@/effect/bridge"
+ import { RuntimeFlags } from "@/effect/runtime-flags"
+ import { Database } from "@opencode-ai/core/database/database"
+@@ -22,6 +22,80 @@ export interface TaskPromptOps {
+ }
+ 
+ const id = "task"
++
++function boundedEnvInt(name: string, fallback: number, min: number, max: number) {
++  const raw = process.env[name]
++  if (!raw) return fallback
++  const parsed = Number.parseInt(raw, 10)
++  if (!Number.isSafeInteger(parsed)) return fallback
++  return Math.min(max, Math.max(min, parsed))
++}
++
++export const TELEGRAM_SUBAGENT_CONCURRENCY = boundedEnvInt(
++  "OPENCODE_TELEGRAM_SUBAGENT_CONCURRENCY",
++  4,
++  1,
++  8,
++)
++const TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY = boundedEnvInt(
++  "OPENCODE_TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY",
++  6,
++  1,
++  16,
++)
++const TELEGRAM_SUBAGENT_MAX_PENDING = boundedEnvInt(
++  "OPENCODE_TELEGRAM_SUBAGENT_MAX_PENDING",
++  24,
++  TELEGRAM_SUBAGENT_CONCURRENCY,
++  128,
++)
++const TELEGRAM_SUBAGENT_TIMEOUT_MS = boundedEnvInt(
++  "OPENCODE_TELEGRAM_SUBAGENT_TIMEOUT_MS",
++  20 * 60 * 1000,
++  30_000,
++  2 * 60 * 60 * 1000,
++)
++
++type SubagentGate = {
++  semaphore: Semaphore.Semaphore
++  pending: number
++}
++
++const globalSubagentSemaphore = Semaphore.makeUnsafe(TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY)
++const parentSubagentGates = new Map<string, SubagentGate>()
++
++function scheduleSubagent<A, E, R>(
++  parentSessionID: string,
++  self: Effect.Effect<A, E, R>,
++): Effect.Effect<A, E, R> {
++  return Effect.acquireUseRelease(
++    Effect.sync(() => {
++      let gate = parentSubagentGates.get(parentSessionID)
++      if (!gate) {
++        gate = {
++          semaphore: Semaphore.makeUnsafe(TELEGRAM_SUBAGENT_CONCURRENCY),
++          pending: 0,
++        }
++        parentSubagentGates.set(parentSessionID, gate)
++      }
++      if (gate.pending >= TELEGRAM_SUBAGENT_MAX_PENDING) {
++        throw new Error(
++          `Subagent queue is full for parent session ${parentSessionID} (${TELEGRAM_SUBAGENT_MAX_PENDING} pending)`,
++        )
++      }
++      gate.pending += 1
++      return gate
++    }),
++    (gate) => gate.semaphore.withPermit(globalSubagentSemaphore.withPermit(self)),
++    (gate) =>
++      Effect.sync(() => {
++        gate.pending = Math.max(0, gate.pending - 1)
++        if (gate.pending === 0 && parentSubagentGates.get(parentSessionID) === gate) {
++          parentSubagentGates.delete(parentSessionID)
++        }
++      }),
++  )
++}
+ const BACKGROUND_DESCRIPTION = [
+   "Background mode: background=true launches the subagent asynchronously and returns immediately.",
+   "Foreground is the default; use it when you need the result before continuing.",
+@@ -186,6 +260,12 @@ export const TaskTool = Tool.define(
+         parentSessionId: ctx.sessionID,
+         sessionId: nextSession.id,
+         model,
++        scheduler: {
++          maxConcurrency: TELEGRAM_SUBAGENT_CONCURRENCY,
++          globalConcurrency: TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY,
++          maxPending: TELEGRAM_SUBAGENT_MAX_PENDING,
++          timeoutMs: TELEGRAM_SUBAGENT_TIMEOUT_MS,
++        },
+         ...(runInBackground ? { background: true } : {}),
+       }
+ 
+@@ -197,7 +277,7 @@ export const TaskTool = Tool.define(
+       const ops = ctx.extra?.promptOps as TaskPromptOps
+       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
+ 
+-      const runTask = Effect.fn("TaskTool.runTask")(function* () {
++      const runTaskBody = Effect.fn("TaskTool.runTaskBody")(function* () {
+         const parts = yield* ops.resolvePromptParts(params.prompt)
+         const result = yield* ops.prompt({
+           messageID: MessageID.ascending(),
+@@ -224,6 +304,22 @@ export const TaskTool = Tool.define(
+         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+       })
+ 
++      const runTask = Effect.fn("TaskTool.runTask")(function* () {
++        const timed = Effect.timeoutOrElse(runTaskBody(), {
++          duration: TELEGRAM_SUBAGENT_TIMEOUT_MS,
++          orElse: () =>
++            Effect.gen(function* () {
++              yield* ops.cancel(nextSession.id).pipe(Effect.ignore)
++              return yield* Effect.fail(
++                new Error(
++                  `Subagent timed out after ${TELEGRAM_SUBAGENT_TIMEOUT_MS}ms (task_id: ${nextSession.id})`,
++                ),
++              )
++            }),
++        })
++        return yield* scheduleSubagent(ctx.sessionID, timed)
++      })
++
+       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
+         state: "completed" | "error",
+         text: string,
+@@ -336,8 +432,27 @@ export const TaskTool = Tool.define(
+               background.waitForPromotion(nextSession.id),
+             )
+             if (result?.metadata?.background === true) return backgroundResult()
+-            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
+-            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
++            if (result?.status === "error" || result?.status === "cancelled") {
++              const text =
++                result.status === "error"
++                  ? (result.error ?? "Subagent failed")
++                  : "Subagent was cancelled"
++              return {
++                title: params.description,
++                metadata: {
++                  ...metadata,
++                  failed: true,
++                  failure: text,
++                  jobId: nextSession.id,
++                },
++                output: renderOutput({
++                  sessionID: nextSession.id,
++                  state: "error",
++                  summary: `Subagent failed: ${params.description}`,
++                  text,
++                }),
++              }
++            }
+             return {
+               title: params.description,
+               metadata,
+diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
+index da6e0f8..1871296 100644
+--- a/packages/opencode/test/session/prompt.test.ts
++++ b/packages/opencode/test/session/prompt.test.ts
+@@ -1016,6 +1016,38 @@ it.instance("subtask child inherits parent session external_directory allow", ()
+   }),
+ )
+ 
++it.instance(
++  "dispatches queued subtasks concurrently with bounded fan-out",
++  () =>
++    Effect.gen(function* () {
++      const { llm } = yield* useServerConfig(providerCfg)
++      const prompt = yield* SessionPrompt.Service
++      const sessions = yield* Session.Service
++      const chat = yield* sessions.create({ title: "Parallel subtasks" })
++      const msg = yield* user(chat.id, "fan out")
++
++      for (let index = 0; index < 5; index++) {
++        yield* addSubtask(chat.id, msg.id)
++      }
++      yield* llm.push(
++        reply().hang().item(),
++        reply().hang().item(),
++        reply().hang().item(),
++        reply().hang().item(),
++      )
++
++      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
++      yield* awaitWithTimeout(llm.wait(4), "timed out waiting for four concurrent subtasks", "5 seconds")
++      yield* Effect.sleep("50 millis")
++
++      expect(yield* llm.calls).toBe(4)
++
++      yield* Fiber.interrupt(fiber)
++    }),
++  { config: cfg },
++  10_000,
++)
++
+ noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
+   Effect.gen(function* () {
+     const prompt = yield* SessionPrompt.Service
+diff --git a/packages/opencode/test/tool/task.test.ts b/packages/opencode/test/tool/task.test.ts
+index 42f46fd..a044ac7 100644
+--- a/packages/opencode/test/tool/task.test.ts
++++ b/packages/opencode/test/tool/task.test.ts
+@@ -316,14 +316,14 @@ describe("tool.task", () => {
+         )
+         .pipe(Effect.exit)
+ 
+-      expect(Exit.isFailure(exit)).toBe(true)
+-      if (Exit.isSuccess(exit)) throw new Error("expected task failure")
++      expect(Exit.isSuccess(exit)).toBe(true)
++      if (Exit.isFailure(exit)) throw new Error("expected isolated task error result")
+       const child = (yield* sessions.children(chat.id))[0]
+       expect(child).toBeDefined()
+-      const failure = Cause.squash(exit.cause)
+-      expect(failure).toBeInstanceOf(Error)
+-      if (!(failure instanceof Error)) throw new Error("expected Error defect")
+-      expect(failure.message).toBe(`Subagent failed (task_id: ${child?.id}): Network connection lost`)
++      expect(exit.value.metadata.sessionId).toBe(child?.id)
++      expect((exit.value.metadata as Record<string, unknown>).failed).toBe(true)
++      expect(exit.value.output).toContain(`<task id="${child?.id}" state="error">`)
++      expect(exit.value.output).toContain("Network connection lost")
+     }),
+   )
+ 
+@@ -359,15 +359,85 @@ describe("tool.task", () => {
+         )
+         .pipe(Effect.exit)
+ 
+-      expect(Exit.isFailure(exit)).toBe(true)
+-      if (Exit.isSuccess(exit)) throw new Error("expected task failure")
++      expect(Exit.isSuccess(exit)).toBe(true)
++      if (Exit.isFailure(exit)) throw new Error("expected isolated task error result")
+       const child = (yield* sessions.children(chat.id))[0]
+-      const failure = Cause.squash(exit.cause)
+-      expect(failure).toBeInstanceOf(Error)
+-      if (!(failure instanceof Error)) throw new Error("expected Error defect")
+-      expect(failure.message).toBe(
+-        `Subagent failed (task_id: ${child?.id}): The user rejected permission to use this specific tool call.`,
+-      )
++      expect(exit.value.metadata.sessionId).toBe(child?.id)
++      expect((exit.value.metadata as Record<string, unknown>).failed).toBe(true)
++      expect(exit.value.output).toContain(`<task id="${child?.id}" state="error">`)
++      expect(exit.value.output).toContain("The user rejected permission to use this specific tool call.")
++    }),
++  )
++
++  it.instance("bounds parallel child work and isolates one child failure", () =>
++    Effect.gen(function* () {
++      const { chat, assistant } = yield* seed()
++      const tool = yield* TaskTool
++      const def = yield* tool.init()
++      const ready = defer<void>()
++      const release = defer<void>()
++      let active = 0
++      let started = 0
++      let maxActive = 0
++
++      const promptOps: TaskPromptOps = {
++        cancel: () => Effect.void,
++        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
++        prompt: (input) =>
++          Effect.promise(async () => {
++            active += 1
++            started += 1
++            maxActive = Math.max(maxActive, active)
++            if (started === 4) ready.resolve()
++            await release.promise
++            active -= 1
++
++            const text = input.parts.find((part) => part.type === "text")?.text ?? ""
++            return reply(
++              input,
++              text === "fail" ? "" : "done",
++              text === "fail"
++                ? new SessionV1.APIError({ message: "isolated child failure", isRetryable: false }).toObject()
++                : undefined,
++            )
++          }),
++      }
++
++      const run = (index: number) =>
++        def.execute(
++          {
++            description: `parallel child ${index}`,
++            prompt: index === 2 ? "fail" : `work-${index}`,
++            subagent_type: "general",
++          },
++          {
++            sessionID: chat.id,
++            messageID: assistant.id,
++            agent: "build",
++            abort: new AbortController().signal,
++            extra: { promptOps },
++            messages: [],
++            metadata: () => Effect.void,
++            ask: () => Effect.void,
++          },
++        )
++
++      const fiber = yield* Effect.all(Array.from({ length: 5 }, (_, index) => run(index)), {
++        concurrency: "unbounded",
++      }).pipe(Effect.forkChild)
++
++      yield* Effect.promise(() => ready.promise)
++      yield* Effect.sleep("10 millis")
++      expect(started).toBe(4)
++      expect(maxActive).toBe(4)
++
++      release.resolve()
++      const results = yield* Fiber.join(fiber)
++      expect(results).toHaveLength(5)
++      expect(started).toBe(5)
++      expect(maxActive).toBe(4)
++      expect(results.filter((result) => (result.metadata as Record<string, unknown>).failed === true)).toHaveLength(1)
++      expect(results.find((result) => (result.metadata as Record<string, unknown>).failed === true)?.output).toContain("isolated child failure")
+     }),
+   )
+ 
