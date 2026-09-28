@@ -13,6 +13,7 @@ export * from "./runtime/terminal-state.js";
 export * from "./runtime/worker-supervisor.js";
 export * from "./runtime/workspace-guard.js";
 export * from "./presentation/agent-document.js";
+export * from "./presentation/agent-inline.js";
 export * from "./presentation/telegram-rich-renderer.js";
 export * from "./railway/resource-governor.js";
 export * from "./ipc/json-line-worker-channel.js";
