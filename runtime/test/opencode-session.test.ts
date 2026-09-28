@@ -123,4 +123,28 @@ describe("authoritative run reconciliation", () => {
     expect(interrupts).toBe(1);
     expect(runs.current(run.bindingId)).toBeNull();
   });
+
+  test("a terminal probe finalizes through the injected finishRun hook", async () => {
+    const runs = new RunRegistry();
+    const run = runs.start(binding(), 1, "terminal-run");
+    const finalized: string[] = [];
+    const port: OpenCodeRunStatusPort = {
+      status: async () => "idle",
+      interrupt: async () => undefined,
+    };
+    const reconciler = new AuthoritativeRunReconciler(runs, port, {
+      requestTimeoutMs: 100,
+      providerRetryCeilingMs: 1_000,
+      // Stands in for TelegramNativeCore.finishRun, which also clears the
+      // per-run liveness and stuck bookkeeping.
+      finishRun: (candidate) => {
+        finalized.push(candidate.runId);
+        runs.finish(candidate);
+      },
+    });
+
+    expect(await reconciler.probe(run, 0)).toBe("terminal");
+    expect(finalized).toEqual(["terminal-run"]);
+    expect(runs.current(run.bindingId)).toBeNull();
+  });
 });

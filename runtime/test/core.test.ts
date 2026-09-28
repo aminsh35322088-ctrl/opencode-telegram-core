@@ -148,6 +148,27 @@ describe("TelegramNativeCore composition", () => {
     expect(aborted).toEqual(["stop-me"]);
   });
 
+  test("Telegram Stop clears the run's liveness and stuck bookkeeping", async () => {
+    const { core } = await open();
+    await core.registerBinding(binding("a", 11));
+    const run = await core.beginRun("a", "stop-cleanup");
+    const route = { chatId: 100, messageThreadId: 11 };
+    const draftId = await core.rich.startMarkdown(run, route, "working");
+    expect(core.liveness.touch(run)).toBe(true);
+    expect(core.stuck.observeTool(run, "bash", { command: "ls" })).toBe("ok");
+
+    expect(await core.handleGenerationStopped({
+      chat: { id: 100 },
+      message_thread_id: 11,
+      draft_id: draftId!,
+    })).toBe(true);
+
+    // finishRun() must run on this path, not the bare registry, otherwise the
+    // per-run bookkeeping survives a completed run.
+    expect(core.liveness.touch(run)).toBe(false);
+    expect(core.stuck.observeTool(run, "bash", { command: "ls" })).toBe("stale");
+  });
+
   test("rotate during worker start cannot admit a stale run", async () => {
     let signalStarted!: () => void;
     let releaseStart!: () => void;
