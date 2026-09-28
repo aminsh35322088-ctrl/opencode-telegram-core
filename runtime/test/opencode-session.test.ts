@@ -113,23 +113,23 @@ describe("OpenCode durable session event client", () => {
     const realClearTimeout = globalThis.clearTimeout;
     let created = 0;
     let cleared = 0;
-    globalThis.setTimeout = ((handler: never, ms?: number, ...rest: never[]) => {
+    // Count only the long idle-window timers; the 0ms drain timers below are an
+    // artefact of driving the stream in-process.
+    globalThis.setTimeout = function patched(handler: TimerHandler, ms?: number, ...args: unknown[]) {
       if ((ms ?? 0) >= 1000) created += 1;
-      return (realSetTimeout as never as (...a: never[]) => unknown)(handler, ms, ...rest);
-    }) as never;
-    globalThis.clearTimeout = ((handle: never) => {
+      return realSetTimeout(handler, ms, ...args);
+    } as typeof globalThis.setTimeout;
+    globalThis.clearTimeout = function patched(handle: Parameters<typeof globalThis.clearTimeout>[0]) {
       cleared += 1;
-      return (realClearTimeout as never as (h: never) => void)(handle);
-    }) as never;
+      return realClearTimeout(handle);
+    } as typeof globalThis.clearTimeout;
 
     try {
       const total = 40;
-      let sent = 0;
       const body = new ReadableStream<Uint8Array>({
         async start(controller) {
           const encoder = new TextEncoder();
           for (let seq = 1; seq <= total; seq += 1) {
-            sent = seq;
             controller.enqueue(encoder.encode(
               "data: " + JSON.stringify({ durable: { aggregateID: "session-a", seq } }) + "\n\n",
             ));
