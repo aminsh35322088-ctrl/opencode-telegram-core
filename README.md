@@ -17,10 +17,10 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 ## Locked baseline
 
 - Upstream: `anomalyco/opencode`
-- Release: `v1.18.32`
-- Commit: `545f51d26cc39a907d2867492d498d9607ea5fa4`
+- Release: `v1.18.33`
+- Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.32-bot.3`
+- Telegram Core version: `1.18.33-bot.4`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -37,6 +37,7 @@ The native runtime is under `runtime/`. Its main contracts include:
 - one mutable execution boundary per Telegram binding/topic,
 - per-binding OpenCode prompt workers and serialized queues,
 - bounded deadlines, cancellation, provider retry ceilings, liveness and stuck-loop detection,
+- rolling bounded subagent fan-out with per-parent/global admission caps, child-local deadlines, and sibling failure isolation,
 - session-scoped durable SSE replay/reconnect with cross-session fail-closed validation,
 - native Telegram Rich Message / Rich Markdown streaming through grammY,
 - Telegram Stop mapped to the exact draft/run,
@@ -46,6 +47,8 @@ The native runtime is under `runtime/`. Its main contracts include:
 - injectable admission policy so General/control-only behavior is a bot policy rather than a hidden Core fallback.
 
 Supported Telegram routing domains include normal chats, forum topics, direct-messages topics, business connections, inline queries, and guest queries.
+
+Subagent execution defaults to 4 active children per parent session and 6 globally, with at most 24 active/queued children per parent and a 20-minute active-execution deadline. These fail-safe limits can be tuned with `OPENCODE_TELEGRAM_SUBAGENT_CONCURRENCY`, `OPENCODE_TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY`, `OPENCODE_TELEGRAM_SUBAGENT_MAX_PENDING`, and `OPENCODE_TELEGRAM_SUBAGENT_TIMEOUT_MS`. Queue wait time does not consume the child execution deadline.
 
 ## Build
 
@@ -61,7 +64,7 @@ The scripts enforce the locked Bun version, materialize the exact upstream tag/c
 
 The production runtime is now a Telegram-headless OpenCode server build. It preserves the complete server/session/provider/tool/MCP/skill/file API graph used by Telegram agents while excluding TUI, embedded Web UI, desktop and unrelated interactive CLI commands from the production binary. The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
 
-A hard 140,000,000-byte size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release. The current v1.18.32 headless build is about 124 MB, roughly one third smaller than the previous full-CLI production binary.
+A hard 140,000,000-byte size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release. The current v1.18.33 headless build is about 124 MB, roughly one third smaller than the previous full-CLI production binary.
 
 Generated outputs include:
 
@@ -81,7 +84,7 @@ cat dist/sdk/UPSTREAM_REVISION
 cat dist/native-runtime/runtime-info.json
 ```
 
-For this baseline, `--version` must be exactly `1.18.32`; runtime, SDK, and native-runtime metadata must agree with the locked release identity.
+For this baseline, `--version` must be exactly `1.18.33`; runtime, SDK, and native-runtime metadata must agree with the locked release identity.
 
 The SDK build also validates `runtime/compat/opencode-telegram-bot-sdk-surface.json`, a contract generated from the OpenCode client members currently used by `opencode-telegram-bot`. The release fails if any required session, MCP, permission, question, provider/config, project, skill/agent, event, path, command, or health API disappears.
 
