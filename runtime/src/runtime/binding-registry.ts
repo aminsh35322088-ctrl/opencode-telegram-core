@@ -81,6 +81,11 @@ export class BindingRegistry {
     this.#byRoute.delete(bindingKey(current));
   }
 
+  clear(): void {
+    this.#byId.clear();
+    this.#byRoute.clear();
+  }
+
   list(): readonly BindingIdentity[] {
     return [...this.#byId.values()];
   }

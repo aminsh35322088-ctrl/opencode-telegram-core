@@ -62,6 +62,9 @@ export class TelegramNativeCore {
       this.runs,
       options.richMessagePort,
       options.abortRun,
+      (run) => {
+        this.finishRun(run);
+      },
     );
     this.liveness = new RunLivenessTracker(this.runs);
     this.stuck = new PerRunStuckDetector(
