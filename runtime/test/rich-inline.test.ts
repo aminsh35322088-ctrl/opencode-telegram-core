@@ -105,33 +105,34 @@ describe("inline rich text tree", () => {
     }
   });
 
-  test("mentions carry a numeric user id", () => {
+  test("mentions carry a username, or a full user for a text mention", () => {
     const mention: AgentDocument = {
-      blocks: [{ type: "paragraph", text: { type: "mention", text: "@ada", userId: 42 } }],
+      blocks: [{ type: "paragraph", text: { type: "mention", text: "@ada", username: "ada" } }],
     };
+    const user = { id: 42, is_bot: false, first_name: "Ada" } as const;
     const textMention: AgentDocument = {
-      blocks: [{ type: "paragraph", text: { type: "text_mention", text: "@ada", userId: 42 } }],
+      blocks: [{ type: "paragraph", text: { type: "text_mention", text: "@ada", user } }],
     };
     expect(richTextOf(renderTelegramRichDocument(mention, { draft: false }))).toEqual({
       type: "mention",
       text: "@ada",
-      user_id: 42,
+      username: "ada",
     });
     expect(richTextOf(renderTelegramRichDocument(textMention, { draft: false }))).toEqual({
       type: "text_mention",
       text: "@ada",
-      user_id: 42,
+      user,
     });
   });
 
-  test("custom emoji uses the id plus a plain fallback string", () => {
+  test("custom emoji uses the id plus alternative_text", () => {
     const document: AgentDocument = {
-      blocks: [{ type: "paragraph", text: { type: "custom_emoji", customEmojiId: "5", fallback: "👍" } }],
+      blocks: [{ type: "paragraph", text: { type: "custom_emoji", customEmojiId: "5", alternativeText: "👍" } }],
     };
     expect(richTextOf(renderTelegramRichDocument(document, { draft: false }))).toEqual({
       type: "custom_emoji",
       custom_emoji_id: "5",
-      text: "👍",
+      alternative_text: "👍",
     });
   });
 
