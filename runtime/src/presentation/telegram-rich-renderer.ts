@@ -119,7 +119,7 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
         text: compileInline(block.text),
       };
       if (block.credit !== undefined) result.credit = compileInline(block.credit);
-      return result as DraftBlock;
+      return result as unknown as DraftBlock;
     }
     case "math":
       return { type: "mathematical_expression", expression: block.expression };
@@ -132,7 +132,7 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
     case "anchor":
       return { type: "anchor", name: block.name };
     case "list":
-      return { type: "list", items: block.items.map(compileListItem) } as DraftBlock;
+      return { type: "list", items: block.items.map(compileListItem) } as unknown as DraftBlock;
     case "table": {
       const result: Record<string, unknown> = {
         type: "table",
@@ -142,7 +142,7 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
       if (block.isStriped) result.is_striped = true;
       if (block.isCompact) result.is_compact = true;
       if (block.caption) result.caption = compileCaption(block.caption);
-      return result as DraftBlock;
+      return result as unknown as DraftBlock;
     }
     case "details": {
       const result: Record<string, unknown> = {
@@ -151,7 +151,7 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
         blocks: block.blocks.map((inner) => compileBlock(inner, allowThinking)).filter(isBlock),
       };
       if (block.isOpen) result.is_open = true;
-      return result as DraftBlock;
+      return result as unknown as DraftBlock;
     }
     case "collage":
     case "slideshow":
@@ -159,19 +159,18 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
         type: block.type,
         blocks: block.blocks.map((inner) => compileBlock(inner, allowThinking)).filter(isBlock),
         ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
-      } as DraftBlock;
+      } as unknown as DraftBlock;
     case "photo":
     case "video":
     case "audio":
     case "voice":
     case "animation":
     case "document": {
-      const ref = block[block.type];
       return {
         type: block.type,
-        [block.type]: compileMedia(ref),
+        [block.type]: compileMedia(block.media),
         ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
-      } as DraftBlock;
+      } as unknown as DraftBlock;
     }
     case "map": {
       const result: Record<string, unknown> = {
@@ -182,7 +181,7 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
         height: block.height,
       };
       if (block.caption) result.caption = compileCaption(block.caption);
-      return result as DraftBlock;
+      return result as unknown as DraftBlock;
     }
   }
 }

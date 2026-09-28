@@ -154,7 +154,7 @@ describe("rich block coverage", () => {
       "document",
     ] as const) {
       const media = first(
-        blockOf(type, { [type]: { kind: "file_id", fileId: "AgAC123" } }),
+        blockOf(type, { media: { kind: "file_id", fileId: "AgAC123" } }),
       ) as Record<string, unknown>;
       expect(media.type).toBe(type);
       expect(media[type]).toBe("AgAC123");
@@ -164,22 +164,22 @@ describe("rich block coverage", () => {
 
   test("media blocks accept https and tg references", () => {
     const https = first(
-      blockOf("photo", { photo: { kind: "url", url: "https://cdn.example.com/a.png" } }),
+      blockOf("photo", { media: { kind: "url", url: "https://cdn.example.com/a.png" } }),
     ) as Record<string, unknown>;
     expect(https.photo).toBe("https://cdn.example.com/a.png");
 
     const tg = first(
-      blockOf("photo", { photo: { kind: "url", url: "tg://photo?id=userphoto" } }),
+      blockOf("photo", { media: { kind: "url", url: "tg://photo?id=userphoto" } }),
     ) as Record<string, unknown>;
     expect(tg.photo).toBe("tg://photo?id=userphoto");
   });
 
   test("media blocks reject a reference the core cannot hand to Telegram", () => {
     expect(() =>
-      first(blockOf("photo", { photo: { kind: "url", url: "http://insecure.example.com/a.png" } })),
+      first(blockOf("photo", { media: { kind: "url", url: "http://insecure.example.com/a.png" } })),
     ).toThrow("https://");
     expect(() =>
-      first(blockOf("photo", { photo: { kind: "url", url: "file:///etc/passwd" } })),
+      first(blockOf("photo", { media: { kind: "url", url: "file:///etc/passwd" } })),
     ).toThrow("https://");
   });
 
@@ -214,7 +214,7 @@ describe("rich block coverage", () => {
         ],
       }),
     ) as { blocks: Array<Record<string, unknown>> };
-    const list = nested.blocks[0] as { items: Array<{ blocks: Array<Record<string, unknown>> }> };
+    const list = nested.blocks[0] as { type?: string; items: Array<{ blocks: Array<Record<string, unknown>> }> };
     expect(list.type).toBe("list");
     expect(list.items[0]?.blocks[0]).toMatchObject({ type: "pre", language: "bash" });
   });

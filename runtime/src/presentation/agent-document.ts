@@ -60,12 +60,12 @@ export type AgentBlock =
     }
   | { readonly type: "collage"; readonly blocks: readonly AgentBlock[]; readonly caption?: AgentCaption }
   | { readonly type: "slideshow"; readonly blocks: readonly AgentBlock[]; readonly caption?: AgentCaption }
-  | { readonly type: "photo"; readonly photo: AgentMediaRef; readonly caption?: AgentCaption }
-  | { readonly type: "video"; readonly video: AgentMediaRef; readonly caption?: AgentCaption }
-  | { readonly type: "audio"; readonly audio: AgentMediaRef; readonly caption?: AgentCaption }
-  | { readonly type: "voice"; readonly voice: AgentMediaRef; readonly caption?: AgentCaption }
-  | { readonly type: "animation"; readonly animation: AgentMediaRef; readonly caption?: AgentCaption }
-  | { readonly type: "document"; readonly document: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "photo"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "video"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "audio"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "voice"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "animation"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "document"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
   | {
       readonly type: "map";
       readonly latitude: number;
