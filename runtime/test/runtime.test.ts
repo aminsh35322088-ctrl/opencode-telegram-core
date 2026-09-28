@@ -92,6 +92,19 @@ describe("poison-resistant serial queue", () => {
     expect(nextRan).toBe(false);
     release();
   });
+
+  test("a throwing uncooperative-task handler still settles the caller", async () => {
+    const queue = new SerialTaskQueue({
+      defaultTimeoutMs: 10,
+      cancellationGraceMs: 10,
+      onUncooperativeTask: async () => {
+        throw new Error("isolation handler exploded");
+      },
+    });
+    const wedged = queue.enqueue("wedged", () => new Promise<void>(() => {}));
+    await expect(wedged).rejects.toBeInstanceOf(QueuePoisonedError);
+    await expect(queue.enqueue("next", async () => 1)).rejects.toBeInstanceOf(QueuePoisonedError);
+  });
 });
 
 describe("terminal state", () => {

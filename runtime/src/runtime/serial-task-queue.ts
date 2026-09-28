@@ -73,7 +73,16 @@ export class SerialTaskQueue {
               error,
             );
             this.#poisoned = poison;
-            await this.options.onUncooperativeTask?.(poison);
+            // The handler only reports that the isolation boundary failed, so a
+            // handler that throws must not escape this catch block. Letting it
+            // propagate skipped rejectResult below, which left the enqueue()
+            // promise pending forever, and rejected #tail, which nothing awaits.
+            try {
+              await this.options.onUncooperativeTask?.(poison);
+            } catch {
+              // The poison is the caller-visible outcome and the boundary is
+              // already unusable; a failing handler adds nothing to report.
+            }
             rejectResult(poison);
             return;
           }
