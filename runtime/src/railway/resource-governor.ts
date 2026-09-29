@@ -29,6 +29,16 @@ export class RailwayResourceGovernor {
       throw new Error("Railway RSS thresholds are invalid");
     }
     if (policy.maxWorkers < 1) throw new Error("Railway maxWorkers must be >= 1");
+    if (policy.maxRestartsPerBinding < 1) {
+      throw new Error("Railway maxRestartsPerBinding must be >= 1");
+    }
+    if (policy.restartWindowMs <= 0) {
+      throw new Error("Railway restartWindowMs must be > 0");
+    }
+  }
+
+  get trackedRestartBindingCount(): number {
+    return this.#restartHistory.size;
   }
 
   evaluate(snapshot: RailwayResourceSnapshot): RailwayResourceAction {
@@ -45,18 +55,24 @@ export class RailwayResourceGovernor {
   permitRestart(bindingId: string): boolean {
     const now = this.now();
     const cutoff = now - this.policy.restartWindowMs;
-    const previous = this.#restartHistory.get(bindingId);
-    const recent = previous === undefined ? [] : previous.filter((stamp) => stamp > cutoff);
-    if (recent.length >= this.policy.maxRestartsPerBinding) {
-      // Drop the key once the window has drained, so bindings that stop being
-      // restarted do not accumulate here for the lifetime of the process.
-      if (recent.length === 0) this.#restartHistory.delete(bindingId);
-      else this.#restartHistory.set(bindingId, recent);
-      return false;
-    }
-    recent.push(now);
-    this.#restartHistory.set(bindingId, recent);
+    this.#pruneRestartHistory(cutoff);
+
+    const recent = this.#restartHistory.get(bindingId) ?? [];
+    if (recent.length >= this.policy.maxRestartsPerBinding) return false;
+
+    this.#restartHistory.set(bindingId, [...recent, now]);
     return true;
+  }
+
+  #pruneRestartHistory(cutoff: number): void {
+    for (const [bindingId, stamps] of this.#restartHistory) {
+      const recent = stamps.filter((stamp) => stamp > cutoff);
+      if (recent.length === 0) {
+        this.#restartHistory.delete(bindingId);
+      } else if (recent.length !== stamps.length) {
+        this.#restartHistory.set(bindingId, recent);
+      }
+    }
   }
 
   static currentSnapshot(workerCount: number, idleWorkerCount: number): RailwayResourceSnapshot {

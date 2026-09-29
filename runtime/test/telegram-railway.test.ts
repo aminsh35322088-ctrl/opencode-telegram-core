@@ -70,18 +70,30 @@ describe("Railway resource governor", () => {
     expect(governor.permitRestart("a")).toBe(true);
   });
 
-  test("pruning a drained window never re-opens a burst that is still inside it", () => {
+  test("restart windows stay bounded and stale binding history is pruned", () => {
     let now = 10_000;
     const governor = new RailwayResourceGovernor(policy, () => now);
-    // Saturate the window for this binding.
     while (governor.permitRestart("a")) { /* fill to the ceiling */ }
-    // Every further attempt inside the same window must stay refused,
-    // including the calls that prune the (now empty) filtered list.
     for (let i = 0; i < 5; i += 1) {
       expect(governor.permitRestart("a")).toBe(false);
     }
-    // Once the window has genuinely drained, the binding is admitted again.
+    expect(governor.trackedRestartBindingCount).toBe(1);
+
     now += policy.restartWindowMs + 1;
+    expect(governor.permitRestart("b")).toBe(true);
+    // Touching another binding prunes the fully drained history for "a".
+    expect(governor.trackedRestartBindingCount).toBe(1);
     expect(governor.permitRestart("a")).toBe(true);
+  });
+
+  test("invalid restart policies fail closed", () => {
+    expect(() => new RailwayResourceGovernor({
+      ...policy,
+      maxRestartsPerBinding: 0,
+    })).toThrow("maxRestartsPerBinding");
+    expect(() => new RailwayResourceGovernor({
+      ...policy,
+      restartWindowMs: 0,
+    })).toThrow("restartWindowMs");
   });
 });

@@ -1,9 +1,9 @@
 import type { AgentInline } from "./agent-inline.js";
 
 /**
- * A file the agent produced, referenced rather than uploaded. The core never
- * transfers bytes: Telegram fetches the content itself from an existing
- * `file_id`, an `https://` URL, or a `tg://` reference.
+ * A Telegram-hosted file_id or a remote media URL. The core never uploads
+ * bytes; direct rich-block media is compiled into the matching InputMedia
+ * object and handed to Telegram.
  */
 export type AgentMediaRef =
   | { readonly kind: "file_id"; readonly fileId: string }
@@ -24,7 +24,7 @@ export interface AgentTableCell {
 }
 
 export type AgentListItem = {
-  /** `undefined` renders a bullet; `"a" | "A" | "i" | "I" | "1"` an ordered list. */
+  /** undefined renders a bullet; a/A/i/I/1 select an ordered list. */
   readonly marker?: "a" | "A" | "i" | "I" | "1";
   readonly blocks: readonly AgentBlock[];
   readonly hasCheckbox?: boolean;
@@ -36,7 +36,12 @@ export type AgentBlock =
   | { readonly type: "paragraph"; readonly text: AgentInline }
   | { readonly type: "heading"; readonly text: AgentInline; readonly level: 1 | 2 | 3 | 4 | 5 | 6 }
   | { readonly type: "code"; readonly text: AgentInline; readonly language?: string }
-  | { readonly type: "quote"; readonly text: AgentInline; readonly expandable?: boolean }
+  | {
+      readonly type: "quote";
+      readonly text: AgentInline;
+      readonly expandable?: boolean;
+      readonly credit?: AgentInline;
+    }
   | { readonly type: "pullquote"; readonly text: AgentInline; readonly credit?: AgentInline }
   | { readonly type: "math"; readonly expression: string }
   | { readonly type: "divider" }
@@ -50,6 +55,7 @@ export type AgentBlock =
       readonly isBordered?: boolean;
       readonly isStriped?: boolean;
       readonly isCompact?: boolean;
+      /** Telegram table captions are RichText; credit is intentionally ignored. */
       readonly caption?: AgentCaption;
     }
   | {
@@ -63,16 +69,18 @@ export type AgentBlock =
   | { readonly type: "photo"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
   | { readonly type: "video"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
   | { readonly type: "audio"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
-  | { readonly type: "voice"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
   | { readonly type: "animation"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
   | { readonly type: "document"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  | { readonly type: "voice_note"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
+  /** @deprecated Use the Bot API name voice_note; retained for caller compatibility. */
+  | { readonly type: "voice"; readonly media: AgentMediaRef; readonly caption?: AgentCaption }
   | {
       readonly type: "map";
       readonly latitude: number;
       readonly longitude: number;
-      readonly zoom: number;
-      readonly width: number;
-      readonly height: number;
+      readonly zoom?: number;
+      readonly width?: number;
+      readonly height?: number;
       readonly caption?: AgentCaption;
     };
 

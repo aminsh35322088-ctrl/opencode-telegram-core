@@ -10,22 +10,16 @@ import type {
 } from "./agent-document.js";
 
 type DraftBlock = NonNullable<InputRichMessageWithoutUpload["blocks"]>[number];
-// InputRichMessage itself has no `text` field: the inline tree lives on each
-// block. Deriving it from a real block keeps this correct if grammy renames it.
 type ParagraphBlock = Extract<DraftBlock, { type: "paragraph" }>;
 type RichText = ParagraphBlock["text"];
+type RichBlockCaption = NonNullable<Extract<DraftBlock, { type: "photo" }>["caption"]>;
+type RichListItem = Extract<DraftBlock, { type: "list" }>["items"][number];
+type RichTableCell = Extract<DraftBlock, { type: "table" }>["cells"][number][number];
 
-/** `Array.isArray` does not narrow a readonly array, so guard it explicitly. */
 function isInlineArray(value: AgentInline): value is readonly AgentInline[] {
   return Array.isArray(value);
 }
 
-/**
- * Compiles the inline tree into the Bot API `RichText` shape, which is the
- * same recursive union: a bare string, an array of values, or a typed node.
- * A string is passed through so plain text stays plain instead of being
- * wrapped in a no-op node.
- */
 export function compileInline(value: AgentInline): RichText {
   if (typeof value === "string") return value;
   if (isInlineArray(value)) return value.map(compileInline) as RichText;
@@ -53,43 +47,44 @@ export function compileInline(value: AgentInline): RichText {
   }
 }
 
-/**
- * Media is referenced, never uploaded: the core holds no bytes and Telegram
- * fetches the content itself from a `file_id` or an `https://` URL.
- */
-function compileMedia(ref: AgentMediaRef): string {
+function compileMediaRef(ref: AgentMediaRef): string {
   if (ref.kind === "file_id") return ref.fileId;
-  if (!ref.url.startsWith("https://") && !ref.url.startsWith("tg://")) {
-    throw new Error("rich media reference must be a file_id or an https:// or tg:// URL");
+  // Telegram accepts HTTP URLs, but the core deliberately requires TLS for
+  // remote fetches. tg:// references belong to InputRichMessage.media, not
+  // directly inside an InputMedia media field.
+  if (!ref.url.startsWith("https://")) {
+    throw new Error("rich media reference must be a file_id or an https:// URL");
   }
   return ref.url;
 }
 
-function compileCaption(caption: AgentCaption | undefined): RichText | undefined {
-  return caption ? compileInline(caption.text) : undefined;
-}
-
-function compileListItem(item: AgentListItem): Record<string, unknown> {
-  const result: Record<string, unknown> = {
-    blocks: item.blocks.map((block) => compileBlock(block, true)).filter(isBlock),
+function compileCaption(caption: AgentCaption | undefined): RichBlockCaption | undefined {
+  if (!caption) return undefined;
+  return {
+    text: compileInline(caption.text),
+    ...(caption.credit !== undefined ? { credit: compileInline(caption.credit) } : {}),
   };
-  if (item.marker !== undefined) result.type = item.marker;
-  if (item.hasCheckbox) result.has_checkbox = true;
-  if (item.isChecked) result.is_checked = true;
-  if (item.value !== undefined) result.value = item.value;
-  return result;
 }
 
-function compileCell(cell: AgentTableCell): Record<string, unknown> {
-  const result: Record<string, unknown> = {
+function compileListItem(item: AgentListItem, allowThinking: boolean): RichListItem {
+  return {
+    blocks: item.blocks.map((block) => compileBlock(block, allowThinking)).filter(isBlock),
+    ...(item.marker !== undefined ? { type: item.marker } : {}),
+    ...(item.hasCheckbox ? { has_checkbox: true } : {}),
+    ...(item.isChecked ? { is_checked: true } : {}),
+    ...(item.value !== undefined ? { value: item.value } : {}),
+  };
+}
+
+function compileCell(cell: AgentTableCell): RichTableCell {
+  return {
     align: cell.align ?? "left",
     valign: cell.valign ?? "top",
+    ...(cell.text !== undefined ? { text: compileInline(cell.text) } : {}),
+    ...(cell.isHeader ? { is_header: true } : {}),
+    ...(cell.colspan !== undefined ? { colspan: cell.colspan } : {}),
+    ...(cell.rowspan !== undefined ? { rowspan: cell.rowspan } : {}),
   };
-  if (cell.text !== undefined) result.text = compileInline(cell.text);
-  if (cell.isHeader) result.is_header = true;
-  if (cell.colspan !== undefined) result.colspan = cell.colspan;
-  if (cell.rowspan !== undefined) result.rowspan = cell.rowspan;
-  return result;
 }
 
 function isBlock(value: DraftBlock | null): value is DraftBlock {
@@ -104,23 +99,25 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
       return { type: "heading", text: compileInline(block.text), size: block.level };
     case "code": {
       const result: DraftBlock = { type: "pre", text: compileInline(block.text) };
-      if (block.language) {
-        (result as { language?: string }).language = block.language;
-      }
+      if (block.language) (result as { language?: string }).language = block.language;
       return result;
     }
-    case "quote":
+    case "quote": {
+      const credit = block.credit === undefined ? {} : { credit: compileInline(block.credit) };
       return block.expandable
-        ? { type: "expandable_blockquote", text: compileInline(block.text) }
-        : { type: "blockquote", blocks: [{ type: "paragraph", text: compileInline(block.text) }] };
-    case "pullquote": {
-      const result: Record<string, unknown> = {
+        ? ({ type: "expandable_blockquote", text: compileInline(block.text), ...credit } as DraftBlock)
+        : ({
+            type: "blockquote",
+            blocks: [{ type: "paragraph", text: compileInline(block.text) }],
+            ...credit,
+          } as DraftBlock);
+    }
+    case "pullquote":
+      return {
         type: "pullquote",
         text: compileInline(block.text),
-      };
-      if (block.credit !== undefined) result.credit = compileInline(block.credit);
-      return result as unknown as DraftBlock;
-    }
+        ...(block.credit !== undefined ? { credit: compileInline(block.credit) } : {}),
+      } as DraftBlock;
     case "math":
       return { type: "mathematical_expression", expression: block.expression };
     case "divider":
@@ -132,57 +129,79 @@ function compileBlock(block: AgentBlock, allowThinking: boolean): DraftBlock | n
     case "anchor":
       return { type: "anchor", name: block.name };
     case "list":
-      return { type: "list", items: block.items.map(compileListItem) } as unknown as DraftBlock;
-    case "table": {
-      const result: Record<string, unknown> = {
+      return {
+        type: "list",
+        items: block.items.map((item) => compileListItem(item, allowThinking)),
+      };
+    case "table":
+      return {
         type: "table",
         cells: block.cells.map((row) => row.map(compileCell)),
+        ...(block.isBordered ? { is_bordered: true } : {}),
+        ...(block.isStriped ? { is_striped: true } : {}),
+        ...(block.isCompact ? { is_compact: true } : {}),
+        ...(block.caption ? { caption: compileInline(block.caption.text) } : {}),
       };
-      if (block.isBordered) result.is_bordered = true;
-      if (block.isStriped) result.is_striped = true;
-      if (block.isCompact) result.is_compact = true;
-      if (block.caption) result.caption = compileCaption(block.caption);
-      return result as unknown as DraftBlock;
-    }
-    case "details": {
-      const result: Record<string, unknown> = {
+    case "details":
+      return {
         type: "details",
         summary: compileInline(block.summary),
         blocks: block.blocks.map((inner) => compileBlock(inner, allowThinking)).filter(isBlock),
-      };
-      if (block.isOpen) result.is_open = true;
-      return result as unknown as DraftBlock;
-    }
+        ...(block.isOpen ? { is_open: true } : {}),
+      } as DraftBlock;
     case "collage":
     case "slideshow":
       return {
         type: block.type,
         blocks: block.blocks.map((inner) => compileBlock(inner, allowThinking)).filter(isBlock),
         ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
-      } as unknown as DraftBlock;
+      } as DraftBlock;
     case "photo":
-    case "video":
-    case "audio":
-    case "voice":
-    case "animation":
-    case "document": {
       return {
-        type: block.type,
-        [block.type]: compileMedia(block.media),
+        type: "photo",
+        photo: { type: "photo", media: compileMediaRef(block.media) },
         ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
-      } as unknown as DraftBlock;
-    }
-    case "map": {
-      const result: Record<string, unknown> = {
+      } as DraftBlock;
+    case "video":
+      return {
+        type: "video",
+        video: { type: "video", media: compileMediaRef(block.media) },
+        ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
+      } as DraftBlock;
+    case "audio":
+      return {
+        type: "audio",
+        audio: { type: "audio", media: compileMediaRef(block.media) },
+        ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
+      } as DraftBlock;
+    case "animation":
+      return {
+        type: "animation",
+        animation: { type: "animation", media: compileMediaRef(block.media) },
+        ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
+      } as DraftBlock;
+    case "document":
+      return {
+        type: "document",
+        document: { type: "document", media: compileMediaRef(block.media) },
+        ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
+      } as DraftBlock;
+    case "voice":
+    case "voice_note":
+      return {
+        type: "voice_note",
+        voice_note: { type: "voice_note", media: compileMediaRef(block.media) },
+        ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
+      } as DraftBlock;
+    case "map":
+      return {
         type: "map",
         location: { latitude: block.latitude, longitude: block.longitude },
-        zoom: block.zoom,
-        width: block.width,
-        height: block.height,
-      };
-      if (block.caption) result.caption = compileCaption(block.caption);
-      return result as unknown as DraftBlock;
-    }
+        ...(block.zoom !== undefined ? { zoom: block.zoom } : {}),
+        ...(block.width !== undefined ? { width: block.width } : {}),
+        ...(block.height !== undefined ? { height: block.height } : {}),
+        ...(block.caption ? { caption: compileCaption(block.caption) } : {}),
+      } as DraftBlock;
   }
 }
 

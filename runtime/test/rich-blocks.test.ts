@@ -38,6 +38,19 @@ describe("rich block coverage", () => {
     });
   });
 
+  test("block quotations carry optional credit in both forms", () => {
+    expect(first(blockOf("quote", { text: "q", credit: "Ada" }))).toEqual({
+      type: "blockquote",
+      blocks: [{ type: "paragraph", text: "q" }],
+      credit: "Ada",
+    });
+    expect(first(blockOf("quote", { text: "q", expandable: true, credit: "Ada" }))).toEqual({
+      type: "expandable_blockquote",
+      text: "q",
+      credit: "Ada",
+    });
+  });
+
   test("lists carry markers and checkbox state", () => {
     const bullet = first(
       blockOf("list", {
@@ -130,57 +143,61 @@ describe("rich block coverage", () => {
     expect(details.blocks).toEqual([{ type: "paragraph", text: "hidden" }]);
   });
 
-  test("collage and slideshow nest blocks under their own type", () => {
+  test("collage and slideshow keep structured captions", () => {
     for (const type of ["collage", "slideshow"] as const) {
       const wrapper = first(
         blockOf(type, {
           blocks: [{ type: "paragraph", text: "a" }],
-          caption: { text: "cap" },
+          caption: { text: "cap", credit: "source" },
         }),
       ) as Record<string, unknown>;
       expect(wrapper.type).toBe(type);
       expect(wrapper.blocks).toEqual([{ type: "paragraph", text: "a" }]);
-      expect(wrapper.caption).toBe("cap");
+      expect(wrapper.caption).toEqual({ text: "cap", credit: "source" });
     }
   });
 
-  test("media blocks pass a file_id straight through", () => {
-    for (const type of [
-      "photo",
-      "video",
-      "audio",
-      "voice",
-      "animation",
-      "document",
-    ] as const) {
+  test("media blocks compile file_id references into InputMedia objects", () => {
+    const cases = [
+      ["photo", "photo"],
+      ["video", "video"],
+      ["audio", "audio"],
+      ["animation", "animation"],
+      ["document", "document"],
+      ["voice_note", "voice_note"],
+      ["voice", "voice_note"],
+    ] as const;
+    for (const [inputType, outputType] of cases) {
       const media = first(
-        blockOf(type, { media: { kind: "file_id", fileId: "AgAC123" } }),
+        blockOf(inputType, {
+          media: { kind: "file_id", fileId: "AgAC123" },
+          caption: { text: "caption", credit: "source" },
+        }),
       ) as Record<string, unknown>;
-      expect(media.type).toBe(type);
-      expect(media[type]).toBe("AgAC123");
-      expect(media.caption).toBeUndefined();
+      expect(media.type).toBe(outputType);
+      expect(media[outputType]).toEqual({ type: outputType, media: "AgAC123" });
+      expect(media.caption).toEqual({ text: "caption", credit: "source" });
     }
   });
 
-  test("media blocks accept https and tg references", () => {
+  test("media blocks accept secure remote URLs", () => {
     const https = first(
       blockOf("photo", { media: { kind: "url", url: "https://cdn.example.com/a.png" } }),
     ) as Record<string, unknown>;
-    expect(https.photo).toBe("https://cdn.example.com/a.png");
-
-    const tg = first(
-      blockOf("photo", { media: { kind: "url", url: "tg://photo?id=userphoto" } }),
-    ) as Record<string, unknown>;
-    expect(tg.photo).toBe("tg://photo?id=userphoto");
+    expect(https.photo).toEqual({
+      type: "photo",
+      media: "https://cdn.example.com/a.png",
+    });
   });
 
-  test("media blocks reject a reference the core cannot hand to Telegram", () => {
-    expect(() =>
-      first(blockOf("photo", { media: { kind: "url", url: "http://insecure.example.com/a.png" } })),
-    ).toThrow("https://");
-    expect(() =>
-      first(blockOf("photo", { media: { kind: "url", url: "file:///etc/passwd" } })),
-    ).toThrow("https://");
+  test("media blocks reject insecure and tg pseudo-URLs in direct InputMedia fields", () => {
+    for (const url of [
+      "http://insecure.example.com/a.png",
+      "file:///etc/passwd",
+      "tg://photo?id=userphoto",
+    ]) {
+      expect(() => first(blockOf("photo", { media: { kind: "url", url } }))).toThrow("https://");
+    }
   });
 
   test("map carries a location plus explicit sizing", () => {
@@ -195,7 +212,12 @@ describe("rich block coverage", () => {
       }),
     ) as Record<string, unknown>;
     expect(map.location).toEqual({ latitude: 35.68, longitude: 51.38 });
-    expect(map).toMatchObject({ zoom: 12, width: 320, height: 200, caption: "Tehran" });
+    expect(map).toMatchObject({
+      zoom: 12,
+      width: 320,
+      height: 200,
+      caption: { text: "Tehran" },
+    });
   });
 
   test("nested blocks are compiled recursively, not dropped", () => {
@@ -219,7 +241,7 @@ describe("rich block coverage", () => {
     expect(list.items[0]?.blocks[0]).toMatchObject({ type: "pre", language: "bash" });
   });
 
-  test("thinking gating still applies inside nested containers", () => {
+  test("thinking gating applies inside details and list items", () => {
     const details = first(
       {
         blocks: [
@@ -234,15 +256,27 @@ describe("rich block coverage", () => {
     ) as { blocks: unknown[] };
     expect(details.blocks).toEqual([]);
 
-    const asDraft = first(
+    const finalList = first(
       {
-        blocks: [
-          { type: "details", summary: "s", blocks: [{ type: "thinking", text: "shown" }] },
-        ],
+        blocks: [{
+          type: "list",
+          items: [{ blocks: [{ type: "thinking", text: "hidden-list" }] }],
+        }],
+      },
+      false,
+    ) as { items: Array<{ blocks: unknown[] }> };
+    expect(finalList.items[0]?.blocks).toEqual([]);
+
+    const draftList = first(
+      {
+        blocks: [{
+          type: "list",
+          items: [{ blocks: [{ type: "thinking", text: "shown" }] }],
+        }],
       },
       true,
-    ) as { blocks: Array<Record<string, unknown>> };
-    expect(asDraft.blocks[0]?.type).toBe("thinking");
+    ) as { items: Array<{ blocks: Array<Record<string, unknown>> }> };
+    expect(draftList.items[0]?.blocks[0]?.type).toBe("thinking");
   });
 
   test("the seven original block types are byte-identical to before", () => {

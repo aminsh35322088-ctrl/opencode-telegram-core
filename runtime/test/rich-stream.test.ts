@@ -164,6 +164,34 @@ describe("Telegram-native rich rendering", () => {
   });
 });
 
+describe("draft lease failure cleanup", () => {
+  test("a failed initial draft send does not reserve the deterministic draft id", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    const run = runs.start(b, 1, "send-failure");
+    const route = { chatId: 100, messageThreadId: 11 };
+    const attempted: number[] = [];
+    let fail = true;
+    const port: RichMessagePort = {
+      async sendDraft(_route, draftId) {
+        attempted.push(draftId);
+        if (fail) {
+          fail = false;
+          throw new Error("draft network failure");
+        }
+      },
+      async sendFinal() {},
+    };
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
+
+    await expect(controller.startMarkdown(run, route, "first")).rejects.toThrow("draft network failure");
+    const retried = await controller.startMarkdown(run, route, "second");
+    expect(retried).toBe(attempted[0]!);
+  });
+});
+
 describe("streamed draft lease lifetime", () => {
   function setup() {
     const bindings = new BindingRegistry();
@@ -250,6 +278,31 @@ describe("streamed draft lease lifetime", () => {
     expect(port.drafts).toHaveLength(0);
   });
 
+  test("releaseRun clears every lease owned by the completed run", async () => {
+    const { run, port, controller, route } = setup();
+    let draftId = 0;
+    await controller.streamMarkdown(run, route, ["x"], {
+      async streamMarkdown(_route: RichDraftRoute, id: number) { draftId = id; },
+    } as never);
+
+    expect(controller.releaseRun(run)).toBe(1);
+    expect(controller.releaseRun(run)).toBe(0);
+    expect(await controller.finalizeMarkdown(run, route, draftId, "x")).toBe(false);
+    expect(port.finals).toHaveLength(0);
+  });
+
+  test("a run that becomes stale before finalize drops its retained lease", async () => {
+    const { b, runs, run, controller, route } = setup();
+    let draftId = 0;
+    await controller.streamMarkdown(run, route, ["x"], {
+      async streamMarkdown(_route: RichDraftRoute, id: number) { draftId = id; },
+    } as never);
+
+    runs.start(b, 1, "replacement");
+    expect(await controller.finalizeMarkdown(run, route, draftId, "x")).toBe(false);
+    expect(controller.releaseRun(run)).toBe(0);
+  });
+
   test("releaseDraft is idempotent and rejects a foreign run", async () => {
     const { run, controller, route } = setup();
     let draftId = 0;
@@ -258,6 +311,7 @@ describe("streamed draft lease lifetime", () => {
     } as never);
 
     expect(controller.releaseDraft({ ...run, runId: "someone-else" }, route, draftId)).toBe(false);
+    expect(controller.releaseDraft({ ...run, workerGeneration: run.workerGeneration + 1 }, route, draftId)).toBe(false);
     expect(controller.releaseDraft(run, route, draftId)).toBe(true);
     expect(controller.releaseDraft(run, route, draftId)).toBe(false);
   });

@@ -105,6 +105,21 @@ describe("poison-resistant serial queue", () => {
     await expect(wedged).rejects.toBeInstanceOf(QueuePoisonedError);
     await expect(queue.enqueue("next", async () => 1)).rejects.toBeInstanceOf(QueuePoisonedError);
   });
+
+  test("a hanging uncooperative-task handler cannot strand the caller", async () => {
+    const queue = new SerialTaskQueue({
+      defaultTimeoutMs: 10,
+      cancellationGraceMs: 10,
+      onUncooperativeTask: async () => new Promise<void>(() => {}),
+    });
+    const wedged = queue.enqueue("wedged", () => new Promise<void>(() => {}));
+    const outcome = await Promise.race([
+      wedged.then(() => "resolved", (error) => error),
+      new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 100)),
+    ]);
+    expect(outcome).toBeInstanceOf(QueuePoisonedError);
+    await expect(queue.enqueue("next", async () => 1)).rejects.toBeInstanceOf(QueuePoisonedError);
+  });
 });
 
 describe("terminal state", () => {

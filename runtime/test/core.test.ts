@@ -148,6 +148,18 @@ describe("TelegramNativeCore composition", () => {
     expect(aborted).toEqual(["stop-me"]);
   });
 
+  test("finishRun releases rich draft leases owned by the run", async () => {
+    const { core } = await open();
+    await core.registerBinding(binding("a", 11));
+    const run = await core.beginRun("a", "finish-cleans-draft");
+    const route = { chatId: 100, messageThreadId: 11 };
+    const draftId = await core.rich.startMarkdown(run, route, "working");
+    expect(draftId).not.toBeNull();
+
+    expect(core.finishRun(run)).toBe(true);
+    expect(core.rich.releaseDraft(run, route, draftId!)).toBe(false);
+  });
+
   test("Telegram Stop clears the run's liveness and stuck bookkeeping", async () => {
     const { core } = await open();
     await core.registerBinding(binding("a", 11));

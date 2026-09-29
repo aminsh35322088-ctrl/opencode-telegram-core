@@ -108,6 +108,7 @@ export class TelegramNativeCore {
   }
 
   finishRun(run: RunIdentity): boolean {
+    this.rich.releaseRun(run);
     this.liveness.clear(run);
     this.stuck.clear(run);
     return this.runs.finish(run);
@@ -132,6 +133,7 @@ export class TelegramNativeCore {
 
     // Persist the new generation before old execution is allowed to stop/reuse.
     await this.bindings.replace(replacement, current.bindingGeneration);
+    this.rich.releaseBinding(bindingId);
     this.runs.fence(bindingId);
     await this.workers.stop(bindingId, "binding_rotated");
     return replacement;
@@ -142,6 +144,7 @@ export class TelegramNativeCore {
     // Persist DELETING + next generation first. A crash after this point can
     // never resurrect the route on restart.
     const tombstone = await this.bindings.beginDelete(bindingId);
+    this.rich.releaseBinding(bindingId);
     this.runs.fence(bindingId);
     await this.workers.stop(bindingId, "binding_revoked");
     await this.options.cleanupBinding?.(tombstone);
@@ -196,6 +199,7 @@ export class TelegramNativeCore {
 
   async shutdown(): Promise<void> {
     for (const binding of this.bindings.registry.list()) {
+      this.rich.releaseBinding(binding.bindingId);
       this.runs.fence(binding.bindingId);
     }
     await this.workers.stopAll("gateway_shutdown");
