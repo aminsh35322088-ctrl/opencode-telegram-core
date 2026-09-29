@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { BindingIntegrityError, BindingRegistry } from "./binding-registry.js";
@@ -27,6 +28,12 @@ export class AtomicBindingStore {
   }
 
   async #load(): Promise<void> {
+    // load() is idempotent: reset before reading so a repeated call reloads from
+    // disk instead of tripping the duplicate-binding check against state this
+    // same call just installed.
+    this.#records.clear();
+    this.registry.clear();
+
     let raw: string;
     try {
       raw = await readFile(this.filePath, "utf8");
@@ -202,7 +209,7 @@ export class AtomicBindingStore {
   async #persist(records: ReadonlyMap<string, BindingRecord>): Promise<void> {
     const directory = path.dirname(this.filePath);
     await mkdir(directory, { recursive: true });
-    const tmp = this.filePath + ".tmp-" + process.pid + "-" + crypto.randomUUID();
+    const tmp = this.filePath + ".tmp-" + process.pid + "-" + randomUUID();
     const handle = await open(tmp, "wx", 0o600);
     const payload: PersistedBindingStoreV1 = {
       version: 1,

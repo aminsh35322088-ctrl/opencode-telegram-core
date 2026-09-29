@@ -77,6 +77,13 @@ export class TelegramRichStreamController {
     private readonly runs: RunRegistry,
     private readonly port: RichMessagePort,
     private readonly abortRun: (run: RunIdentity, reason: "telegram_stop") => Promise<void>,
+    /**
+     * Completes the run. Defaults to the bare registry, which skips the
+     * per-run liveness and stuck bookkeeping the core normally performs.
+     */
+    private readonly finishRun: (run: RunIdentity) => void = (run) => {
+      this.runs.finish(run);
+    },
   ) {}
 
   async start(
@@ -207,7 +214,7 @@ export class TelegramRichStreamController {
     lease.controller?.abort(new DOMException("Telegram generation stopped", "AbortError"));
     // Fence the run before the network interrupt so late SSE/tool/Telegram
     // completions cannot race the user's Stop action.
-    this.runs.finish(lease.run);
+    this.finishRun(lease.run);
     await this.abortRun(lease.run, "telegram_stop");
     return true;
   }

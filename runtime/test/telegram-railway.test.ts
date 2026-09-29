@@ -69,4 +69,19 @@ describe("Railway resource governor", () => {
     now += 1_001;
     expect(governor.permitRestart("a")).toBe(true);
   });
+
+  test("pruning a drained window never re-opens a burst that is still inside it", () => {
+    let now = 10_000;
+    const governor = new RailwayResourceGovernor(policy, () => now);
+    // Saturate the window for this binding.
+    while (governor.permitRestart("a")) { /* fill to the ceiling */ }
+    // Every further attempt inside the same window must stay refused,
+    // including the calls that prune the (now empty) filtered list.
+    for (let i = 0; i < 5; i += 1) {
+      expect(governor.permitRestart("a")).toBe(false);
+    }
+    // Once the window has genuinely drained, the binding is admitted again.
+    now += policy.restartWindowMs + 1;
+    expect(governor.permitRestart("a")).toBe(true);
+  });
 });

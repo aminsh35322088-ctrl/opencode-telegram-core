@@ -45,9 +45,13 @@ export class RailwayResourceGovernor {
   permitRestart(bindingId: string): boolean {
     const now = this.now();
     const cutoff = now - this.policy.restartWindowMs;
-    const recent = (this.#restartHistory.get(bindingId) ?? []).filter((stamp) => stamp > cutoff);
+    const previous = this.#restartHistory.get(bindingId);
+    const recent = previous === undefined ? [] : previous.filter((stamp) => stamp > cutoff);
     if (recent.length >= this.policy.maxRestartsPerBinding) {
-      this.#restartHistory.set(bindingId, recent);
+      // Drop the key once the window has drained, so bindings that stop being
+      // restarted do not accumulate here for the lifetime of the process.
+      if (recent.length === 0) this.#restartHistory.delete(bindingId);
+      else this.#restartHistory.set(bindingId, recent);
       return false;
     }
     recent.push(now);

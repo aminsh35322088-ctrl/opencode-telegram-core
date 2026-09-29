@@ -23,8 +23,21 @@ export class AuthoritativeRunReconciler {
       readonly requestTimeoutMs: number;
       readonly providerRetryCeilingMs: number;
       readonly now?: () => number;
+      /**
+       * Completes the run. Defaults to the bare registry, which skips the
+       * per-run liveness and stuck bookkeeping the core normally performs.
+       */
+      readonly finishRun?: (run: RunIdentity) => void;
     },
   ) {}
+
+  #finish(run: RunIdentity): void {
+    if (this.options.finishRun) {
+      this.options.finishRun(run);
+      return;
+    }
+    this.runs.finish(run);
+  }
 
   async probe(
     run: RunIdentity,
@@ -45,7 +58,7 @@ export class AuthoritativeRunReconciler {
     if (!this.runs.accepts(run)) return "stale";
 
     if (status === "idle" || status === "error") {
-      this.runs.finish(run);
+      this.#finish(run);
       return "terminal";
     }
 
@@ -60,7 +73,7 @@ export class AuthoritativeRunReconciler {
         },
       );
       if (!this.runs.accepts(run)) return "stale";
-      this.runs.finish(run);
+      this.#finish(run);
       return "aborted_retry_ceiling";
     }
 

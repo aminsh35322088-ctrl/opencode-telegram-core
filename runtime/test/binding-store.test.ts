@@ -43,6 +43,21 @@ describe("atomic durable binding store", () => {
     expect(reloaded.registry.getById("a")?.bindingGeneration).toBe(2);
   });
 
+  test("load is idempotent and can be repeated on one store", async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "otc-bindings-"));
+    const file = path.join(root, "bindings.json");
+    const store = new AtomicBindingStore(file);
+    await store.load();
+    await store.register(binding());
+
+    // Reloading the same store must reload from disk, not collide with the
+    // records the previous load installed.
+    await store.load();
+    await store.load();
+    expect(store.registry.getById("a")).not.toBeNull();
+    expect(store.registry.list()).toHaveLength(1);
+  });
+
   test("ambiguous duplicate route fails before persistent file is changed", async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "otc-bindings-"));
     const file = path.join(root, "bindings.json");
