@@ -138,13 +138,36 @@ export class TelegramRichStreamController {
           return current === lease && this.#accepts(run);
         },
       });
-      return this.#accepts(run);
     } catch (error) {
+      if (this.#leases.get(key) === lease) this.#leases.delete(key);
       if (error instanceof RichStreamFencedError) return false;
       throw error;
-    } finally {
-      if (this.#leases.get(key) === lease) this.#leases.delete(key);
     }
+
+    // A streamed draft is only an ephemeral preview: the Bot API requires a
+    // separate sendRichMessage to persist the answer. The lease must therefore
+    // outlive the stream so finalize()/finalizeMarkdown() can still find it.
+    // A run that stopped being current releases it here, because no finalize
+    // could follow, and releaseDraft() covers a stream that ends unfinalized.
+    if (!this.#accepts(run)) {
+      if (this.#leases.get(key) === lease) this.#leases.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Drops a draft lease without persisting anything, and aborts the stream it
+   * was holding open. Call this when a stream ends without a finalized
+   * message, so leases do not accumulate per draft.
+   */
+  releaseDraft(run: RunIdentity, route: RichDraftRoute, draftId: number): boolean {
+    const key = routeKey(route, draftId);
+    const lease = this.#leases.get(key);
+    if (!lease || lease.run.runId !== run.runId) return false;
+    this.#leases.delete(key);
+    lease.controller?.abort(new DOMException("Draft released", "AbortError"));
+    return true;
   }
 
   async updateMarkdown(
