@@ -89,8 +89,12 @@ export class TelegramNativeCore {
     const binding = this.bindings.registry.getById(bindingId);
     if (!binding) throw new Error("cannot start run for unbound binding " + bindingId);
 
-    const action = this.resourceAction();
-    if (action === "EMERGENCY_SHUTDOWN" || action === "REJECT_NEW_WORK") {
+    let action = this.resourceAction();
+    if (action === "EVICT_IDLE") {
+      await this.workers.evictOldestIdle("railway_memory_pressure");
+      action = this.resourceAction();
+    }
+    if (action === "EMERGENCY_SHUTDOWN" || action === "REJECT_NEW_WORK" || action === "EVICT_IDLE") {
       throw new Error("Railway resource budget rejects new work: " + action);
     }
 

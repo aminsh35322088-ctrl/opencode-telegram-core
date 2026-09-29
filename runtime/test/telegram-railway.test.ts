@@ -52,6 +52,12 @@ describe("Railway resource governor", () => {
     restartWindowMs: 1_000,
   };
 
+  test("reads a positive service memory footprint and optional cgroup limit", () => {
+    expect(RailwayResourceGovernor.serviceMemoryBytes()).toBeGreaterThan(0);
+    const limit = RailwayResourceGovernor.serviceMemoryLimitBytes();
+    expect(limit === null || limit > 0).toBe(true);
+  });
+
   test("prefers idle eviction under soft memory pressure", () => {
     const governor = new RailwayResourceGovernor(policy);
     expect(governor.evaluate({ rssBytes: 750, workerCount: 2, idleWorkerCount: 1 })).toBe("EVICT_IDLE");

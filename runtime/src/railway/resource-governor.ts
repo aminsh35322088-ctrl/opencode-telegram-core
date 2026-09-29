@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 export interface RailwayResourcePolicy {
   readonly softRssBytes: number;
   readonly hardRssBytes: number;
@@ -10,6 +12,21 @@ export interface RailwayResourceSnapshot {
   readonly rssBytes: number;
   readonly workerCount: number;
   readonly idleWorkerCount: number;
+}
+
+
+const CGROUP_MEMORY_CURRENT = "/sys/fs/cgroup/memory.current";
+const CGROUP_MEMORY_MAX = "/sys/fs/cgroup/memory.max";
+
+function readPositiveBytes(filePath: string): number | null {
+  try {
+    const value = readFileSync(filePath, "utf8").trim();
+    if (!value || value === "max") return null;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export type RailwayResourceAction =
@@ -75,9 +92,20 @@ export class RailwayResourceGovernor {
     }
   }
 
+  static serviceMemoryBytes(): number {
+    return readPositiveBytes(CGROUP_MEMORY_CURRENT) ?? process.memoryUsage.rss();
+  }
+
+  static serviceMemoryLimitBytes(): number | null {
+    return readPositiveBytes(CGROUP_MEMORY_MAX);
+  }
+
   static currentSnapshot(workerCount: number, idleWorkerCount: number): RailwayResourceSnapshot {
     return {
-      rssBytes: process.memoryUsage.rss(),
+      // On Railway/Linux this is the cgroup-wide service footprint, including
+      // the bot, OpenCode, tailscaled, MCPs and descendants. RSS is only the
+      // cross-platform fallback when cgroup v2 is unavailable.
+      rssBytes: RailwayResourceGovernor.serviceMemoryBytes(),
       workerCount,
       idleWorkerCount,
     };

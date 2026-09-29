@@ -163,6 +163,17 @@ export class WorkerSupervisor {
     return [...this.#workers.values()].filter((slot) => slot.worker.idle).length;
   }
 
+  async evictOldestIdle(reason: string): Promise<boolean> {
+    const idle = [...this.#workers.values()]
+      .filter((slot) => slot.worker.idle)
+      .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+    if (!idle) return false;
+    this.#bumpLifecycleEpoch(idle.binding.bindingId);
+    this.#workers.delete(idle.binding.bindingId);
+    await this.#retire(idle, reason).promise;
+    return true;
+  }
+
   async stopAll(reason: string): Promise<void> {
     const bindingIds = new Set([
       ...this.#workers.keys(),
