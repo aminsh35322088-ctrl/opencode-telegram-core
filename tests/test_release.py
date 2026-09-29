@@ -61,6 +61,30 @@ class ReleaseTests(unittest.TestCase):
             for item in sdk_dir.iterdir():
                 tf.add(item, arcname=item.name)
 
+        sdk_node_dir = root / "sdk-node"
+        (sdk_node_dir / "dist" / "v2").mkdir(parents=True)
+        (sdk_node_dir / "dist" / "v2" / "index.js").write_text("export const createOpencodeClient = () => ({});\n")
+        (sdk_node_dir / "dist" / "v2" / "index.d.ts").write_text("export declare const createOpencodeClient: () => object;\n")
+        (sdk_node_dir / "UPSTREAM_REVISION").write_text(UPSTREAM + "\n")
+        (sdk_node_dir / "package.json").write_text(json.dumps({
+            "name": "@opencode-ai/sdk",
+            "version": "1.0.0",
+            "type": "module",
+            "exports": {"./v2": {"import": "./dist/v2/index.js", "types": "./dist/v2/index.d.ts"}},
+            "dependencies": {},
+        }))
+        sdk_node_info = {
+            "telegramCoreCommit": CORE,
+            "upstreamVersion": "1.0.0",
+            "upstreamCommit": UPSTREAM,
+            "consumerRuntime": "node",
+        }
+        (sdk_node_dir / "sdk-info.json").write_text(json.dumps(sdk_node_info))
+        with tarfile.open(release / "opencode-telegram-core-sdk-node.tar.gz", "w:gz") as tf:
+            for item in sdk_node_dir.rglob("*"):
+                if item.is_file():
+                    tf.add(item, arcname=item.relative_to(sdk_node_dir))
+
         native_dir = root / "native"
         native_dir.mkdir()
         (native_dir / "index.js").write_text("export {};\n")
@@ -112,10 +136,12 @@ class ReleaseTests(unittest.TestCase):
             **build_info,
             "nativeRuntime": native_info,
             "nativeNodeRuntime": native_node_info,
+            "sdkNodePackage": sdk_node_info,
             "platform": "linux-x64",
             "artifacts": [
                 "opencode-telegram-core-linux-x64.tar.gz",
                 "opencode-telegram-core-sdk.tar.gz",
+                "opencode-telegram-core-sdk-node.tar.gz",
                 "opencode-telegram-native-runtime.tar.gz",
                 "opencode-telegram-native-runtime-node.tar.gz",
             ],
@@ -128,6 +154,7 @@ class ReleaseTests(unittest.TestCase):
         names = [
             "opencode-telegram-core-linux-x64.tar.gz",
             "opencode-telegram-core-sdk.tar.gz",
+            "opencode-telegram-core-sdk-node.tar.gz",
             "opencode-telegram-native-runtime.tar.gz",
             "opencode-telegram-native-runtime-node.tar.gz",
             "build-info.json",

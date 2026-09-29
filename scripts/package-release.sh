@@ -9,11 +9,14 @@ native_runtime="$CORE_ROOT/dist/native-runtime"
 native_info="$native_runtime/runtime-info.json"
 native_node_runtime="$CORE_ROOT/dist/native-runtime-node"
 native_node_info="$native_node_runtime/runtime-info.json"
+sdk_node="$CORE_ROOT/dist/sdk-node"
+sdk_node_info="$sdk_node/sdk-info.json"
 release="$CORE_ROOT/dist/release"
 
 assert_clean_source_tree "$CORE_ROOT"
 "$CORE_ROOT/scripts/build-native-runtime.sh"
 "$CORE_ROOT/scripts/build-native-runtime-node.sh"
+"$CORE_ROOT/scripts/build-sdk-node-package.sh"
 
 [[ -x "$runtime" ]] || die "runtime artifact missing"
 [[ -d "$sdk" ]] || die "SDK artifact missing"
@@ -25,6 +28,9 @@ assert_clean_source_tree "$CORE_ROOT"
 [[ -f "$native_node_runtime/index.d.ts" ]] || die "Node native runtime declarations missing"
 [[ -f "$native_node_runtime/package.json" ]] || die "Node native runtime package metadata missing"
 [[ -f "$native_node_info" ]] || die "Node native runtime metadata missing"
+[[ -f "$sdk_node/package.json" ]] || die "Node SDK package metadata missing"
+[[ -f "$sdk_node/UPSTREAM_REVISION" ]] || die "Node SDK revision marker missing"
+[[ -f "$sdk_node_info" ]] || die "Node SDK metadata missing"
 
 source_commit="$(git -C "$CORE_ROOT" rev-parse HEAD)"
 python3 - "$build_info" "$CORE_UPSTREAM_LOCK" "$source_commit" <<'PY'
@@ -56,37 +62,41 @@ mkdir -p "$release"
 
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner   -czf "$release/opencode-telegram-core-linux-x64.tar.gz" -C "$CORE_ROOT/dist/runtime" opencode
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner   -czf "$release/opencode-telegram-core-sdk.tar.gz" -C "$sdk" .
+tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner   -czf "$release/opencode-telegram-core-sdk-node.tar.gz" -C "$sdk_node" .
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner   -czf "$release/opencode-telegram-native-runtime.tar.gz" -C "$native_runtime" index.js runtime-info.json
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner   -czf "$release/opencode-telegram-native-runtime-node.tar.gz" -C "$native_node_runtime" .
 
 cp "$build_info" "$release/build-info.json"
-python3 - "$build_info" "$native_info" "$native_node_info" "$release/release-manifest.json" <<'PY'
+python3 - "$build_info" "$native_info" "$native_node_info" "$sdk_node_info" "$release/release-manifest.json" <<'PY'
 import json
 import sys
 
 build = json.load(open(sys.argv[1], encoding="utf-8"))
 native = json.load(open(sys.argv[2], encoding="utf-8"))
 native_node = json.load(open(sys.argv[3], encoding="utf-8"))
+sdk_node = json.load(open(sys.argv[4], encoding="utf-8"))
 manifest = {
     **build,
     "nativeRuntime": native,
     "nativeNodeRuntime": native_node,
+    "sdkNodePackage": sdk_node,
     "platform": "linux-x64",
     "artifacts": [
         "opencode-telegram-core-linux-x64.tar.gz",
         "opencode-telegram-core-sdk.tar.gz",
+        "opencode-telegram-core-sdk-node.tar.gz",
         "opencode-telegram-native-runtime.tar.gz",
         "opencode-telegram-native-runtime-node.tar.gz",
     ],
 }
-with open(sys.argv[4], "w", encoding="utf-8") as fh:
+with open(sys.argv[5], "w", encoding="utf-8") as fh:
     json.dump(manifest, fh, indent=2, sort_keys=True)
     fh.write("\n")
 PY
 
 (
   cd "$release"
-  sha256sum     opencode-telegram-core-linux-x64.tar.gz     opencode-telegram-core-sdk.tar.gz     opencode-telegram-native-runtime.tar.gz     opencode-telegram-native-runtime-node.tar.gz     build-info.json     release-manifest.json > SHA256SUMS
+  sha256sum     opencode-telegram-core-linux-x64.tar.gz     opencode-telegram-core-sdk.tar.gz     opencode-telegram-core-sdk-node.tar.gz     opencode-telegram-native-runtime.tar.gz     opencode-telegram-native-runtime-node.tar.gz     build-info.json     release-manifest.json > SHA256SUMS
 )
 
 printf 'release packaged: %s\n' "$release"

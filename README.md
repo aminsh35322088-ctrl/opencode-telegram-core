@@ -20,7 +20,7 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 - Release: `v1.18.33`
 - Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.33-bot.9`
+- Telegram Core version: `1.18.33-bot.10`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -128,6 +128,7 @@ The release directory contains:
 
 - `opencode-telegram-core-linux-x64.tar.gz`
 - `opencode-telegram-core-sdk.tar.gz`
+- `opencode-telegram-core-sdk-node.tar.gz` (npm-installable Node package)
 - `opencode-telegram-native-runtime.tar.gz`
 - `opencode-telegram-native-runtime-node.tar.gz` (Node 22+ ESM package with declarations)
 - `build-info.json`

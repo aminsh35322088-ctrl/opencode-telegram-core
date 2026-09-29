@@ -5,13 +5,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 release="${1:-$CORE_ROOT/dist/release}"
 runtime_archive="$release/opencode-telegram-core-linux-x64.tar.gz"
 sdk_archive="$release/opencode-telegram-core-sdk.tar.gz"
+sdk_node_archive="$release/opencode-telegram-core-sdk-node.tar.gz"
 native_archive="$release/opencode-telegram-native-runtime.tar.gz"
 native_node_archive="$release/opencode-telegram-native-runtime-node.tar.gz"
 manifest="$release/release-manifest.json"
 build_info="$release/build-info.json"
 checksums="$release/SHA256SUMS"
 
-for file in "$runtime_archive" "$sdk_archive" "$native_archive" "$native_node_archive" "$manifest" "$build_info" "$checksums"; do
+for file in "$runtime_archive" "$sdk_archive" "$sdk_node_archive" "$native_archive" "$native_node_archive" "$manifest" "$build_info" "$checksums"; do
   [[ -f "$file" ]] || die "missing release file: $file"
 done
 
@@ -46,6 +47,7 @@ if manifest.get("platform") != "linux-x64":
 expected_artifacts = [
     "opencode-telegram-core-linux-x64.tar.gz",
     "opencode-telegram-core-sdk.tar.gz",
+    "opencode-telegram-core-sdk-node.tar.gz",
     "opencode-telegram-native-runtime.tar.gz",
     "opencode-telegram-native-runtime-node.tar.gz",
 ]
@@ -69,9 +71,10 @@ PY
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/runtime" "$tmp/sdk" "$tmp/native" "$tmp/native-node"
+mkdir -p "$tmp/runtime" "$tmp/sdk" "$tmp/sdk-node" "$tmp/native" "$tmp/native-node"
 tar -xzf "$runtime_archive" -C "$tmp/runtime"
 tar -xzf "$sdk_archive" -C "$tmp/sdk"
+tar -xzf "$sdk_node_archive" -C "$tmp/sdk-node"
 tar -xzf "$native_archive" -C "$tmp/native"
 tar -xzf "$native_node_archive" -C "$tmp/native-node"
 runtime="$tmp/runtime/opencode"
@@ -96,6 +99,24 @@ PY
 sdk_revision="$(tr -d '\r\n' < "$tmp/sdk/UPSTREAM_REVISION")"
 expected_sdk="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sdkRevision"])' "$manifest")"
 [[ "$sdk_revision" == "$expected_sdk" ]] || die "SDK revision mismatch: expected $expected_sdk, got $sdk_revision"
+
+
+[[ -f "$tmp/sdk-node/package.json" ]] || die "Node SDK archive missing package.json"
+[[ -f "$tmp/sdk-node/UPSTREAM_REVISION" ]] || die "Node SDK archive missing UPSTREAM_REVISION"
+(cd "$tmp/sdk-node" && npm install --omit=dev --ignore-scripts --package-lock=false --silent && node --input-type=module -e "const m=await import('./dist/v2/index.js'); if(typeof m.createOpencodeClient!=='function') process.exit(2)") || die "Node SDK package cannot be imported by Node"
+python3 - "$manifest" "$tmp/sdk-node/sdk-info.json" <<'PY'
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+sdk = json.load(open(sys.argv[2], encoding="utf-8"))
+if manifest.get("sdkNodePackage") != sdk:
+    raise SystemExit("Node SDK metadata does not match manifest")
+if sdk.get("consumerRuntime") != "node":
+    raise SystemExit("Node SDK consumerRuntime mismatch")
+for key in ["telegramCoreCommit", "upstreamVersion", "upstreamCommit"]:
+    if sdk.get(key) != manifest.get(key):
+        raise SystemExit(f"Node SDK {key} does not match release identity")
+PY
 
 [[ -f "$tmp/native/index.js" ]] || die "native runtime archive missing index.js"
 [[ -f "$tmp/native/runtime-info.json" ]] || die "native runtime archive missing runtime-info.json"
