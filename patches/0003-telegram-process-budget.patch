@@ -11,14 +11,14 @@ index 5488a1d..c51ea2e 100644
    },
    "imports": {
 diff --git a/packages/core/src/cross-spawn-spawner.ts b/packages/core/src/cross-spawn-spawner.ts
-index 6ea9022..c89664b 100644
+index 6ea9022..e577460 100644
 --- a/packages/core/src/cross-spawn-spawner.ts
 +++ b/packages/core/src/cross-spawn-spawner.ts
 @@ -26,6 +26,7 @@ import { PassThrough } from "node:stream"
  import launch from "cross-spawn"
  import { makeGlobalNode } from "./effect/app-node"
  import { filesystem, path } from "./effect/app-node-platform"
-+import { acquireTelegramProcessBudget } from "./telegram-process-budget"
++import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled } from "./telegram-process-budget"
  
  const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
  
@@ -41,11 +41,35 @@ index 6ea9022..c89664b 100644
  const toPlatformError = (
    method: string,
    err: NodeJS.ErrnoException,
-@@ -267,21 +280,42 @@ export const make = Effect.gen(function* () {
+@@ -267,21 +280,71 @@ export const make = Effect.gen(function* () {
    const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
      Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
        const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
 -      const proc = launch(command.command, command.args, opts)
++
++      if (!isTelegramProcessBudgetEnabled()) {
++        const proc = launch(command.command, command.args, opts)
++        let end = false
++        let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
++        proc.on("error", (err) => {
++          resume(Effect.fail(toPlatformError("spawn", err, command)))
++        })
++        proc.on("exit", (...args) => {
++          exit = args
++        })
++        proc.on("close", (...args) => {
++          if (end) return
++          end = true
++          Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
++        })
++        proc.on("spawn", () => {
++          resume(Effect.succeed([proc, signal]))
++        })
++        return Effect.sync(() => {
++          proc.kill("SIGTERM")
++        })
++      }
++
 +      let lease: ReturnType<typeof acquireTelegramProcessBudget>
 +      try {
 +        lease = acquireTelegramProcessBudget(
@@ -58,6 +82,7 @@ index 6ea9022..c89664b 100644
 +        resume(Effect.fail(toBudgetPlatformError(error, command)))
 +        return Effect.void
 +      }
++
 +      let proc: NodeChildProcess.ChildProcess
 +      try {
 +        proc = launch(command.command, command.args, opts)
@@ -65,6 +90,7 @@ index 6ea9022..c89664b 100644
 +        lease?.release()
 +        throw error
 +      }
++
        let end = false
        let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
        proc.on("error", (err) => {
@@ -75,10 +101,14 @@ index 6ea9022..c89664b 100644
          exit = args
        })
        proc.on("close", (...args) => {
-+        lease?.release()
-         if (end) return
+-        if (end) return
++        if (end) {
++          lease?.release()
++          return
++        }
          end = true
          Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
++        lease?.release()
        })
        proc.on("spawn", () => {
 +        lease?.bindPid(proc.pid)
@@ -119,10 +149,10 @@ index e5be4d4..82b8aa4 100644
          title: input.title || `Terminal ${id.slice(-4)}`,
 diff --git a/packages/core/src/telegram-process-budget.ts b/packages/core/src/telegram-process-budget.ts
 new file mode 100644
-index 0000000..526e2f3
+index 0000000..c0b5a01
 --- /dev/null
 +++ b/packages/core/src/telegram-process-budget.ts
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,283 @@
 +import { readFileSync } from "node:fs"
 +import path from "node:path"
 +
@@ -390,6 +420,10 @@ index 0000000..526e2f3
 +
 +export const telegramProcessBudget = new TelegramProcessBudgetGovernor()
 +
++export function isTelegramProcessBudgetEnabled(): boolean {
++  return process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET === "1"
++}
++
 +export function acquireTelegramProcessBudget(
 +  command: string,
 +  env?: NodeJS.ProcessEnv | null,
@@ -613,6 +647,35 @@ index 05f12fa..3376921 100644
        )
      })
  
+diff --git a/packages/opencode/src/tool/shell.ts b/packages/opencode/src/tool/shell.ts
+index 1e4423e..2171220 100644
+--- a/packages/opencode/src/tool/shell.ts
++++ b/packages/opencode/src/tool/shell.ts
+@@ -291,10 +291,14 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
+ })
+ 
+ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
++  const taggedEnv = {
++    ...env,
++    OPENCODE_TELEGRAM_PROCESS_KIND: "shell",
++  }
+   if (process.platform === "win32" && Shell.ps(shell)) {
+     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+       cwd,
+-      env,
++      env: taggedEnv,
+       stdin: "ignore",
+       detached: false,
+     })
+@@ -303,7 +307,7 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
+   return ChildProcess.make(command, [], {
+     shell,
+     cwd,
+-    env,
++    env: taggedEnv,
+     stdin: "ignore",
+     detached: process.platform !== "win32",
+   })
 diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
 index 173210f..47b8041 100644
 --- a/packages/opencode/src/util/process.ts
