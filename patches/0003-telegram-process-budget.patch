@@ -1,0 +1,648 @@
+diff --git a/packages/core/package.json b/packages/core/package.json
+index 5488a1d..c51ea2e 100644
+--- a/packages/core/package.json
++++ b/packages/core/package.json
+@@ -20,6 +20,7 @@
+     "./effect/app-node": "./src/effect/app-node.ts",
+     "./session/runner": "./src/session/runner/index.ts",
+     "./system-context": "./src/system-context/index.ts",
++    "./telegram-process-budget": "./src/telegram-process-budget.ts",
+     "./*": "./src/*.ts"
+   },
+   "imports": {
+diff --git a/packages/core/src/cross-spawn-spawner.ts b/packages/core/src/cross-spawn-spawner.ts
+index 6ea9022..c89664b 100644
+--- a/packages/core/src/cross-spawn-spawner.ts
++++ b/packages/core/src/cross-spawn-spawner.ts
+@@ -26,6 +26,7 @@ import { PassThrough } from "node:stream"
+ import launch from "cross-spawn"
+ import { makeGlobalNode } from "./effect/app-node"
+ import { filesystem, path } from "./effect/app-node-platform"
++import { acquireTelegramProcessBudget } from "./telegram-process-budget"
+ 
+ const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
+ 
+@@ -76,6 +77,18 @@ const flatten = (command: ChildProcess.Command) => {
+   }
+ }
+ 
++const toBudgetPlatformError = (
++  err: unknown,
++  command: ChildProcess.StandardCommand,
++): PlatformError.PlatformError =>
++  PlatformError.systemError({
++    _tag: "Busy",
++    module: "ChildProcess",
++    method: "spawn",
++    pathOrDescriptor: command.command,
++    cause: err,
++  })
++
+ const toPlatformError = (
+   method: string,
+   err: NodeJS.ErrnoException,
+@@ -267,21 +280,42 @@ export const make = Effect.gen(function* () {
+   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
+     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
+       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
+-      const proc = launch(command.command, command.args, opts)
++      let lease: ReturnType<typeof acquireTelegramProcessBudget>
++      try {
++        lease = acquireTelegramProcessBudget(
++          command.command,
++          opts.env as NodeJS.ProcessEnv | undefined,
++          undefined,
++          Boolean(command.options.shell),
++        )
++      } catch (error) {
++        resume(Effect.fail(toBudgetPlatformError(error, command)))
++        return Effect.void
++      }
++      let proc: NodeChildProcess.ChildProcess
++      try {
++        proc = launch(command.command, command.args, opts)
++      } catch (error) {
++        lease?.release()
++        throw error
++      }
+       let end = false
+       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
+       proc.on("error", (err) => {
++        lease?.release()
+         resume(Effect.fail(toPlatformError("spawn", err, command)))
+       })
+       proc.on("exit", (...args) => {
+         exit = args
+       })
+       proc.on("close", (...args) => {
++        lease?.release()
+         if (end) return
+         end = true
+         Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
+       })
+       proc.on("spawn", () => {
++        lease?.bindPid(proc.pid)
+         resume(Effect.succeed([proc, signal]))
+       })
+       return Effect.sync(() => {
+diff --git a/packages/core/src/pty.ts b/packages/core/src/pty.ts
+index e5be4d4..82b8aa4 100644
+--- a/packages/core/src/pty.ts
++++ b/packages/core/src/pty.ts
+@@ -10,6 +10,7 @@ import { Location } from "./location"
+ import { PtyID } from "./pty/schema"
+ import { Shell } from "./shell"
+ import { lazy } from "./util/lazy"
++import { acquireTelegramProcessBudget } from "./telegram-process-budget"
+ 
+ const BUFFER_LIMIT = 1024 * 1024 * 2
+ // Exited sessions stay observable (status, exit code, retained output) until removed explicitly.
+@@ -180,7 +181,18 @@ const layer = Layer.effect(
+       }
+       yield* Effect.logInfo("creating session", { id, cmd: command, args, cwd })
+       const { spawn } = yield* Effect.promise(() => pty())
+-      const proc = yield* Effect.sync(() => spawn(command, args, { name: "xterm-256color", cwd, env }))
++      const proc = yield* Effect.sync(() => {
++        const lease = acquireTelegramProcessBudget(command, env, "pty")
++        try {
++          const child = spawn(command, args, { name: "xterm-256color", cwd, env })
++          lease?.bindPid(child.pid)
++          child.onExit(() => lease?.release())
++          return child
++        } catch (error) {
++          lease?.release()
++          throw error
++        }
++      })
+       const info: Info = {
+         id,
+         title: input.title || `Terminal ${id.slice(-4)}`,
+diff --git a/packages/core/src/telegram-process-budget.ts b/packages/core/src/telegram-process-budget.ts
+new file mode 100644
+index 0000000..6799b86
+--- /dev/null
++++ b/packages/core/src/telegram-process-budget.ts
+@@ -0,0 +1,278 @@
++import { readFileSync } from "node:fs"
++import path from "node:path"
++
++const MiB = 1024 * 1024
++
++export type TelegramProcessKind = "shell" | "mcp" | "lsp" | "pty" | "utility" | "helper"
++
++export interface TelegramProcessRule {
++  readonly maxConcurrent: number
++  readonly reserveBytes: number
++  readonly pressureCeiling: number
++}
++
++export interface TelegramResourceSnapshot {
++  readonly memoryUsedBytes: number
++  readonly memoryLimitBytes: number | null
++  readonly memoryPressure: number | null
++}
++
++export interface TelegramProcessLease {
++  readonly id: string
++  readonly kind: TelegramProcessKind
++  readonly admittedAt: number
++  bindPid(pid: number | null | undefined): void
++  release(): void
++}
++
++interface ActiveLease {
++  readonly id: string
++  readonly kind: TelegramProcessKind
++  readonly admittedAt: number
++  readonly reserveBytes: number
++  readonly reserveUntil: number
++  pid?: number
++}
++
++const RULES: Readonly<Record<TelegramProcessKind, TelegramProcessRule>> = Object.freeze({
++  shell: { maxConcurrent: 2, reserveBytes: 96 * MiB, pressureCeiling: 0.94 },
++  mcp: { maxConcurrent: 1, reserveBytes: 96 * MiB, pressureCeiling: 0.94 },
++  lsp: { maxConcurrent: 1, reserveBytes: 128 * MiB, pressureCeiling: 0.95 },
++  pty: { maxConcurrent: 1, reserveBytes: 96 * MiB, pressureCeiling: 0.94 },
++  utility: { maxConcurrent: 2, reserveBytes: 32 * MiB, pressureCeiling: 0.97 },
++  helper: { maxConcurrent: 1, reserveBytes: 64 * MiB, pressureCeiling: 0.95 },
++})
++
++const RESERVATION_WARMUP_MS = 5_000
++const UTILITY = new Set([
++  "git",
++  "rg",
++  "ripgrep",
++  "grep",
++  "fd",
++  "fdfind",
++  "find",
++  "pgrep",
++  "which",
++  "where",
++  "cygpath",
++  "ls",
++  "cat",
++  "pwd",
++  "uname",
++])
++const LSP = new Set([
++  "gopls",
++  "rust-analyzer",
++  "clangd",
++  "jdtls",
++  "pyright-langserver",
++  "typescript-language-server",
++  "vscode-css-language-server",
++  "vscode-html-language-server",
++  "vscode-json-language-server",
++  "yaml-language-server",
++  "lua-language-server",
++  "sourcekit-lsp",
++  "fsautocomplete",
++  "nixd",
++  "tinymist",
++])
++
++function envInt(name: string, fallback: number, min: number, max: number): number {
++  const parsed = Number.parseInt(process.env[name] ?? "", 10)
++  if (!Number.isSafeInteger(parsed)) return fallback
++  return Math.min(max, Math.max(min, parsed))
++}
++
++function readText(file: string): string | null {
++  try {
++    return readFileSync(file, "utf8").trim()
++  } catch {
++    return null
++  }
++}
++
++function positive(value: string | null): number | null {
++  if (!value || value === "max") return null
++  const parsed = Number.parseInt(value, 10)
++  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
++}
++
++function currentResources(): TelegramResourceSnapshot {
++  const cgroupUsed = positive(readText("/sys/fs/cgroup/memory.current"))
++  const cgroupLimit = positive(readText("/sys/fs/cgroup/memory.max"))
++  const fallbackMb = Number.parseInt(process.env.OPENCODE_TELEGRAM_MEMORY_LIMIT_MB ?? "", 10)
++  const fallbackLimit =
++    Number.isSafeInteger(fallbackMb) && fallbackMb > 0 ? fallbackMb * MiB : null
++  const memoryUsedBytes = cgroupUsed ?? process.memoryUsage().rss
++  const memoryLimitBytes = cgroupLimit ?? fallbackLimit
++  return {
++    memoryUsedBytes,
++    memoryLimitBytes,
++    memoryPressure: memoryLimitBytes ? memoryUsedBytes / memoryLimitBytes : null,
++  }
++}
++
++function processName(command: string): string {
++  const base = path.basename(command).toLowerCase()
++  return base.endsWith(".exe") ? base.slice(0, -4) : base
++}
++
++export function classifyTelegramProcess(
++  command: string,
++  env?: NodeJS.ProcessEnv | null,
++  explicit?: TelegramProcessKind,
++  shell = false,
++): TelegramProcessKind {
++  if (explicit) return explicit
++  const tagged = env?.OPENCODE_TELEGRAM_PROCESS_KIND
++  if (tagged && tagged in RULES) return tagged as TelegramProcessKind
++  if (shell) return "shell"
++  const name = processName(command)
++  if (LSP.has(name) || name.includes("language-server") || name.includes("languageserver")) return "lsp"
++  if (UTILITY.has(name)) return "utility"
++  return "helper"
++}
++
++export class TelegramProcessBudgetError extends Error {
++  constructor(
++    readonly kind: TelegramProcessKind,
++    readonly reason: "category_limit" | "global_limit" | "memory_pressure",
++    message: string,
++  ) {
++    super(message)
++    this.name = "TelegramProcessBudgetError"
++  }
++}
++
++export class TelegramProcessBudgetGovernor {
++  readonly #active = new Map<string, ActiveLease>()
++  #next = 0
++
++  constructor(
++    readonly maxActive = envInt("OPENCODE_TELEGRAM_CHILD_MAX_ACTIVE", 4, 1, 12),
++    private readonly readResources: () => TelegramResourceSnapshot = currentResources,
++    private readonly enabled: () => boolean =
++      () => process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET === "1",
++    private readonly isPidAlive: (pid: number) => boolean = (pid) => {
++      try {
++        process.kill(pid, 0)
++        return true
++      } catch {
++        return false
++      }
++    },
++  ) {}
++
++  acquire(
++    command: string,
++    env?: NodeJS.ProcessEnv | null,
++    explicit?: TelegramProcessKind,
++    shell = false,
++  ): TelegramProcessLease | null {
++    if (!this.enabled()) return null
++    this.#prune()
++
++    const kind = classifyTelegramProcess(command, env, explicit, shell)
++    const rule = RULES[kind]
++    const sameKind = [...this.#active.values()].filter((lease) => lease.kind === kind).length
++    if (sameKind >= rule.maxConcurrent) {
++      throw this.#reject(kind, "category_limit", `maxConcurrent=${rule.maxConcurrent}`)
++    }
++    if (this.#active.size >= this.maxActive) {
++      throw this.#reject(kind, "global_limit", `active=${this.#active.size} max=${this.maxActive}`)
++    }
++
++    const resources = this.readResources()
++    if (resources.memoryLimitBytes) {
++      const now = Date.now()
++      const warmReserved = [...this.#active.values()].reduce(
++        (total, lease) => total + (lease.reserveUntil > now ? lease.reserveBytes : 0),
++        0,
++      )
++      const predicted =
++        (resources.memoryUsedBytes + warmReserved + rule.reserveBytes) / resources.memoryLimitBytes
++      if (predicted >= rule.pressureCeiling) {
++        throw this.#reject(
++          kind,
++          "memory_pressure",
++          `usedMb=${(resources.memoryUsedBytes / MiB).toFixed(0)} reserveMb=${(rule.reserveBytes / MiB).toFixed(0)} limitMb=${(resources.memoryLimitBytes / MiB).toFixed(0)} predicted=${(predicted * 100).toFixed(1)}% ceiling=${(rule.pressureCeiling * 100).toFixed(1)}%`,
++        )
++      }
++    }
++
++    const id = `${process.pid}-${Date.now().toString(36)}-${++this.#next}`
++    const admittedAt = Date.now()
++    this.#active.set(id, {
++      id,
++      kind,
++      admittedAt,
++      reserveBytes: rule.reserveBytes,
++      reserveUntil: admittedAt + RESERVATION_WARMUP_MS,
++    })
++
++    let released = false
++    return {
++      id,
++      kind,
++      admittedAt,
++      bindPid: (pid) => {
++        if (!pid || released) return
++        const lease = this.#active.get(id)
++        if (lease) lease.pid = pid
++      },
++      release: () => {
++        if (released) return
++        released = true
++        this.#active.delete(id)
++      },
++    }
++  }
++
++  snapshot(): {
++    readonly activeCount: number
++    readonly activeByKind: Readonly<Record<string, number>>
++    readonly resources: TelegramResourceSnapshot
++  } {
++    this.#prune()
++    const activeByKind: Record<string, number> = {}
++    for (const lease of this.#active.values()) {
++      activeByKind[lease.kind] = (activeByKind[lease.kind] ?? 0) + 1
++    }
++    return { activeCount: this.#active.size, activeByKind, resources: this.readResources() }
++  }
++
++  #prune(): void {
++    for (const [id, lease] of this.#active) {
++      if (lease.pid && !this.isPidAlive(lease.pid)) this.#active.delete(id)
++    }
++  }
++
++  #reject(
++    kind: TelegramProcessKind,
++    reason: TelegramProcessBudgetError["reason"],
++    detail: string,
++  ): TelegramProcessBudgetError {
++    return new TelegramProcessBudgetError(
++      kind,
++      reason,
++      `Telegram process budget rejected ${kind}: ${detail}`,
++    )
++  }
++}
++
++export const telegramProcessBudget = new TelegramProcessBudgetGovernor()
++
++export function acquireTelegramProcessBudget(
++  command: string,
++  env?: NodeJS.ProcessEnv | null,
++  explicit?: TelegramProcessKind,
++  shell = false,
++): TelegramProcessLease | null {
++  return telegramProcessBudget.acquire(command, env, explicit, shell)
++}
++
++export function telegramProcessBudgetSnapshot() {
++  return telegramProcessBudget.snapshot()
++}
+diff --git a/packages/core/test/telegram-process-budget.test.ts b/packages/core/test/telegram-process-budget.test.ts
+new file mode 100644
+index 0000000..6d9a890
+--- /dev/null
++++ b/packages/core/test/telegram-process-budget.test.ts
+@@ -0,0 +1,107 @@
++import { describe, expect, it } from "bun:test"
++import {
++  TelegramProcessBudgetGovernor,
++  TelegramProcessBudgetError,
++  classifyTelegramProcess,
++  type TelegramResourceSnapshot,
++} from "../src/telegram-process-budget"
++
++const MiB = 1024 * 1024
++const GiB = 1024 * MiB
++
++function resources(
++  memoryUsedBytes = 512 * MiB,
++  memoryLimitBytes: number | null = GiB,
++): TelegramResourceSnapshot {
++  return {
++    memoryUsedBytes,
++    memoryLimitBytes,
++    memoryPressure: memoryLimitBytes ? memoryUsedBytes / memoryLimitBytes : null,
++  }
++}
++
++describe("telegram process budget", () => {
++  it("classifies shell, LSP, utility and tagged MCP processes", () => {
++    expect(classifyTelegramProcess("/bin/bash", undefined, undefined, true)).toBe("shell")
++    expect(classifyTelegramProcess("/usr/bin/typescript-language-server")).toBe("lsp")
++    expect(classifyTelegramProcess("/usr/bin/git")).toBe("utility")
++    expect(classifyTelegramProcess("node", { OPENCODE_TELEGRAM_PROCESS_KIND: "mcp" })).toBe("mcp")
++    expect(classifyTelegramProcess("python")).toBe("helper")
++  })
++
++  it("is inert unless the Telegram process budget is enabled", () => {
++    const governor = new TelegramProcessBudgetGovernor(4, resources, () => false)
++    expect(governor.acquire("bash", undefined, "shell")).toBeNull()
++    expect(governor.snapshot().activeCount).toBe(0)
++  })
++
++  it("limits concurrent shell work per OpenCode process", () => {
++    const governor = new TelegramProcessBudgetGovernor(4, resources, () => true)
++    const first = governor.acquire("bash", undefined, "shell")
++    const second = governor.acquire("bash", undefined, "shell")
++    expect(first?.kind).toBe("shell")
++    expect(second?.kind).toBe("shell")
++
++    expect(() => governor.acquire("bash", undefined, "shell")).toThrow(TelegramProcessBudgetError)
++    first?.release()
++    second?.release()
++  })
++
++  it("holds warm reservations so fast cross-category starts cannot overbook memory", () => {
++    const governor = new TelegramProcessBudgetGovernor(
++      4,
++      () => resources(840 * MiB, GiB),
++      () => true,
++    )
++    const utility = governor.acquire("git", undefined, "utility")
++    expect(utility).not.toBeNull()
++
++    expect(() => governor.acquire("bash", undefined, "shell")).toThrow(
++      expect.objectContaining({
++        name: "TelegramProcessBudgetError",
++        reason: "memory_pressure",
++      }),
++    )
++    utility?.release()
++  })
++
++  it("rejects a process before the service memory limit is exhausted", () => {
++    const governor = new TelegramProcessBudgetGovernor(
++      4,
++      () => resources(900 * MiB, GiB),
++      () => true,
++    )
++    expect(() => governor.acquire("bash", undefined, "shell")).toThrow(
++      expect.objectContaining({
++        name: "TelegramProcessBudgetError",
++        kind: "shell",
++        reason: "memory_pressure",
++      }),
++    )
++  })
++
++  it("prunes leases whose bound pid is no longer alive", () => {
++    const governor = new TelegramProcessBudgetGovernor(
++      4,
++      resources,
++      () => true,
++      () => false,
++    )
++    const lease = governor.acquire("git", undefined, "utility")
++    lease?.bindPid(12345)
++    expect(governor.snapshot().activeCount).toBe(0)
++  })
++
++  it("enforces the global child-process ceiling across categories", () => {
++    const governor = new TelegramProcessBudgetGovernor(2, resources, () => true)
++    const utility = governor.acquire("git", undefined, "utility")
++    const shell = governor.acquire("bash", undefined, "shell")
++    expect(() => governor.acquire("python", undefined, "helper")).toThrow(
++      expect.objectContaining({
++        reason: "global_limit",
++      }),
++    )
++    utility?.release()
++    shell?.release()
++  })
++})
+diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
+index 05f12fa..3376921 100644
+--- a/packages/opencode/src/mcp/index.ts
++++ b/packages/opencode/src/mcp/index.ts
+@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url"
+ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+ import { serviceUse } from "@opencode-ai/core/effect/service-use"
++import { acquireTelegramProcessBudget } from "@opencode-ai/core/telegram-process-budget"
+ import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js"
+ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
+@@ -344,28 +345,51 @@ const layer = Layer.effect(
+       const [cmd, ...args] = mcp.command
+       const baseDir = yield* InstanceState.directory
+       const cwd = mcp.cwd ? path.resolve(baseDir, mcp.cwd) : baseDir
+-      const transport = new StdioClientTransport({
+-        stderr: "pipe",
+-        command: cmd,
+-        args,
+-        cwd,
+-        env: {
+-          ...process.env,
+-          ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
+-          ...mcp.environment,
+-        },
+-      })
++      const transportEnv = {
++        ...process.env,
++        ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
++        ...mcp.environment,
++        OPENCODE_TELEGRAM_PROCESS_KIND: "mcp",
++      }
++      const lease = acquireTelegramProcessBudget(cmd, transportEnv, "mcp")
++      let transport: StdioClientTransport
++      try {
++        transport = new StdioClientTransport({
++          stderr: "pipe",
++          command: cmd,
++          args,
++          cwd,
++          env: transportEnv,
++        })
++      } catch (error) {
++        lease?.release()
++        throw error
++      }
++      const close = transport.close.bind(transport)
++      transport.close = async () => {
++        try {
++          await close()
++        } finally {
++          lease?.release()
++        }
++      }
+ 
+       const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
+       return yield* connectTransport(transport, connectTimeout).pipe(
+-        Effect.map((client): { client: MCPClient | undefined; status: Status } => ({
+-          client,
+-          status: { status: "connected" },
+-        })),
+-        Effect.catch((error): Effect.Effect<{ client: MCPClient | undefined; status: Status }> => {
+-          const msg = error instanceof Error ? error.message : String(error)
+-          return Effect.succeed({ client: undefined, status: { status: "failed", error: msg } })
++        Effect.map((client): { client: MCPClient | undefined; status: Status } => {
++          lease?.bindPid(transport.pid)
++          return {
++            client,
++            status: { status: "connected" },
++          }
+         }),
++        Effect.catch((error): Effect.Effect<{ client: MCPClient | undefined; status: Status }> =>
++          Effect.promise(async () => {
++            await transport.close().catch(() => {})
++            const msg = error instanceof Error ? error.message : String(error)
++            return { client: undefined, status: { status: "failed", error: msg } as Status }
++          }),
++        ),
+       )
+     })
+ 
+diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
+index 173210f..47b8041 100644
+--- a/packages/opencode/src/util/process.ts
++++ b/packages/opencode/src/util/process.ts
+@@ -3,6 +3,7 @@ import type { Stream } from "node:stream"
+ import launch from "cross-spawn"
+ import { buffer } from "node:stream/consumers"
+ import { errorMessage } from "./error"
++import { acquireTelegramProcessBudget } from "@opencode-ai/core/telegram-process-budget"
+ 
+ export type Stdio = "inherit" | "pipe" | "ignore" | number | Stream
+ export type Shell = boolean | string
+@@ -60,13 +61,22 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+   if (cmd.length === 0) throw new Error("Command is required")
+   opts.abort?.throwIfAborted()
+ 
+-  const proc = launch(cmd[0], cmd.slice(1), {
+-    cwd: opts.cwd,
+-    shell: opts.shell,
+-    env: opts.env === null ? {} : opts.env ? { ...process.env, ...opts.env } : undefined,
+-    stdio: [opts.stdin ?? "ignore", opts.stdout ?? "ignore", opts.stderr ?? "ignore"],
+-    windowsHide: process.platform === "win32",
+-  })
++  const env = opts.env === null ? {} : opts.env ? { ...process.env, ...opts.env } : undefined
++  const lease = acquireTelegramProcessBudget(cmd[0], env, undefined, Boolean(opts.shell))
++  let proc: ReturnType<typeof launch>
++  try {
++    proc = launch(cmd[0], cmd.slice(1), {
++      cwd: opts.cwd,
++      shell: opts.shell,
++      env,
++      stdio: [opts.stdin ?? "ignore", opts.stdout ?? "ignore", opts.stderr ?? "ignore"],
++      windowsHide: process.platform === "win32",
++    })
++  } catch (error) {
++    lease?.release()
++    throw error
++  }
++  lease?.bindPid(proc.pid)
+ 
+   let closed = false
+   let timer: ReturnType<typeof setTimeout> | undefined
+@@ -87,6 +97,7 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+     const done = () => {
+       opts.abort?.removeEventListener("abort", abort)
+       if (timer) clearTimeout(timer)
++      lease?.release()
+     }
+ 
+     proc.once("exit", (code, signal) => {
