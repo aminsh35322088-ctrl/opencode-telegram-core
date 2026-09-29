@@ -119,10 +119,10 @@ index e5be4d4..82b8aa4 100644
          title: input.title || `Terminal ${id.slice(-4)}`,
 diff --git a/packages/core/src/telegram-process-budget.ts b/packages/core/src/telegram-process-budget.ts
 new file mode 100644
-index 0000000..6799b86
+index 0000000..526e2f3
 --- /dev/null
 +++ b/packages/core/src/telegram-process-budget.ts
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,279 @@
 +import { readFileSync } from "node:fs"
 +import path from "node:path"
 +
@@ -169,6 +169,7 @@ index 0000000..6799b86
 +})
 +
 +const RESERVATION_WARMUP_MS = 5_000
++const SHELL = new Set(["bash", "sh", "zsh", "fish", "pwsh", "powershell", "cmd"])
 +const UTILITY = new Set([
 +  "git",
 +  "rg",
@@ -253,8 +254,8 @@ index 0000000..6799b86
 +  if (explicit) return explicit
 +  const tagged = env?.OPENCODE_TELEGRAM_PROCESS_KIND
 +  if (tagged && tagged in RULES) return tagged as TelegramProcessKind
-+  if (shell) return "shell"
 +  const name = processName(command)
++  if (shell || SHELL.has(name)) return "shell"
 +  if (LSP.has(name) || name.includes("language-server") || name.includes("languageserver")) return "lsp"
 +  if (UTILITY.has(name)) return "utility"
 +  return "helper"
@@ -403,10 +404,10 @@ index 0000000..6799b86
 +}
 diff --git a/packages/core/test/telegram-process-budget.test.ts b/packages/core/test/telegram-process-budget.test.ts
 new file mode 100644
-index 0000000..6d9a890
+index 0000000..c83d8ac
 --- /dev/null
 +++ b/packages/core/test/telegram-process-budget.test.ts
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,108 @@
 +import { describe, expect, it } from "bun:test"
 +import {
 +  TelegramProcessBudgetGovernor,
@@ -431,6 +432,7 @@ index 0000000..6d9a890
 +
 +describe("telegram process budget", () => {
 +  it("classifies shell, LSP, utility and tagged MCP processes", () => {
++    expect(classifyTelegramProcess("/bin/bash")).toBe("shell")
 +    expect(classifyTelegramProcess("/bin/bash", undefined, undefined, true)).toBe("shell")
 +    expect(classifyTelegramProcess("/usr/bin/typescript-language-server")).toBe("lsp")
 +    expect(classifyTelegramProcess("/usr/bin/git")).toBe("utility")
@@ -514,6 +516,21 @@ index 0000000..6d9a890
 +    shell?.release()
 +  })
 +})
+diff --git a/packages/opencode/src/lsp/launch.ts b/packages/opencode/src/lsp/launch.ts
+index 4f687b1..3184708 100644
+--- a/packages/opencode/src/lsp/launch.ts
++++ b/packages/opencode/src/lsp/launch.ts
+@@ -10,6 +10,10 @@ export function spawn(cmd: string, argsOrOpts?: string[] | Process.Options, opts
+   const cfg = Array.isArray(argsOrOpts) ? opts : argsOrOpts
+   const proc = Process.spawn([cmd, ...args], {
+     ...cfg,
++    env: {
++      ...(cfg?.env ?? {}),
++      OPENCODE_TELEGRAM_PROCESS_KIND: "lsp",
++    },
+     stdin: "pipe",
+     stdout: "pipe",
+     stderr: "pipe",
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
 index 05f12fa..3376921 100644
 --- a/packages/opencode/src/mcp/index.ts
