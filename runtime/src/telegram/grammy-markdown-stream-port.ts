@@ -52,7 +52,7 @@ export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort 
       },
       thread,
       undefined,
-      options.signal,
+      options.signal as Parameters<typeof stream.streamMarkdown>[6],
     );
   }
 }

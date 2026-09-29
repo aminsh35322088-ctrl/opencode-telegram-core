@@ -77,6 +77,25 @@ class ReleaseTests(unittest.TestCase):
             tf.add(native_dir / "index.js", arcname="index.js")
             tf.add(native_dir / "runtime-info.json", arcname="runtime-info.json")
 
+        native_node_dir = root / "native-node"
+        native_node_dir.mkdir()
+        (native_node_dir / "index.js").write_text("export class TelegramNativeCore {}\n")
+        (native_node_dir / "index.d.ts").write_text("export declare class TelegramNativeCore {}\n")
+        (native_node_dir / "package.json").write_text(json.dumps({
+            "name": "@opencode-telegram/native-runtime",
+            "version": "0.1.0",
+            "type": "module",
+            "main": "./index.js",
+            "types": "./index.d.ts",
+            "exports": {".": {"import": "./index.js", "types": "./index.d.ts"}},
+            "dependencies": {},
+        }))
+        native_node_info = {**native_info, "consumerRuntime": "node"}
+        (native_node_dir / "runtime-info.json").write_text(json.dumps(native_node_info))
+        with tarfile.open(release / "opencode-telegram-native-runtime-node.tar.gz", "w:gz") as tf:
+            for item in native_node_dir.iterdir():
+                tf.add(item, arcname=item.name)
+
         build_info = {
             "upstreamVersion": "1.0.0",
             "upstreamCommit": UPSTREAM,
@@ -92,11 +111,13 @@ class ReleaseTests(unittest.TestCase):
         manifest = {
             **build_info,
             "nativeRuntime": native_info,
+            "nativeNodeRuntime": native_node_info,
             "platform": "linux-x64",
             "artifacts": [
                 "opencode-telegram-core-linux-x64.tar.gz",
                 "opencode-telegram-core-sdk.tar.gz",
                 "opencode-telegram-native-runtime.tar.gz",
+                "opencode-telegram-native-runtime-node.tar.gz",
             ],
         }
         (release / "release-manifest.json").write_text(json.dumps(manifest))
@@ -108,6 +129,7 @@ class ReleaseTests(unittest.TestCase):
             "opencode-telegram-core-linux-x64.tar.gz",
             "opencode-telegram-core-sdk.tar.gz",
             "opencode-telegram-native-runtime.tar.gz",
+            "opencode-telegram-native-runtime-node.tar.gz",
             "build-info.json",
             "release-manifest.json",
         ]

@@ -6,11 +6,12 @@ release="${1:-$CORE_ROOT/dist/release}"
 runtime_archive="$release/opencode-telegram-core-linux-x64.tar.gz"
 sdk_archive="$release/opencode-telegram-core-sdk.tar.gz"
 native_archive="$release/opencode-telegram-native-runtime.tar.gz"
+native_node_archive="$release/opencode-telegram-native-runtime-node.tar.gz"
 manifest="$release/release-manifest.json"
 build_info="$release/build-info.json"
 checksums="$release/SHA256SUMS"
 
-for file in "$runtime_archive" "$sdk_archive" "$native_archive" "$manifest" "$build_info" "$checksums"; do
+for file in "$runtime_archive" "$sdk_archive" "$native_archive" "$native_node_archive" "$manifest" "$build_info" "$checksums"; do
   [[ -f "$file" ]] || die "missing release file: $file"
 done
 
@@ -46,6 +47,7 @@ expected_artifacts = [
     "opencode-telegram-core-linux-x64.tar.gz",
     "opencode-telegram-core-sdk.tar.gz",
     "opencode-telegram-native-runtime.tar.gz",
+    "opencode-telegram-native-runtime-node.tar.gz",
 ]
 if manifest.get("artifacts") != expected_artifacts:
     raise SystemExit("manifest artifact list mismatch")
@@ -67,10 +69,11 @@ PY
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/runtime" "$tmp/sdk" "$tmp/native"
+mkdir -p "$tmp/runtime" "$tmp/sdk" "$tmp/native" "$tmp/native-node"
 tar -xzf "$runtime_archive" -C "$tmp/runtime"
 tar -xzf "$sdk_archive" -C "$tmp/sdk"
 tar -xzf "$native_archive" -C "$tmp/native"
+tar -xzf "$native_node_archive" -C "$tmp/native-node"
 runtime="$tmp/runtime/opencode"
 [[ -x "$runtime" ]] || die "runtime archive does not contain executable opencode"
 
@@ -106,6 +109,21 @@ if manifest.get("nativeRuntime") != native:
 for key in ["telegramCoreCommit", "upstreamVersion", "upstreamCommit"]:
     if native.get(key) != manifest.get(key):
         raise SystemExit(f"native runtime {key} does not match release identity")
+PY
+
+[[ -f "$tmp/native-node/index.js" ]] || die "Node native runtime archive missing index.js"
+[[ -f "$tmp/native-node/index.d.ts" ]] || die "Node native runtime archive missing index.d.ts"
+[[ -f "$tmp/native-node/package.json" ]] || die "Node native runtime archive missing package.json"
+(cd "$tmp/native-node" && npm install --omit=dev --ignore-scripts --package-lock=false --silent && node --input-type=module -e "const m=await import('./index.js'); if(typeof m.TelegramNativeCore!=='function') process.exit(2)") || die "Node native runtime cannot be imported by Node"
+python3 - "$manifest" "$tmp/native-node/runtime-info.json" <<'PY'
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+native = json.load(open(sys.argv[2], encoding="utf-8"))
+if manifest.get("nativeNodeRuntime") != native:
+    raise SystemExit("Node native runtime metadata does not match manifest")
+if native.get("consumerRuntime") != "node":
+    raise SystemExit("Node native runtime consumerRuntime mismatch")
 PY
 
 printf 'release verified: %s\n' "$(basename "$release")"
