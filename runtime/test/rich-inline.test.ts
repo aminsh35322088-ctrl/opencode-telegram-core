@@ -187,4 +187,3 @@ describe("inline rich text tree", () => {
     expect(renderTelegramRichMarkdown("# hi", { rtl: true }).is_rtl).toBe(true);
   });
 });
-
