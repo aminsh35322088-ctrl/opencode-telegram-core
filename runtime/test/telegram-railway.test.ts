@@ -52,17 +52,40 @@ describe("Railway resource governor", () => {
     restartWindowMs: 1_000,
   };
 
-  test("reads a positive service memory footprint and optional cgroup limit", () => {
-    expect(RailwayResourceGovernor.serviceMemoryBytes()).toBeGreaterThan(0);
+  test("reads a positive service memory footprint and reclaim-aware working set", () => {
+    const total = RailwayResourceGovernor.serviceMemoryBytes();
+    const workingSet = RailwayResourceGovernor.serviceWorkingSetBytes();
+    expect(total).toBeGreaterThan(0);
+    expect(workingSet).toBeGreaterThan(0);
+    expect(workingSet).toBeLessThanOrEqual(total);
     const limit = RailwayResourceGovernor.serviceMemoryLimitBytes();
     expect(limit === null || limit > 0).toBe(true);
   });
 
-  test("prefers idle eviction under soft memory pressure", () => {
+  test("prefers idle eviction under soft working-set pressure", () => {
     const governor = new RailwayResourceGovernor(policy);
-    expect(governor.evaluate({ rssBytes: 750, workerCount: 2, idleWorkerCount: 1 })).toBe("EVICT_IDLE");
-    expect(governor.evaluate({ rssBytes: 750, workerCount: 2, idleWorkerCount: 0 })).toBe("REJECT_NEW_WORK");
-    expect(governor.evaluate({ rssBytes: 950, workerCount: 1, idleWorkerCount: 1 })).toBe("EMERGENCY_SHUTDOWN");
+    expect(governor.evaluate({ rssBytes: 750, totalBytes: 850, workerCount: 2, idleWorkerCount: 1 })).toBe("EVICT_IDLE");
+    expect(governor.evaluate({ rssBytes: 750, totalBytes: 850, workerCount: 2, idleWorkerCount: 0 })).toBe("REJECT_NEW_WORK");
+  });
+
+  test("does not reject safe work just because reclaimable cache lifts raw cgroup usage", () => {
+    const governor = new RailwayResourceGovernor(policy);
+    expect(governor.evaluate({
+      rssBytes: 650,
+      totalBytes: 850,
+      workerCount: 1,
+      idleWorkerCount: 0,
+    })).toBe("NORMAL");
+  });
+
+  test("keeps the hard OOM guard on raw cgroup usage", () => {
+    const governor = new RailwayResourceGovernor(policy);
+    expect(governor.evaluate({
+      rssBytes: 650,
+      totalBytes: 950,
+      workerCount: 1,
+      idleWorkerCount: 1,
+    })).toBe("EMERGENCY_SHUTDOWN");
   });
 
   test("restart storm is bounded independently per binding", () => {

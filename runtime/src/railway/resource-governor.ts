@@ -9,14 +9,23 @@ export interface RailwayResourcePolicy {
 }
 
 export interface RailwayResourceSnapshot {
+  /**
+   * Reclaim-aware service working set. On cgroup v2 this is
+   * memory.current - inactive_file, matching Docker/cAdvisor semantics.
+   */
   readonly rssBytes: number;
+  /**
+   * Raw cgroup usage. This still includes reclaimable page cache and is used
+   * only for the hard/OOM guard. Older callers may omit it.
+   */
+  readonly totalBytes?: number;
   readonly workerCount: number;
   readonly idleWorkerCount: number;
 }
 
-
 const CGROUP_MEMORY_CURRENT = "/sys/fs/cgroup/memory.current";
 const CGROUP_MEMORY_MAX = "/sys/fs/cgroup/memory.max";
+const CGROUP_MEMORY_STAT = "/sys/fs/cgroup/memory.stat";
 
 function readPositiveBytes(filePath: string): number | null {
   try {
@@ -59,7 +68,8 @@ export class RailwayResourceGovernor {
   }
 
   evaluate(snapshot: RailwayResourceSnapshot): RailwayResourceAction {
-    if (snapshot.rssBytes >= this.policy.hardRssBytes) return "EMERGENCY_SHUTDOWN";
+    const totalBytes = snapshot.totalBytes ?? snapshot.rssBytes;
+    if (totalBytes >= this.policy.hardRssBytes) return "EMERGENCY_SHUTDOWN";
     if (snapshot.rssBytes >= this.policy.softRssBytes) {
       return snapshot.idleWorkerCount > 0 ? "EVICT_IDLE" : "REJECT_NEW_WORK";
     }
@@ -96,16 +106,47 @@ export class RailwayResourceGovernor {
     return readPositiveBytes(CGROUP_MEMORY_CURRENT) ?? process.memoryUsage.rss();
   }
 
+  static serviceWorkingSetBytes(
+    totalBytes = RailwayResourceGovernor.serviceMemoryBytes(),
+  ): number {
+    try {
+      const stat = readFileSync(CGROUP_MEMORY_STAT, "utf8");
+      const inactiveFileLine = stat
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("inactive_file "));
+      if (!inactiveFileLine) return totalBytes;
+      const inactiveFileBytes = Number.parseInt(
+        inactiveFileLine.slice("inactive_file ".length).trim(),
+        10,
+      );
+      // Match Docker/cAdvisor semantics: subtract inactive_file only when the
+      // sampled counter is valid and strictly below the sampled usage.
+      if (
+        !Number.isSafeInteger(inactiveFileBytes) ||
+        inactiveFileBytes <= 0 ||
+        inactiveFileBytes >= totalBytes
+      ) {
+        return totalBytes;
+      }
+      return totalBytes - inactiveFileBytes;
+    } catch {
+      return totalBytes;
+    }
+  }
+
   static serviceMemoryLimitBytes(): number | null {
     return readPositiveBytes(CGROUP_MEMORY_MAX);
   }
 
   static currentSnapshot(workerCount: number, idleWorkerCount: number): RailwayResourceSnapshot {
+    const totalBytes = RailwayResourceGovernor.serviceMemoryBytes();
     return {
-      // On Railway/Linux this is the cgroup-wide service footprint, including
-      // the bot, OpenCode, tailscaled, MCPs and descendants. RSS is only the
-      // cross-platform fallback when cgroup v2 is unavailable.
-      rssBytes: RailwayResourceGovernor.serviceMemoryBytes(),
+      // Soft admission uses a reclaim-aware working set so inactive page cache
+      // does not falsely reject otherwise safe work.
+      rssBytes: RailwayResourceGovernor.serviceWorkingSetBytes(totalBytes),
+      // Hard protection intentionally keeps the raw cgroup total because
+      // memory.max accounts all charged memory, reclaimable or otherwise.
+      totalBytes,
       workerCount,
       idleWorkerCount,
     };
