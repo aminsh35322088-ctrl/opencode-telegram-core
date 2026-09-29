@@ -177,6 +177,51 @@ describe("scheduled task admission", () => {
     expect(runs.current(b.bindingId)).toBeNull();
   });
 
+  test("active binding returns busy without claiming or executing the task", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    runs.startExclusive(b, 1, "interactive-run");
+    let executions = 0;
+    const supervisor = new WorkerSupervisor(
+      (current, generation) => new FakeWorker(current.bindingId, generation),
+      { maxWorkers: 2 },
+    );
+    const dispatcher = new ScheduledTaskDispatcher(
+      bindings,
+      runs,
+      supervisor,
+      new InMemoryExecutionLedger(),
+      { execute: async () => { executions += 1; } },
+    );
+
+    expect(await dispatcher.dispatch(taskFor(b))).toBe("busy");
+    expect(executions).toBe(0);
+    expect(runs.current(b.bindingId)?.runId).toBe("interactive-run");
+  });
+
+  test("successful scheduled execution releases its Core run", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    const supervisor = new WorkerSupervisor(
+      (current, generation) => new FakeWorker(current.bindingId, generation),
+      { maxWorkers: 2 },
+    );
+    const dispatcher = new ScheduledTaskDispatcher(
+      bindings,
+      runs,
+      supervisor,
+      new InMemoryExecutionLedger(),
+      { execute: async () => undefined },
+    );
+
+    expect(await dispatcher.dispatch(taskFor(b))).toBe("executed");
+    expect(runs.current(b.bindingId)).toBeNull();
+  });
+
   test("duplicate durable execution id is idempotently suppressed", async () => {
     const bindings = new BindingRegistry();
     const b = binding();

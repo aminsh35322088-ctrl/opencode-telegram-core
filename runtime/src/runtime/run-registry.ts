@@ -10,6 +10,17 @@ export class RunRegistry {
     return run;
   }
 
+  startExclusive(
+    binding: BindingIdentity,
+    workerGeneration: number,
+    runId: string = randomUUID(),
+  ): RunIdentity {
+    if (this.#active.has(binding.bindingId)) {
+      throw new Error("binding already owns an active run: " + binding.bindingId);
+    }
+    return this.start(binding, workerGeneration, runId);
+  }
+
   current(bindingId: string): RunIdentity | null {
     return this.#active.get(bindingId) ?? null;
   }

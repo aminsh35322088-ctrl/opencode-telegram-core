@@ -52,6 +52,15 @@ describe("identity fencing", () => {
     expect(sent).toHaveLength(0);
   });
 
+  test("exclusive run admission rejects a second active run for the same binding", () => {
+    const runs = new RunRegistry();
+    const b = binding();
+    runs.startExclusive(b, 1, "run-a");
+
+    expect(() => runs.startExclusive(b, 1, "run-b")).toThrow(/active run/i);
+    expect(runs.current(b.bindingId)?.runId).toBe("run-a");
+  });
+
   test("old binding generation is fenced before outbound", async () => {
     const bindings = new BindingRegistry();
     const runs = new RunRegistry();

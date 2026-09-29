@@ -30,6 +30,7 @@ export type ScheduledDispatchResult =
   | "executed"
   | "unbound"
   | "stale_binding"
+  | "busy"
   | "duplicate";
 
 export class ScheduledTaskDispatcher {
@@ -45,9 +46,11 @@ export class ScheduledTaskDispatcher {
     const current = this.bindings.getById(task.bindingId);
     if (!current) return "unbound";
     if (!matchesTaskBinding(current, task)) return "stale_binding";
+    if (this.runs.current(current.bindingId)) return "busy";
 
     if (!await this.ledger.claim(task.executionId)) return "duplicate";
 
+    let run: RunIdentity | null = null;
     try {
       const worker = await this.supervisor.ensure(current);
       if (
@@ -58,11 +61,22 @@ export class ScheduledTaskDispatcher {
         await this.ledger.release(task.executionId);
         return "stale_binding";
       }
-      const run = this.runs.start(current, worker.generation, "scheduled:" + task.executionId);
+      if (this.runs.current(current.bindingId)) {
+        await this.ledger.release(task.executionId);
+        return "busy";
+      }
+      run = this.runs.startExclusive(
+        current,
+        worker.generation,
+        "scheduled:" + task.executionId,
+      );
       await this.port.execute(task, run);
+      this.runs.finish(run);
+      run = null;
       await this.ledger.complete(task.executionId);
       return "executed";
     } catch (error) {
+      if (run) this.runs.finish(run);
       await this.ledger.release(task.executionId);
       throw error;
     }
