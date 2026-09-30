@@ -1,4 +1,4 @@
-import { sameBinding, type BindingIdentity } from "./identity.js";
+import { sameBinding, type BindingIdentity, type RunIdentity } from "./identity.js";
 
 export interface TopicWorker {
   readonly bindingId: string;
@@ -6,6 +6,7 @@ export interface TopicWorker {
   readonly idle: boolean;
   start(binding: BindingIdentity): Promise<void>;
   stop(reason: string): Promise<void>;
+  complete?(run: RunIdentity): void;
 }
 
 export type WorkerFactory = (binding: BindingIdentity, generation: number) => TopicWorker;
@@ -149,6 +150,12 @@ export class WorkerSupervisor {
       slot.worker === worker &&
       sameBinding(slot.binding, binding),
     );
+  }
+
+  complete(run: RunIdentity): void {
+    const slot = this.#workers.get(run.bindingId);
+    if (!slot || slot.worker.generation !== run.workerGeneration || !sameBinding(slot.binding, run)) return;
+    slot.worker.complete?.(run);
   }
 
   size(): number {

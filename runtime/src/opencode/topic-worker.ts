@@ -2,7 +2,9 @@ import {
   QueuePoisonedError,
   SerialTaskQueue,
 } from "../runtime/serial-task-queue.js";
-import { sameBinding, type BindingIdentity, type RunIdentity } from "../runtime/identity.js";
+import path from "node:path";
+import { DeadlineExceededError, withDeadline } from "../runtime/deadline.js";
+import { sameBinding, sameRun, type BindingIdentity, type RunIdentity } from "../runtime/identity.js";
 import type { TopicWorker, WorkerFactory } from "../runtime/worker-supervisor.js";
 
 export interface OpenCodePromptPort {
@@ -42,10 +44,26 @@ export interface OpenCodeTopicWorkerOptions {
   readonly promptTimeoutMs: number;
   readonly cancellationGraceMs: number;
   readonly stopTimeoutMs: number;
+  readonly abortSession?: (target: OpenCodeAbortTarget, signal: AbortSignal) => Promise<void>;
   readonly onIsolationFailure?: (
     binding: BindingIdentity,
     error: QueuePoisonedError,
   ) => Promise<void> | void;
+}
+
+export interface OpenCodeAbortTarget {
+  readonly sessionId: string;
+  readonly directory: string;
+}
+
+export interface OpenCodeTaskContext {
+  readonly signal: AbortSignal;
+  setAbortTarget(target: OpenCodeAbortTarget | null): void;
+}
+
+export interface OpenCodeTaskOptions {
+  readonly abortTarget?: OpenCodeAbortTarget | null;
+  readonly timeoutMs?: number;
 }
 
 export class OpenCodeTopicWorker implements TopicWorker {
@@ -56,6 +74,9 @@ export class OpenCodeTopicWorker implements TopicWorker {
   #stopped = false;
   #poisoned = false;
   #binding: BindingIdentity;
+  #activeRun: RunIdentity | null = null;
+  #activeAbortTarget: OpenCodeAbortTarget | null = null;
+  #ownedTask: object | null = null;
   readonly #controller = new AbortController();
   readonly #inFlight = new Set<Promise<unknown>>();
   readonly #queue: SerialTaskQueue;
@@ -63,7 +84,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
   constructor(
     binding: BindingIdentity,
     generation: number,
-    private readonly client: OpenCodePromptPort,
+    private readonly client: OpenCodePromptPort | null,
     private readonly options: OpenCodeTopicWorkerOptions,
   ) {
     this.bindingId = binding.bindingId;
@@ -80,7 +101,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
   }
 
   get idle(): boolean {
-    return this.#started && !this.#stopped && !this.#poisoned && this.#inFlight.size === 0;
+    return this.#started && !this.#stopped && !this.poisoned && this.#activeRun === null && this.#ownedTask === null && this.#inFlight.size === 0;
   }
 
   get poisoned(): boolean {
@@ -94,6 +115,75 @@ export class OpenCodeTopicWorker implements TopicWorker {
     }
     this.#binding = binding;
     this.#started = true;
+  }
+
+  async executeTask<T>(
+    run: RunIdentity,
+    label: string,
+    operation: (context: OpenCodeTaskContext) => Promise<T>,
+    options: OpenCodeTaskOptions = {},
+  ): Promise<T> {
+    this.#assertRun(run);
+    if (this.poisoned) throw new Error("worker isolation boundary is poisoned");
+    if (this.#ownedTask || this.#inFlight.size > 0) throw new Error("worker already owns an active task");
+    if (this.#activeRun && !sameRun(this.#activeRun, run)) throw new Error("worker already owns an active run");
+
+    const target = this.#normalizeAbortTarget(options.abortTarget === undefined
+      ? { sessionId: run.sessionId, directory: run.normalizedDirectory }
+      : options.abortTarget);
+    const token = {};
+    this.#activeRun = run;
+    this.#activeAbortTarget = target;
+    this.#ownedTask = token;
+    const assertActive = (): void => {
+      if (this.#stopped || this.#ownedTask !== token || !this.#activeRun || !sameRun(this.#activeRun, run)) {
+        throw new Error("owned task is inactive");
+      }
+    };
+
+    try {
+      return await this.#enqueue(label, async (signal) => {
+        assertActive();
+        signal.throwIfAborted();
+        const result = await operation({
+          signal,
+          setAbortTarget: (next) => {
+            assertActive();
+            signal.throwIfAborted();
+            this.#activeAbortTarget = this.#normalizeAbortTarget(next);
+          },
+        });
+        assertActive();
+        signal.throwIfAborted();
+        return result;
+      }, options.timeoutMs);
+    } catch (error) {
+      try {
+        if (!this.#stopped && this.#ownedTask === token && this.#activeAbortTarget) {
+          const failedTarget = this.#activeAbortTarget;
+          await withDeadline((signal) => this.options.abortSession!(failedTarget, signal), {
+            timeoutMs: this.options.stopTimeoutMs, label: "failed task cleanup",
+          });
+        }
+      } catch (cleanupError) {
+        this.#poisoned = true;
+        const failure = new QueuePoisonedError("remote task cleanup failed; worker cannot be reused", cleanupError);
+        void Promise.resolve().then(() => this.options.onIsolationFailure?.(this.#binding, failure)).catch(() => undefined);
+        throw new AggregateError([error, cleanupError], "owned task and remote cleanup failed");
+      } finally {
+        this.complete(run);
+      }
+      throw error;
+    } finally {
+      if (this.#ownedTask === token) this.#ownedTask = null;
+      if (!this.#activeRun && !this.poisoned) this.#activeAbortTarget = null;
+    }
+  }
+
+  complete(run: RunIdentity): void {
+    if (!this.#activeRun || !sameRun(this.#activeRun, run)) return;
+    this.#activeRun = null;
+    if (!this.#ownedTask && !this.poisoned) this.#activeAbortTarget = null;
   }
 
   executePrompt(
@@ -118,14 +208,17 @@ export class OpenCodeTopicWorker implements TopicWorker {
     readonly timeCreated: number;
   }> {
     this.#assertRun(run);
+    const client = this.client;
+    if (!client) throw new Error("OpenCode prompt port is not configured");
+    if (this.#ownedTask) throw new Error("worker already owns an active task");
+    if (this.#activeRun) throw new Error("worker already owns an active run");
     if (this.#poisoned) return Promise.reject(new Error("worker isolation boundary is poisoned"));
 
-    const task = this.#queue.enqueue(
+    return this.#enqueue(
       "prompt:" + run.runId,
-      (taskSignal) => {
-        const signal = AbortSignal.any([taskSignal, this.#controller.signal]);
+      (signal) => {
         signal.throwIfAborted();
-        return this.client.prompt(
+        return client.prompt(
           run.sessionId,
           prompt,
           {
@@ -138,7 +231,12 @@ export class OpenCodeTopicWorker implements TopicWorker {
       },
       this.options.promptTimeoutMs,
     );
+  }
 
+  #enqueue<T>(label: string, operation: (signal: AbortSignal) => Promise<T>, timeoutMs?: number): Promise<T> {
+    const task = this.#queue.enqueue(label, (taskSignal) => operation(
+      AbortSignal.any([taskSignal, this.#controller.signal]),
+    ), timeoutMs);
     this.#inFlight.add(task);
     void task.then(
       () => this.#inFlight.delete(task),
@@ -150,22 +248,33 @@ export class OpenCodeTopicWorker implements TopicWorker {
   async stop(_reason: string): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
+    const target = this.#activeAbortTarget;
+    this.#activeRun = null;
+    this.#activeAbortTarget = null;
     this.#controller.abort(new DOMException("Worker stopped", "AbortError"));
 
-    if (this.#inFlight.size === 0) return;
-    const settled = Promise.allSettled([...this.#inFlight]);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new WorkerStopTimeoutError(this.bindingId, this.options.stopTimeoutMs)),
-        this.options.stopTimeoutMs,
-      );
-    });
+    if (this.#inFlight.size === 0 && !target) return;
     try {
-      await Promise.race([settled, timeout]);
-    } finally {
-      if (timer) clearTimeout(timer);
+      await withDeadline(async (signal) => {
+        await Promise.all([
+          Promise.allSettled([...this.#inFlight]),
+          target ? this.options.abortSession!(target, signal) : Promise.resolve(),
+        ]);
+      }, { timeoutMs: this.options.stopTimeoutMs, label: "worker stop" });
+    } catch (error) {
+      if (error instanceof DeadlineExceededError) throw new WorkerStopTimeoutError(this.bindingId, this.options.stopTimeoutMs);
+      throw error;
     }
+  }
+
+  #normalizeAbortTarget(target: OpenCodeAbortTarget | null): OpenCodeAbortTarget | null {
+    if (target === null) return null;
+    if (path.resolve(target.directory) !== path.resolve(this.#binding.normalizedDirectory)) {
+      throw new Error("abort target must remain in the Topic workspace");
+    }
+    if (!target.sessionId.trim()) throw new Error("abort target requires a session id");
+    if (!this.options.abortSession) throw new Error("OpenCode session abort port is not configured");
+    return Object.freeze({ sessionId: target.sessionId, directory: path.resolve(target.directory) });
   }
 
   #assertRun(run: RunIdentity): void {

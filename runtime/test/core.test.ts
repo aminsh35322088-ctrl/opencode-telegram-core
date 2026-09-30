@@ -30,6 +30,7 @@ class FakeWorker implements TopicWorker {
   constructor(readonly bindingId: string, readonly generation: number) {}
   async start(): Promise<void> {}
   async stop(): Promise<void> { this.stopped = true; }
+  complete(): void { this.idle = true; }
 }
 
 class FakeNativeStreamPort implements NativeMarkdownStreamPort {
@@ -158,6 +159,18 @@ describe("TelegramNativeCore composition", () => {
 
     expect(core.finishRun(run)).toBe(true);
     expect(core.rich.releaseDraft(run, route, draftId!)).toBe(false);
+  });
+
+  test("finishRun completes only the current worker lease", async () => {
+    const { core } = await open();
+    const b = { ...binding("a", 11), normalizedDirectory: path.resolve("/workspace/a") };
+    core.bindings.registry.register(b);
+    const first = await core.beginRun("a", "first");
+    expect(core.finishRun({ ...first, runId: "foreign" })).toBe(false);
+    expect(core.workers.idleCount()).toBe(0);
+    expect(core.finishRun(first)).toBe(true);
+    expect(core.workers.idleCount()).toBe(1);
+    await core.shutdown();
   });
 
   test("Telegram Stop clears the run's liveness and stuck bookkeeping", async () => {

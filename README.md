@@ -20,7 +20,7 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 - Release: `v1.18.33`
 - Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.33-bot.13-pre.3`
+- Telegram Core version: `1.18.33-bot.13-pre.4`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -36,6 +36,7 @@ The native runtime is under `runtime/`. Its main contracts include:
 - durable atomic binding persistence and crash-safe delete tombstones,
 - one mutable execution boundary per Telegram binding/topic,
 - per-binding OpenCode prompt workers and serialized queues,
+- Core-owned application tasks with exact run leases, workspace-bound temporary abort targets, and bounded remote cleanup,
 - bounded deadlines, cancellation, provider retry ceilings, liveness and stuck-loop detection,
 - rolling bounded subagent fan-out with per-parent/global admission caps, child-local deadlines, and sibling failure isolation,
 - optional Telegram process-budget admission for shell/MCP/LSP/PTY/utility/helper children, enforced against cgroup memory headroom and global/category concurrency ceilings,

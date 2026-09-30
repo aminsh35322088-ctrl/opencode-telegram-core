@@ -119,7 +119,9 @@ export class TelegramNativeCore {
     this.rich.releaseRun(run);
     this.liveness.clear(run);
     this.stuck.clear(run);
-    return this.runs.finish(run);
+    const finished = this.runs.finish(run);
+    if (finished) this.workers.complete(run);
+    return finished;
   }
 
   async rotateBinding(
