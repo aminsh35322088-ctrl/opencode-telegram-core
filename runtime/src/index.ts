@@ -23,6 +23,7 @@ export * from "./opencode/session-client.js";
 export * from "./opencode/session-event-pump.js";
 export * from "./opencode/session-event-router.js";
 export * from "./opencode/topic-worker.js";
+export * from "./opencode/temporary-session.js";
 export * from "./scheduler/task-dispatcher.js";
 export * from "./telegram/api-budget.js";
 export * from "./telegram/conformance.js";

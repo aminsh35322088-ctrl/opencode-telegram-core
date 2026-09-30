@@ -6,6 +6,7 @@ import path from "node:path";
 import { DeadlineExceededError, withDeadline } from "../runtime/deadline.js";
 import { sameBinding, sameRun, type BindingIdentity, type RunIdentity } from "../runtime/identity.js";
 import type { TopicWorker, WorkerFactory } from "../runtime/worker-supervisor.js";
+import { TemporarySessionRunner, type TemporarySessionLease, type TemporarySessionOptions, type TemporarySessionPort } from "./temporary-session.js";
 
 export interface OpenCodePromptPort {
   prompt(
@@ -45,6 +46,7 @@ export interface OpenCodeTopicWorkerOptions {
   readonly cancellationGraceMs: number;
   readonly stopTimeoutMs: number;
   readonly abortSession?: (target: OpenCodeAbortTarget, signal: AbortSignal) => Promise<void>;
+  readonly temporarySessionPort?: TemporarySessionPort;
   readonly onIsolationFailure?: (
     binding: BindingIdentity,
     error: QueuePoisonedError,
@@ -59,6 +61,7 @@ export interface OpenCodeAbortTarget {
 export interface OpenCodeTaskContext {
   readonly signal: AbortSignal;
   setAbortTarget(target: OpenCodeAbortTarget | null): void;
+  withTemporarySession<T>(options: TemporarySessionOptions, operation: (session: TemporarySessionLease) => Promise<T>): Promise<T>;
 }
 
 export interface OpenCodeTaskOptions {
@@ -136,6 +139,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
     this.#activeAbortTarget = target;
     this.#ownedTask = token;
     const assertActive = (): void => {
+      if (this.poisoned) throw new Error("worker isolation boundary is poisoned");
       if (this.#stopped || this.#ownedTask !== token || !this.#activeRun || !sameRun(this.#activeRun, run)) {
         throw new Error("owned task is inactive");
       }
@@ -145,14 +149,40 @@ export class OpenCodeTopicWorker implements TopicWorker {
       return await this.#enqueue(label, async (signal) => {
         assertActive();
         signal.throwIfAborted();
+        let temporaryActive = false;
         const result = await operation({
           signal,
           setAbortTarget: (next) => {
             assertActive();
             signal.throwIfAborted();
+            if (temporaryActive) throw new Error("temporary session owns the abort target");
             this.#activeAbortTarget = this.#normalizeAbortTarget(next);
           },
+          withTemporarySession: async (sessionOptions, callback) => {
+            assertActive();
+            signal.throwIfAborted();
+            if (temporaryActive) throw new Error("owned task already has an active temporary session");
+            if (!this.options.temporarySessionPort) throw new Error("temporary session port is not configured");
+            temporaryActive = true;
+            const previousTarget = this.#activeAbortTarget;
+            try {
+              return await new TemporarySessionRunner(this.options.temporarySessionPort, this.options.stopTimeoutMs).run(
+                { sessionId: run.sessionId, directory: run.normalizedDirectory }, sessionOptions, callback, signal, {
+                  acquire: (session) => { assertActive(); this.#activeAbortTarget = this.#normalizeAbortTarget(session); },
+                  release: () => {
+                    if (this.#ownedTask === token && this.#activeRun && sameRun(this.#activeRun, run)) this.#activeAbortTarget = previousTarget;
+                  },
+                  cleanupFailed: (error) => {
+                    this.#poisoned = true;
+                    const failure = new QueuePoisonedError("temporary session cleanup failed; worker cannot be reused", error);
+                    void Promise.resolve().then(() => this.options.onIsolationFailure?.(this.#binding, failure)).catch(() => undefined);
+                  },
+                },
+              );
+            } finally { temporaryActive = false; }
+          },
         });
+        if (temporaryActive) throw new Error("owned task returned before temporary session completed");
         assertActive();
         signal.throwIfAborted();
         return result;
