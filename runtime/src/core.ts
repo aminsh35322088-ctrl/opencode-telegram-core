@@ -6,6 +6,7 @@ import { RunRegistry } from "./runtime/run-registry.js";
 import { PerRunStuckDetector } from "./runtime/stuck-detector.js";
 import { WorkerSupervisor, type WorkerFactory } from "./runtime/worker-supervisor.js";
 import { WorkerOutboundGate } from "./ipc/worker-outbound-gate.js";
+import { SessionEventRouter, type SessionParentLookup } from "./opencode/session-event-router.js";
 import {
   RailwayResourceGovernor,
   type RailwayResourceAction,
@@ -32,6 +33,7 @@ export interface TelegramNativeCoreOptions {
   readonly nativeMarkdownStreamPort: NativeMarkdownStreamPort;
   readonly abortRun: (run: RunIdentity, reason: "telegram_stop") => Promise<void>;
   readonly cleanupBinding?: (binding: BindingIdentity) => Promise<void>;
+  readonly resolveSessionParent?: SessionParentLookup;
   readonly admissionPolicy: TelegramAdmissionPolicy;
   readonly railwayPolicy: RailwayResourcePolicy;
   readonly stuckRepeatThreshold?: number;
@@ -42,6 +44,7 @@ export class TelegramNativeCore {
   readonly runs = new RunRegistry();
   readonly workers: WorkerSupervisor;
   readonly outbound: OutboundGateway;
+  readonly events: SessionEventRouter;
   readonly rich: TelegramRichStreamController;
   readonly liveness: RunLivenessTracker;
   readonly stuck: PerRunStuckDetector;
@@ -49,6 +52,7 @@ export class TelegramNativeCore {
 
   private constructor(private readonly options: TelegramNativeCoreOptions) {
     this.bindings = new AtomicBindingStore(options.bindingStorePath);
+    this.events = new SessionEventRouter(this.bindings.registry, this.runs, options.resolveSessionParent);
     this.workers = new WorkerSupervisor(options.workerFactory, {
       maxWorkers: options.railwayPolicy.maxWorkers,
     });

@@ -1,0 +1,76 @@
+name: Build Core prerelease
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: core-prerelease
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout verified Core commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Select unreleased prerelease
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("upstream/lock.json"))["telegramCoreVersion"])')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-bot\.[0-9]+-pre\.[0-9]+$ ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        if: steps.release.outputs.publish == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Node.js
+        if: steps.release.outputs.publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Build compatibility unit
+        if: steps.release.outputs.publish == 'true'
+        run: |
+          ./scripts/build-runtime.sh
+          ./scripts/build-sdk.sh
+          ./scripts/run-compatibility.sh
+          ./scripts/package-release.sh
+          ./scripts/verify-release.sh
+
+      - name: Publish verified prerelease
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          source_commit="$(git rev-parse HEAD)"
+          gh release create "$RELEASE_TAG" dist/release/* \
+            --target "$source_commit" --prerelease \
+            --title "OpenCode Telegram Core $RELEASE_TAG" \
+            --notes "Verified Core runtime, SDK, and native runtime from $source_commit. CI, runtime compatibility, release identity, and artifact checksums passed."
