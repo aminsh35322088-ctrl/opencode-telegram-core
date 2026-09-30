@@ -7,6 +7,7 @@ import { PerRunStuckDetector } from "./runtime/stuck-detector.js";
 import { WorkerSupervisor, type WorkerFactory } from "./runtime/worker-supervisor.js";
 import { WorkerOutboundGate } from "./ipc/worker-outbound-gate.js";
 import { SessionEventRouter, type SessionParentLookup } from "./opencode/session-event-router.js";
+import { OpenCodeTopicWorker, type OpenCodeTaskContext, type OpenCodeTaskOptions } from "./opencode/topic-worker.js";
 import {
   RailwayResourceGovernor,
   type RailwayResourceAction,
@@ -122,6 +123,25 @@ export class TelegramNativeCore {
     const finished = this.runs.finish(run);
     if (finished) this.workers.complete(run);
     return finished;
+  }
+
+  async dispatchTask<T>(
+    run: RunIdentity,
+    label: string,
+    operation: (context: OpenCodeTaskContext) => Promise<T>,
+    options: OpenCodeTaskOptions = {},
+  ): Promise<T> {
+    if (!this.runs.accepts(run)) throw new Error("Core run was fenced before task dispatch");
+    const binding = this.bindings.registry.getExact(run);
+    if (!binding) throw new Error("Core binding changed before task dispatch");
+    const worker = await this.workers.ensure(binding);
+    if (!this.runs.accepts(run) || !this.bindings.registry.getExact(run)) {
+      throw new Error("Core run was fenced during worker acquisition");
+    }
+    if (!(worker instanceof OpenCodeTopicWorker) || worker.generation !== run.workerGeneration || !this.workers.isCurrent(binding, worker)) {
+      throw new Error("Core worker changed before task dispatch");
+    }
+    return worker.executeTask(run, label, operation, options);
   }
 
   async rotateBinding(

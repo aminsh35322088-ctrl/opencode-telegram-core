@@ -10,6 +10,8 @@ import {
   type RichDraftRoute,
   type RichMessagePort,
   type TopicWorker,
+  type WorkerFactory,
+  OpenCodeTopicWorker,
 } from "../src/index.js";
 
 function binding(id: string, threadId: number): BindingIdentity {
@@ -67,13 +69,14 @@ describe("TelegramNativeCore composition", () => {
     root = undefined;
   });
 
-  async function open() {
+  async function open(factory?: WorkerFactory) {
     root = await mkdtemp(path.join(os.tmpdir(), "otc-core-"));
     const workers = new Map<string, FakeWorker>();
     const aborted: string[] = [];
     const core = await TelegramNativeCore.open({
       bindingStorePath: path.join(root, "bindings.json"),
       workerFactory: (b, generation) => {
+        if (factory) return factory(b, generation);
         const worker = new FakeWorker(b.bindingId, generation);
         workers.set(b.bindingId, worker);
         return worker;
@@ -170,6 +173,23 @@ describe("TelegramNativeCore composition", () => {
     expect(core.workers.idleCount()).toBe(0);
     expect(core.finishRun(first)).toBe(true);
     expect(core.workers.idleCount()).toBe(1);
+    await core.shutdown();
+  });
+
+  test("owned task dispatch rechecks admission after acquiring its worker", async () => {
+    const { core } = await open((b, generation) => new OpenCodeTopicWorker(b, generation, null, {
+      promptTimeoutMs: 1_000, cancellationGraceMs: 10, stopTimeoutMs: 50,
+    }));
+    core.bindings.registry.register({ ...binding("a", 11), normalizedDirectory: path.resolve("/workspace/a") });
+    const first = await core.beginRun("a", "first");
+    let calls = 0;
+    const dispatched = core.dispatchTask(first, "late", async () => ++calls, { abortTarget: null });
+    core.finishRun(first);
+    await expect(dispatched).rejects.toThrow("fenced");
+    expect(calls).toBe(0);
+    const next = await core.beginRun("a", "next");
+    expect(await core.dispatchTask(next, "current", async () => ++calls, { abortTarget: null })).toBe(1);
+    core.finishRun(next);
     await core.shutdown();
   });
 
