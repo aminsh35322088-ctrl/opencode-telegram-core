@@ -75,3 +75,24 @@ test("stop during child creation fences the callback and cleans the late child",
   expect(aborted).toEqual(["parent", "child"]);
   expect(removed).toEqual(["child"]);
 });
+
+test("worker polling rejects output after exact run completion", async () => {
+  const { worker } = fixture();
+  await worker.start(run);
+  await expect(worker.executeTask(run, "poll", (context) => context.poll(async () => {
+    worker.complete(run);
+    return { status: "complete", value: "late output" };
+  }, { timeoutMs: 100, intervalMs: 1, maxAttempts: 2 }))).rejects.toThrow("no longer current");
+});
+
+test("a saved polling context cannot start reads for a replacement run", async () => {
+  const { worker } = fixture();
+  await worker.start(run);
+  let old!: import("../src/index.js").OpenCodeTaskContext;
+  await worker.executeTask(run, "save", async (context) => { old = context; });
+  worker.complete(run);
+  await worker.executeTask({ ...run, runId: "replacement" }, "next", async () => {});
+  let reads = 0;
+  expect(() => old.poll(async () => { reads++; return { status: "complete", value: "unsafe" }; }, { timeoutMs: 100, intervalMs: 1, maxAttempts: 2 })).toThrow("inactive");
+  expect(reads).toBe(0);
+});

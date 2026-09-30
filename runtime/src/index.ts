@@ -7,6 +7,7 @@ export * from "./runtime/identity.js";
 export * from "./runtime/liveness-tracker.js";
 export * from "./runtime/outbound-gateway.js";
 export * from "./runtime/run-registry.js";
+export * from "./runtime/result-poller.js";
 export * from "./runtime/serial-task-queue.js";
 export * from "./runtime/stuck-detector.js";
 export * from "./runtime/terminal-state.js";

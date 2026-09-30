@@ -7,6 +7,7 @@ import { DeadlineExceededError, withDeadline } from "../runtime/deadline.js";
 import { sameBinding, sameRun, type BindingIdentity, type RunIdentity } from "../runtime/identity.js";
 import type { TopicWorker, WorkerFactory } from "../runtime/worker-supervisor.js";
 import { TemporarySessionRunner, type TemporarySessionLease, type TemporarySessionOptions, type TemporarySessionPort } from "./temporary-session.js";
+import { pollRunResult, type PollOutcome, type PollOptions } from "../runtime/result-poller.js";
 
 export interface OpenCodePromptPort {
   prompt(
@@ -62,6 +63,7 @@ export interface OpenCodeTaskContext {
   readonly signal: AbortSignal;
   setAbortTarget(target: OpenCodeAbortTarget | null): void;
   withTemporarySession<T>(options: TemporarySessionOptions, operation: (session: TemporarySessionLease) => Promise<T>): Promise<T>;
+  poll<T>(read: (signal: AbortSignal) => Promise<PollOutcome<T>>, options: Pick<PollOptions, "timeoutMs" | "intervalMs" | "maxAttempts">): Promise<T>;
 }
 
 export interface OpenCodeTaskOptions {
@@ -152,6 +154,12 @@ export class OpenCodeTopicWorker implements TopicWorker {
         let temporaryActive = false;
         const result = await operation({
           signal,
+          poll: (read, pollOptions) => {
+            assertActive();
+            return pollRunResult(run, read, { ...pollOptions, signal, isCurrent: () => {
+              try { assertActive(); return true; } catch { return false; }
+            } });
+          },
           setAbortTarget: (next) => {
             assertActive();
             signal.throwIfAborted();

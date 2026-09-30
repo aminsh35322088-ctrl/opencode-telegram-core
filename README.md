@@ -20,7 +20,7 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 - Release: `v1.18.33`
 - Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.33-bot.13-pre.6`
+- Telegram Core version: `1.18.33-bot.13-pre.7`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -29,6 +29,8 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 The machine-readable upstream/release source of truth is `upstream/lock.json`. Materialization fails closed if the configured tag does not resolve to the exact locked commit.
 
 ## Telegram-native runtime
+
+The migration remains on prereleases. See [migration and release gates](docs/MIGRATION_TO_V1.md) and [owned result polling](docs/RESULT_POLLING.md). Stable publication requires the complete ownership audit and a healthy production RC soak.
 
 The native runtime is under `runtime/`. Its main contracts include:
 
