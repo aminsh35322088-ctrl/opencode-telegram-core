@@ -95,4 +95,19 @@ describe("SessionEventRouter", () => {
     const failing = new SessionEventRouter(bindings, runs, async () => { throw new Error("offline"); });
     expect(await failing.resolve("child", directory)).toBeNull();
   });
+
+  test("bounds a stalled parent lookup and cancels its transport", async () => {
+    const bindings = new BindingRegistry();
+    const runs = new RunRegistry();
+    const a = binding("a", 11);
+    bindings.register(a);
+    runs.start(a, 1);
+    let transportSignal: AbortSignal | undefined;
+    const router = new SessionEventRouter(bindings, runs, (_id, _directory, signal) => {
+      transportSignal = signal;
+      return new Promise(() => {});
+    }, 5);
+    expect(await router.resolve("child", directory)).toBeNull();
+    expect(transportSignal?.aborted).toBe(true);
+  });
 });

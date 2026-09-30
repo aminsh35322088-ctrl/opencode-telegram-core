@@ -1,10 +1,12 @@
 import type { BindingRegistry } from "../runtime/binding-registry.js";
 import { sameBinding, type BindingIdentity } from "../runtime/identity.js";
 import type { RunRegistry } from "../runtime/run-registry.js";
+import { withDeadline } from "../runtime/deadline.js";
 
 export type SessionParentLookup = (
   sessionId: string,
   normalizedDirectory: string,
+  signal: AbortSignal,
 ) => Promise<string | null>;
 
 const MAX_PARENT_DEPTH = 32;
@@ -18,6 +20,7 @@ export class SessionEventRouter {
     private readonly bindings: BindingRegistry,
     private readonly runs: RunRegistry,
     private readonly lookupParent?: SessionParentLookup,
+    private readonly lookupTimeoutMs = 10_000,
   ) {}
 
   async resolve(sessionId: string | null, normalizedDirectory: string | null): Promise<BindingIdentity | null> {
@@ -42,35 +45,38 @@ export class SessionEventRouter {
     });
     if (owners.length === 0) return null;
 
-    const visited = new Set<string>();
-    let current = sessionId;
-    for (let depth = 0; depth < MAX_PARENT_DEPTH; depth += 1) {
-      if (visited.has(current)) return null;
-      visited.add(current);
-      let parent: string | null;
-      try {
-        parent = await this.#parent(current, normalizedDirectory);
-      } catch {
+    try {
+      return await withDeadline(async (signal) => {
+        const visited = new Set<string>();
+        let current = sessionId;
+        for (let depth = 0; depth < MAX_PARENT_DEPTH; depth += 1) {
+          if (visited.has(current)) return null;
+          visited.add(current);
+          const parent = await this.#parent(current, normalizedDirectory, signal);
+          if (!parent) return null;
+          const ancestors = snapshot.filter(binding => binding.sessionId === parent);
+          if (ancestors.length > 0) {
+            if (ancestors.filter(binding => binding.normalizedDirectory === normalizedDirectory).length !== 1) return null;
+            const matches = owners.filter(owner => owner.binding.sessionId === parent);
+            if (matches.length !== 1) return null;
+            const owner = matches[0]!;
+            return this.runs.accepts(owner.run) ? this.bindings.getExact(owner.binding) : null;
+          }
+          current = parent;
+        }
         return null;
-      }
-      if (!parent) return null;
-      const ancestors = snapshot.filter(binding => binding.sessionId === parent);
-      if (ancestors.length > 0) {
-        if (ancestors.filter(binding => binding.normalizedDirectory === normalizedDirectory).length !== 1) return null;
-        const matches = owners.filter(owner => owner.binding.sessionId === parent);
-        if (matches.length !== 1) return null;
-        const owner = matches[0]!;
-        return this.runs.accepts(owner.run) ? this.bindings.getExact(owner.binding) : null;
-      }
-      current = parent;
+      }, { timeoutMs: this.lookupTimeoutMs, label: "session event ancestry" });
+    } catch {
+      return null;
     }
-    return null;
   }
 
-  async #parent(sessionId: string, directory: string): Promise<string | null> {
+  async #parent(sessionId: string, directory: string, signal: AbortSignal): Promise<string | null> {
+    signal.throwIfAborted();
     const key = JSON.stringify([directory, sessionId]);
     if (this.#parents.has(key)) return this.#parents.get(key)!;
-    const parent = await this.lookupParent!(sessionId, directory);
+    const parent = await this.lookupParent!(sessionId, directory, signal);
+    signal.throwIfAborted();
     if (parent !== null && (typeof parent !== "string" || parent.length === 0)) {
       throw new Error("invalid session parent identity");
     }
