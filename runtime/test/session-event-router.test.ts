@@ -70,14 +70,19 @@ describe("SessionEventRouter", () => {
     bindings.register(a);
     runs.start(a, 1, "run-a");
     let release!: (parent: string | null) => void;
-    const router = new SessionEventRouter(bindings, runs, () => new Promise(resolve => { release = resolve; }));
+    let started!: () => void;
+    let lookupStarted = new Promise<void>((resolve) => { started = resolve; });
+    const router = new SessionEventRouter(bindings, runs, () => new Promise(resolve => { release = resolve; started(); }));
     const pending = router.resolve("child", directory);
+    await lookupStarted;
     runs.fence("a");
     runs.start(a, 1, "run-b");
     release("session-a");
     expect(await pending).toBeNull();
 
+    lookupStarted = new Promise<void>((resolve) => { started = resolve; });
     const pendingRotation = router.resolve("another-child", directory);
+    await lookupStarted;
     bindings.replace({ ...a, sessionId: "session-new", bindingGeneration: 2 }, 1);
     runs.fence("a");
     release("session-a");
