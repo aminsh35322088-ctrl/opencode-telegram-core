@@ -645,76 +645,61 @@ index d8ca640..ec893b4 100644
  
      return {
 diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
-index da6e0f8..a20c0e5 100644
+index da6e0f8..60b05be 100644
 --- a/packages/opencode/test/session/prompt.test.ts
 +++ b/packages/opencode/test/session/prompt.test.ts
 @@ -7,6 +7,7 @@ import { eq } from "drizzle-orm"
  import { EventV2Bridge } from "@/event-v2-bridge"
  import { expect } from "bun:test"
  import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
-+import { ChildProcessSpawner } from "effect/unstable/process"
++import { readFileSync, readdirSync } from "node:fs"
  import path from "path"
  import { fileURLToPath } from "url"
  import { NamedError } from "@opencode-ai/core/util/error"
-@@ -336,6 +337,57 @@ const waitForBusy = (sessionID: SessionID, duration: Duration.Input = "2 seconds
+@@ -336,6 +337,42 @@ const waitForBusy = (sessionID: SessionID, duration: Duration.Input = "2 seconds
      duration,
    )
  
-+// Test-only evidence for intermittent cancellation stalls. Read process state
-+// without spawning a diagnostic process or changing the cleanup path.
-+const traceShellProcesses = (snapshot: { pending: number; pids: number[] }) =>
-+  Effect.gen(function* () {
-+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-+    const original = spawner.spawn
-+    const descriptor = Object.getOwnPropertyDescriptor(spawner, "spawn")
-+    const traced: typeof original = (command) =>
-+      Effect.suspend(() => {
-+        snapshot.pending += 1
-+        return original(command).pipe(
-+          Effect.tap((handle) =>
-+            Effect.sync(() => {
-+              snapshot.pids.push(Number(handle.pid))
-+            }),
-+          ),
-+          Effect.ensuring(
-+            Effect.sync(() => {
-+              snapshot.pending -= 1
-+            }),
-+          ),
-+        )
-+      })
-+    Object.defineProperty(spawner, "spawn", { configurable: true, value: traced })
-+    yield* Effect.addFinalizer(() =>
-+      Effect.sync(() => {
-+        if (descriptor) Object.defineProperty(spawner, "spawn", descriptor)
-+        else Reflect.deleteProperty(spawner, "spawn")
-+      }),
-+    )
-+  })
-+
-+function shellProcessSnapshot(snapshot: { pending: number; pids: number[] }) {
-+  const alive = (pid: number) => {
++// Read only when a test stalls; leave the execution/spawner path untouched.
++function shellProcessSnapshot() {
++  const processes: Array<{ pid: number; parent: number; group: number; state: string }> = []
++  const pending = [process.pid]
++  const visited = new Set<number>()
++  if (process.platform !== "linux") return processes
++  while (pending.length && visited.size < 64) {
++    const parent = pending.shift()!
++    if (visited.has(parent)) continue
++    visited.add(parent)
 +    try {
-+      process.kill(pid, 0)
-+      return true
++      const children = readdirSync(`/proc/${parent}/task`).flatMap((thread) => {
++        try {
++          return readFileSync(`/proc/${parent}/task/${thread}/children`, "utf8").trim().split(/\s+/)
++        } catch {
++          return []
++        }
++      })
++      for (const pid of children.map(Number).filter((pid) => pid > 0)) {
++        if (processes.length >= 64) return processes
++        try {
++          const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
++          const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
++          processes.push({ pid, parent, group: Number(fields[2]), state: fields[0]! })
++          pending.push(pid)
++        } catch {
++          /* Process exited during the observation. */
++        }
++      }
 +    } catch {
-+      return false
++      /* Parent exited during the observation. */
 +    }
 +  }
-+  return {
-+    pending: snapshot.pending,
-+    processes: snapshot.pids.map((pid) => ({
-+      pid,
-+      leader: alive(pid),
-+      group: process.platform !== "win32" && alive(-pid),
-+    })),
-+  }
++  return processes
 +}
 +
  const hasBash = Effect.sync(() => Bun.which("bash") !== null)
  
  const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> => ({
-@@ -1016,6 +1068,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
+@@ -1016,6 +1053,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
    }),
  )
  
@@ -748,7 +733,7 @@ index da6e0f8..a20c0e5 100644
  noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
    Effect.gen(function* () {
      const prompt = yield* SessionPrompt.Service
-@@ -1986,9 +2065,16 @@ unix(
+@@ -1986,8 +2050,13 @@ unix(
  
  unixNoLLMServer(
    "cancel interrupts loop queued behind shell",
@@ -756,18 +741,15 @@ index da6e0f8..a20c0e5 100644
 -    Effect.gen(function* () {
 +  () => {
 +    let phase = "setup"
-+    const processes = { pending: 0, pids: [] as number[] }
 +    const watchdog = setTimeout(
-+      () => console.error(`queued shell cancellation stalled at: ${phase}`, shellProcessSnapshot(processes)),
++      () => console.error(`queued shell cancellation stalled at: ${phase}`, shellProcessSnapshot()),
 +      5_000,
 +    )
 +    return Effect.gen(function* () {
        const { prompt, chat } = yield* boot()
-+      yield* traceShellProcesses(processes)
  
        const sh = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "sleep 30" }).pipe(Effect.forkChild)
-       yield* waitForBusy(chat.id)
-@@ -1996,8 +2082,10 @@ unixNoLLMServer(
+@@ -1996,8 +2065,10 @@ unixNoLLMServer(
        const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
        yield* Effect.sleep(50)
  
@@ -778,7 +760,7 @@ index da6e0f8..a20c0e5 100644
        const exit = yield* Fiber.await(loop)
        expect(Exit.isSuccess(exit)).toBe(true)
        if (Exit.isSuccess(exit)) {
-@@ -2005,38 +2093,112 @@ unixNoLLMServer(
+@@ -2005,16 +2076,23 @@ unixNoLLMServer(
          expect(tool?.state.output).toContain("User aborted the command")
        }
  
@@ -797,18 +779,15 @@ index da6e0f8..a20c0e5 100644
 -    withSh(() =>
 +  () => {
 +    let phase = "setup"
-+    const processes = { pending: 0, pids: [] as number[] }
 +    const watchdog = setTimeout(
-+      () => console.error(`exclusive shell cancellation stalled at: ${phase}`, shellProcessSnapshot(processes)),
++      () => console.error(`exclusive shell cancellation stalled at: ${phase}`, shellProcessSnapshot()),
 +      5_000,
 +    )
 +    return withSh(() =>
        Effect.gen(function* () {
          const { prompt, chat } = yield* boot()
-+        yield* traceShellProcesses(processes)
  
-         const a = yield* prompt
-           .shell({ sessionID: chat.id, agent: "build", command: "sleep 30" })
+@@ -2023,20 +2101,85 @@ unixNoLLMServer(
            .pipe(Effect.forkChild)
          yield* waitForBusy(chat.id)
  
