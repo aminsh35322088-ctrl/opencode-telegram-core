@@ -45,6 +45,14 @@ racing a rich mutation. Full Linux CI and aligned artifact checks precede Bot us
 
 ## Audit and stability matrix
 
+Current stability gate: Linux validation reproduced intermittent stalls inside
+`SessionPrompt.cancel` for a shell with a queued model turn and for an exclusive
+shell. The complete suite can pass immediately before the focused repeat fails.
+Five repetitions of those two cases now run after the upstream suite; test-only
+watchdogs report the blocked caller stage and Linux child process state. A passing
+rerun does not close this gate. Identify and fix the cancellation cause before
+claiming the runtime stable or deploying the pause migration to the Bot.
+
 After all three tasks, audit both repositories for duplicated Core responsibilities, unjustified shims, bypass routes, ambiguous identity, General/ALL execution, stale/late delivery, lifecycle ownership and artifact identity.
 
 The stability pass must exercise concurrent Topics/sub-agents; pause/resume and parent abort; rotate/delete and crash/recovery; request/transport failure; scheduled tasks; file/tool/SSH isolation; custom processes; polling cancellation/timeout; memory pressure; SQLite recovery and restarts. Run both complete CI suites, all builds, artifact/install verification and Railway Core smoke. A Windows directory-fsync limitation is not a Linux production workaround.

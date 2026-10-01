@@ -645,7 +645,7 @@ index d8ca640..ec893b4 100644
  
      return {
 diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
-index da6e0f8..60b05be 100644
+index da6e0f8..26c5299 100644
 --- a/packages/opencode/test/session/prompt.test.ts
 +++ b/packages/opencode/test/session/prompt.test.ts
 @@ -7,6 +7,7 @@ import { eq } from "drizzle-orm"
@@ -656,7 +656,7 @@ index da6e0f8..60b05be 100644
  import path from "path"
  import { fileURLToPath } from "url"
  import { NamedError } from "@opencode-ai/core/util/error"
-@@ -336,6 +337,42 @@ const waitForBusy = (sessionID: SessionID, duration: Duration.Input = "2 seconds
+@@ -336,6 +337,61 @@ const waitForBusy = (sessionID: SessionID, duration: Duration.Input = "2 seconds
      duration,
    )
  
@@ -696,10 +696,29 @@ index da6e0f8..60b05be 100644
 +  return processes
 +}
 +
++// Diagnostic reads of the locked Effect runtime; never serialize its Context.
++function shellFiberSnapshot(fiber: Fiber.Fiber<unknown, unknown> | undefined, seen = new Set<number>()): unknown {
++  if (!fiber || seen.has(fiber.id) || seen.size >= 32) return undefined
++  seen.add(fiber.id)
++  const runtime = fiber as Fiber.Fiber<unknown, unknown> & {
++    readonly interruptible?: boolean
++    readonly _children?: Set<Fiber.Fiber<unknown, unknown>>
++  }
++  const frames: string[] = []
++  for (let frame = fiber.currentStackFrame; frame && frames.length < 16; frame = frame.parent) frames.push(frame.name)
++  return {
++    id: fiber.id,
++    done: fiber.pollUnsafe() !== undefined,
++    interruptible: runtime.interruptible,
++    frames,
++    children: [...(runtime._children ?? [])].map((child) => shellFiberSnapshot(child, seen)),
++  }
++}
++
  const hasBash = Effect.sync(() => Bun.which("bash") !== null)
  
  const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> => ({
-@@ -1016,6 +1053,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
+@@ -1016,6 +1072,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
    }),
  )
  
@@ -733,7 +752,7 @@ index da6e0f8..60b05be 100644
  noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
    Effect.gen(function* () {
      const prompt = yield* SessionPrompt.Service
-@@ -1986,8 +2050,13 @@ unix(
+@@ -1986,9 +2069,21 @@ unix(
  
  unixNoLLMServer(
    "cancel interrupts loop queued behind shell",
@@ -741,15 +760,23 @@ index da6e0f8..60b05be 100644
 -    Effect.gen(function* () {
 +  () => {
 +    let phase = "setup"
++    let diagnosticFiber: Fiber.Fiber<unknown, unknown> | undefined
 +    const watchdog = setTimeout(
-+      () => console.error(`queued shell cancellation stalled at: ${phase}`, shellProcessSnapshot()),
++      () =>
++        console.error(
++          `queued shell cancellation stalled at: ${phase}`,
++          shellProcessSnapshot(),
++          JSON.stringify(shellFiberSnapshot(diagnosticFiber)),
++        ),
 +      5_000,
 +    )
 +    return Effect.gen(function* () {
        const { prompt, chat } = yield* boot()
++      diagnosticFiber = Fiber.getCurrent()
  
        const sh = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "sleep 30" }).pipe(Effect.forkChild)
-@@ -1996,8 +2065,10 @@ unixNoLLMServer(
+       yield* waitForBusy(chat.id)
+@@ -1996,8 +2091,10 @@ unixNoLLMServer(
        const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
        yield* Effect.sleep(50)
  
@@ -760,7 +787,7 @@ index da6e0f8..60b05be 100644
        const exit = yield* Fiber.await(loop)
        expect(Exit.isSuccess(exit)).toBe(true)
        if (Exit.isSuccess(exit)) {
-@@ -2005,16 +2076,23 @@ unixNoLLMServer(
+@@ -2005,38 +2102,117 @@ unixNoLLMServer(
          expect(tool?.state.output).toContain("User aborted the command")
        }
  
@@ -779,15 +806,23 @@ index da6e0f8..60b05be 100644
 -    withSh(() =>
 +  () => {
 +    let phase = "setup"
++    let diagnosticFiber: Fiber.Fiber<unknown, unknown> | undefined
 +    const watchdog = setTimeout(
-+      () => console.error(`exclusive shell cancellation stalled at: ${phase}`, shellProcessSnapshot()),
++      () =>
++        console.error(
++          `exclusive shell cancellation stalled at: ${phase}`,
++          shellProcessSnapshot(),
++          JSON.stringify(shellFiberSnapshot(diagnosticFiber)),
++        ),
 +      5_000,
 +    )
 +    return withSh(() =>
        Effect.gen(function* () {
          const { prompt, chat } = yield* boot()
++        diagnosticFiber = Fiber.getCurrent()
  
-@@ -2023,20 +2101,85 @@ unixNoLLMServer(
+         const a = yield* prompt
+           .shell({ sessionID: chat.id, agent: "build", command: "sleep 30" })
            .pipe(Effect.forkChild)
          yield* waitForBusy(chat.id)
  
