@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+tree="${1:?usage: install-runtime-overlays.sh WORKTREE [--tests]}"
+[[ -d "$tree/packages/core/src" ]] || die "upstream Core source missing"
+cp "$CORE_ROOT/runtime/upstream/session-execution-control.ts" "$tree/packages/core/src/session-execution-control.ts"
+cp "$CORE_ROOT/runtime/upstream/telegram-execution-context.ts" "$tree/packages/core/src/telegram-execution-context.ts"
+cp "$CORE_ROOT/runtime/src/runtime/deadline.ts" "$tree/packages/core/src/telegram-deadline.ts"
+if [[ "${2:-}" == "--tests" ]]; then
+  mkdir -p "$tree/packages/opencode/test/telegram"
+  cp "$CORE_ROOT"/runtime/upstream/test/*.test.ts "$tree/packages/opencode/test/telegram/"
+fi

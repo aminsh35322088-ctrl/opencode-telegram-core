@@ -45,3 +45,23 @@ jobs:
 
       - name: Test toolchain and release contracts
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  upstream-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+      - name: Verify patched live runtime
+        env:
+          GOMAXPROCS: '4'
+          GOMEMLIMIT: 3GiB
+        run: bash scripts/test-upstream-runtime.sh

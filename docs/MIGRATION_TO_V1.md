@@ -12,6 +12,17 @@ All runtime implementations below belong in this repository. Bot changes are lim
 
 Use focused changes and red/green regression tests per task. Keep SDK, native library and Linux runtime aligned in each immutable prerelease. Document API changes and migration notes in README/CHANGELOG; final public release notes remain deferred.
 
+### Pause integration boundaries
+
+The Bot currently uses the upstream legacy `SessionPrompt`/`SessionRunState` execution path. Live gates now integrate there in unreleased source, with the runtime control API, model phase fencing, and retained background task ownership covered by Core tests. See [the pause contract and remaining gates](PAUSE_RESUME.md). The shared execution authority runs in the upstream runtime; native clients consume its API. The published Bot pin remains pre.7 while native/process/delivery integration is incomplete.
+
+- Capture the runtime execution lease once per model stream/tool invocation. Checkpoints before model/tool admission and stream/output processing retain the same live continuation across pause/resume; late callbacks cannot look up a replacement lease.
+- Scope control to the canonical workspace plus session and an opaque run token. The native adapter additionally verifies the complete Topic/binding/run/generation identity before runtime control requests. Pause/resume payloads must include the captured runtime token and reject replacement or recovered owners.
+- Persist paused intent before acknowledging pause. Resume must clear durable intent before opening gates. After process loss, report that a live continuation is unavailable; never implicitly recreate a model/tool run or replay side effects to simulate resume.
+- Ordinary parent completion must retain control of background children. Hold the logical run's busy/ownership boundary until the last child completes. Destructive abort/rotate/delete/disposal retires the owned tree; closing a Telegram view does not enter this path.
+- Keep custom processes on the existing process governor and attach lifecycle hooks to the same captured execution lease. Resource transition failure fences the whole tree, attempts to re-suspend already resumed resources, and requires explicit cleanup. Failed termination quarantines the workspace, including existing and future owners.
+- Verify delayed child events against their original logical run. Session ancestry alone cannot establish that a background child created in an earlier run belongs to a later run using the same root session. This remains part of the runtime integration and final routing audit.
+
 ## Review focus
 
 - A read or process spawn finishes after its owner is rotated or deleted: reject output and clean the exact old child.

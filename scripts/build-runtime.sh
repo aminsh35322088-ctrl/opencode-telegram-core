@@ -9,6 +9,7 @@ tree="$CORE_ROOT/.work/opencode"
 
 "$CORE_ROOT/scripts/materialize-upstream.sh" "$tree"
 "$CORE_ROOT/scripts/apply-patches.sh" "$tree"
+bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree"
 "$BUN" install --cwd "$tree" --frozen-lockfile
 
 telegram_core_version="$(json_get telegramCoreVersion)"

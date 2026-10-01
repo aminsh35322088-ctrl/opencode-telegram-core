@@ -1,17 +1,40 @@
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 0f85d44..7ace3fb 100644
+index 0f85d44..87daf84 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -44,7 +44,7 @@ import { decodeDataUrl } from "@/util/data-url"
+@@ -44,8 +44,9 @@ import { decodeDataUrl } from "@/util/data-url"
  import { Process } from "@/util/process"
  import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
  import { InstanceState } from "@/effect/instance-state"
 -import { TaskTool, type TaskPromptOps } from "@/tool/task"
 +import { TaskTool, TELEGRAM_SUBAGENT_CONCURRENCY, type TaskPromptOps } from "@/tool/task"
  import { SessionRunState } from "./run-state"
++import { checkpoint } from "@opencode-ai/core/telegram-execution-context"
  import { RuntimeFlags } from "@/effect/runtime-flags"
  import { EventV2Bridge } from "@/event-v2-bridge"
-@@ -396,7 +396,10 @@ const layer = Layer.effect(
+ import { Database } from "@opencode-ai/core/database/database"
+@@ -100,7 +101,7 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
+ }
+ 
+ export interface Interface {
+-  readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
++  readonly cancel: (sessionID: SessionID, runId?: string) => Effect.Effect<void>
+   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
+   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
+@@ -149,9 +150,9 @@ const layer = Layer.effect(
+       } satisfies TaskPromptOps
+     })
+ 
+-    const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
++    const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID, runId?: string) {
+       yield* Effect.logInfo("cancel", { "session.id": sessionID })
+-      yield* state.cancel(sessionID)
++      yield* state.cancel(sessionID, runId)
+     })
+ 
+     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
+@@ -396,7 +397,10 @@ const layer = Layer.effect(
        assistantMessage.time.completed = Date.now()
        yield* sessions.updateMessage(assistantMessage)
  
@@ -23,16 +46,14 @@ index 0f85d44..7ace3fb 100644
          yield* sessions.updatePart({
            ...part,
            state: {
-@@ -411,17 +414,21 @@ const layer = Layer.effect(
+@@ -411,17 +415,19 @@ const layer = Layer.effect(
          } satisfies SessionV1.ToolPart)
        }
  
 -      if (!result) {
 +      if ((!result || isolatedTaskFailure) && part.state.status === "running") {
 +        const failure =
-+          isolatedTaskFailure && typeof resultMetadata?.failure === "string"
-+            ? resultMetadata.failure
-+            : error?.message
++          isolatedTaskFailure && typeof resultMetadata?.failure === "string" ? resultMetadata.failure : error?.message
          yield* sessions.updatePart({
            ...part,
            state: {
@@ -49,6 +70,23 @@ index 0f85d44..7ace3fb 100644
              input: part.state.input,
            },
          } satisfies SessionV1.ToolPart)
+@@ -1067,7 +1073,7 @@ const layer = Layer.effect(
+       }
+ 
+       if (input.noReply === true) return message
+-      return yield* loop({ sessionID: input.sessionID })
++      return yield* loop({ sessionID: input.sessionID, telegramRunId: input.telegramRunId })
+     })
+ 
+     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
+@@ -1086,6 +1092,7 @@ const layer = Layer.effect(
+         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+ 
+         while (true) {
++          yield* checkpoint
+           yield* status.set(sessionID, { type: "busy" })
+           yield* Effect.logInfo("loop", { "session.id": sessionID, step })
+ 
 @@ -1139,10 +1146,32 @@ const layer = Layer.effect(
              }).pipe(Effect.ignore, Effect.forkIn(scope))
  
@@ -84,11 +122,76 @@ index 0f85d44..7ace3fb 100644
              continue
            }
  
+@@ -1343,14 +1372,25 @@ const layer = Layer.effect(
+     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
+       input: LoopInput,
+     ) {
+-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
++      return yield* state.ensureRunning(
++        input.sessionID,
++        lastAssistant(input.sessionID),
++        runLoop(input.sessionID),
++        input.telegramRunId,
++      )
+     })
+ 
+     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
+       "SessionPrompt.shell",
+     )(function* (input: ShellInput) {
+       const ready = yield* Latch.make()
+-      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
++      return yield* state.startShell(
++        input.sessionID,
++        lastAssistant(input.sessionID),
++        shellImpl(input, ready),
++        ready,
++        input.telegramRunId,
++      )
+     })
+ 
+     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+@@ -1465,6 +1505,7 @@ const layer = Layer.effect(
+ 
+       const result = yield* prompt({
+         sessionID: input.sessionID,
++        telegramRunId: input.telegramRunId,
+         messageID: input.messageID,
+         model: userModel,
+         agent: userAgent,
+@@ -1498,6 +1539,7 @@ const ModelRef = Schema.Struct({
+ 
+ export const PromptInput = Schema.Struct({
+   sessionID: SessionID,
++  telegramRunId: Schema.optional(Schema.String),
+   messageID: Schema.optional(MessageID),
+   model: Schema.optional(ModelRef),
+   agent: Schema.optional(Schema.String),
+@@ -1522,10 +1564,12 @@ export type PromptInput = Schema.Schema.Type<typeof PromptInput>
+ 
+ export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
+   sessionID: SessionID,
++  telegramRunId: Schema.optional(Schema.String),
+ }) {}
+ 
+ export const ShellInput = Schema.Struct({
+   sessionID: SessionID,
++  telegramRunId: Schema.optional(Schema.String),
+   messageID: Schema.optional(MessageID),
+   agent: Schema.String,
+   model: Schema.optional(ModelRef),
+@@ -1536,6 +1580,7 @@ export type ShellInput = Schema.Schema.Type<typeof ShellInput>
+ export const CommandInput = Schema.Struct({
+   messageID: Schema.optional(MessageID),
+   sessionID: SessionID,
++  telegramRunId: Schema.optional(Schema.String),
+   agent: Schema.optional(Schema.String),
+   model: Schema.optional(Schema.String),
+   arguments: Schema.String,
 diff --git a/packages/opencode/src/tool/task.ts b/packages/opencode/src/tool/task.ts
-index d8ca640..a1ea730 100644
+index d8ca640..ec893b4 100644
 --- a/packages/opencode/src/tool/task.ts
 +++ b/packages/opencode/src/tool/task.ts
-@@ -10,7 +10,7 @@ import { Agent } from "../agent/agent"
+@@ -10,18 +10,86 @@ import { Agent } from "../agent/agent"
  import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
  import type { SessionPrompt } from "../session/prompt"
  import { Config } from "@/config/config"
@@ -96,8 +199,20 @@ index d8ca640..a1ea730 100644
 +import { Effect, Exit, Schema, Scope, Semaphore } from "effect"
  import { EffectBridge } from "@/effect/bridge"
  import { RuntimeFlags } from "@/effect/runtime-flags"
++import {
++  activeDeadline,
++  CurrentTelegramContinuation,
++  CurrentTelegramEpoch,
++  CurrentTelegramExecution,
++} from "@opencode-ai/core/telegram-execution-context"
++import { SessionRunState } from "@/session/run-state"
  import { Database } from "@opencode-ai/core/database/database"
-@@ -22,6 +22,80 @@ export interface TaskPromptOps {
+ 
+ export interface TaskPromptOps {
+-  cancel(sessionID: SessionID): Effect.Effect<void>
++  cancel(sessionID: SessionID, runId?: string): Effect.Effect<void>
+   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
+   prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
  }
  
  const id = "task"
@@ -110,18 +225,8 @@ index d8ca640..a1ea730 100644
 +  return Math.min(max, Math.max(min, parsed))
 +}
 +
-+export const TELEGRAM_SUBAGENT_CONCURRENCY = boundedEnvInt(
-+  "OPENCODE_TELEGRAM_SUBAGENT_CONCURRENCY",
-+  4,
-+  1,
-+  8,
-+)
-+const TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY = boundedEnvInt(
-+  "OPENCODE_TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY",
-+  6,
-+  1,
-+  16,
-+)
++export const TELEGRAM_SUBAGENT_CONCURRENCY = boundedEnvInt("OPENCODE_TELEGRAM_SUBAGENT_CONCURRENCY", 4, 1, 8)
++const TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY = boundedEnvInt("OPENCODE_TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY", 6, 1, 16)
 +const TELEGRAM_SUBAGENT_MAX_PENDING = boundedEnvInt(
 +  "OPENCODE_TELEGRAM_SUBAGENT_MAX_PENDING",
 +  24,
@@ -143,10 +248,7 @@ index d8ca640..a1ea730 100644
 +const globalSubagentSemaphore = Semaphore.makeUnsafe(TELEGRAM_SUBAGENT_GLOBAL_CONCURRENCY)
 +const parentSubagentGates = new Map<string, SubagentGate>()
 +
-+function scheduleSubagent<A, E, R>(
-+  parentSessionID: string,
-+  self: Effect.Effect<A, E, R>,
-+): Effect.Effect<A, E, R> {
++function scheduleSubagent<A, E, R>(parentSessionID: string, self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
 +  return Effect.acquireUseRelease(
 +    Effect.sync(() => {
 +      let gate = parentSubagentGates.get(parentSessionID)
@@ -178,7 +280,15 @@ index d8ca640..a1ea730 100644
  const BACKGROUND_DESCRIPTION = [
    "Background mode: background=true launches the subagent asynchronously and returns immediately.",
    "Foreground is the default; use it when you need the result before continuing.",
-@@ -186,6 +260,12 @@ export const TaskTool = Tool.define(
+@@ -88,6 +156,7 @@ export const TaskTool = Tool.define(
+     const scope = yield* Scope.Scope
+     const flags = yield* RuntimeFlags.Service
+     const database = yield* Database.Service
++    const executionState = yield* SessionRunState.Service
+ 
+     const run = Effect.fn("TaskTool.execute")(function* (
+       params: Schema.Schema.Type<typeof Parameters>,
+@@ -186,6 +255,12 @@ export const TaskTool = Tool.define(
          parentSessionId: ctx.sessionID,
          sessionId: nextSession.id,
          model,
@@ -191,68 +301,349 @@ index d8ca640..a1ea730 100644
          ...(runInBackground ? { background: true } : {}),
        }
  
-@@ -197,7 +277,7 @@ export const TaskTool = Tool.define(
+@@ -196,41 +271,73 @@ export const TaskTool = Tool.define(
+ 
        const ops = ctx.extra?.promptOps as TaskPromptOps
        if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
++      const parentExecution = yield* CurrentTelegramExecution
++      const frame = parentExecution ? yield* executionState.retainTask(nextSession.id) : undefined
++      const releaseFrame = frame ? executionState.releaseTask(frame) : Effect.void
++      let delegated = false
++      return yield* Effect.gen(function* () {
++        const runTaskBody = Effect.fn("TaskTool.runTaskBody")(function* () {
++          if (frame) {
++            yield* Effect.promise((signal) => frame.checkpoint(signal))
++            yield* Effect.sync(() => frame.continue(frame.execution.owner))
++          }
++          const parts = yield* ops.resolvePromptParts(params.prompt)
++          const result = yield* ops.prompt({
++            messageID: MessageID.ascending(),
++            sessionID: nextSession.id,
++            model: {
++              modelID: model.modelID,
++              providerID: model.providerID,
++            },
++            variant: next.model ? undefined : variant,
++            agent: next.name,
++            parts,
++          })
++          if (result.info.role === "assistant" && result.info.error) {
++            const message =
++              "message" in result.info.error.data && typeof result.info.error.data.message === "string"
++                ? result.info.error.data.message
++                : result.info.error.name
++            return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${message}`))
++          }
++          const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
++          if (failed?.type === "tool" && failed.state.status === "error") {
++            return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`))
++          }
++          return result.parts.findLast((item) => item.type === "text")?.text ?? ""
++        })
  
 -      const runTask = Effect.fn("TaskTool.runTask")(function* () {
-+      const runTaskBody = Effect.fn("TaskTool.runTaskBody")(function* () {
-         const parts = yield* ops.resolvePromptParts(params.prompt)
-         const result = yield* ops.prompt({
-           messageID: MessageID.ascending(),
-@@ -224,6 +304,22 @@ export const TaskTool = Tool.define(
-         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
-       })
- 
-+      const runTask = Effect.fn("TaskTool.runTask")(function* () {
-+        const timed = Effect.timeoutOrElse(runTaskBody(), {
-+          duration: TELEGRAM_SUBAGENT_TIMEOUT_MS,
-+          orElse: () =>
+-        const parts = yield* ops.resolvePromptParts(params.prompt)
+-        const result = yield* ops.prompt({
+-          messageID: MessageID.ascending(),
+-          sessionID: nextSession.id,
+-          model: {
+-            modelID: model.modelID,
+-            providerID: model.providerID,
+-          },
+-          variant: next.model ? undefined : variant,
+-          agent: next.name,
+-          parts,
++        const runTask = Effect.fn("TaskTool.runTask")(function* () {
++          const body = frame
++            ? runTaskBody().pipe(
++                Effect.provideService(CurrentTelegramExecution, frame.execution),
++                Effect.provideService(CurrentTelegramContinuation, { frame, owner: frame.execution.owner }),
++                Effect.provideService(CurrentTelegramEpoch, undefined),
++              )
++            : runTaskBody()
++          const timed = activeDeadline(
++            body,
++            TELEGRAM_SUBAGENT_TIMEOUT_MS,
 +            Effect.gen(function* () {
-+              yield* ops.cancel(nextSession.id).pipe(Effect.ignore)
++              yield* ops.cancel(nextSession.id, frame?.execution.owner.runId).pipe(Effect.ignore)
 +              return yield* Effect.fail(
-+                new Error(
-+                  `Subagent timed out after ${TELEGRAM_SUBAGENT_TIMEOUT_MS}ms (task_id: ${nextSession.id})`,
-+                ),
++                new Error(`Subagent timed out after ${TELEGRAM_SUBAGENT_TIMEOUT_MS}ms (task_id: ${nextSession.id})`),
 +              )
 +            }),
++          )
++          return yield* scheduleSubagent(
++            ctx.sessionID,
++            frame ? timed.pipe(Effect.provideService(CurrentTelegramExecution, frame.execution)) : timed,
++          )
+         })
+-        if (result.info.role === "assistant" && result.info.error) {
+-          const message =
+-            "message" in result.info.error.data && typeof result.info.error.data.message === "string"
+-              ? result.info.error.data.message
+-              : result.info.error.name
+-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${message}`))
+-        }
+-        const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
+-        if (failed?.type === "tool" && failed.state.status === "error") {
+-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`))
+-        }
+-        return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+-      })
+ 
+-      const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
+-        state: "completed" | "error",
+-        text: string,
+-      ) {
+-        const currentParent = yield* sessions.get(ctx.sessionID)
+-        yield* ops
+-          .prompt({
++        const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
++          state: "completed" | "error",
++          text: string,
++        ) {
++          if (frame) yield* Effect.promise((signal) => frame.checkpoint(signal))
++          const currentParent = yield* sessions.get(ctx.sessionID)
++          const followUp = ops.prompt({
+             sessionID: ctx.sessionID,
+             agent: currentParent.agent ?? ctx.agent,
+             variant,
+@@ -250,112 +357,142 @@ export const TaskTool = Tool.define(
+               },
+             ],
+           })
+-          .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+-      })
+-
+-      const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
+-        yield* background.wait({ id: jobID }).pipe(
+-          Effect.flatMap((result) => {
+-            if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
+-            if (result.info?.status === "error") return inject("error", result.info.error ?? "")
+-            return Effect.void
+-          }),
+-          Effect.forkIn(scope, { startImmediately: true }),
+-        )
+-      })
++          yield* (
++            frame && parentExecution
++              ? followUp.pipe(
++                  Effect.provideService(CurrentTelegramContinuation, { frame, owner: parentExecution.owner }),
++                )
++              : followUp
++          ).pipe(Effect.ensuring(releaseFrame), Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
 +        })
-+        return yield* scheduleSubagent(ctx.sessionID, timed)
-+      })
+ 
+-      if (yield* background.extend({ id: nextSession.id, run: runTask() })) {
+-        return {
+-          title: params.description,
+-          metadata: {
+-            ...metadata,
+-            background: true,
+-            jobId: nextSession.id,
+-          },
+-          output: renderOutput({
+-            sessionID: nextSession.id,
+-            state: "running",
+-            summary: "Background task updated",
+-            text: BACKGROUND_UPDATED,
+-          }),
+-        }
+-      }
++        const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
++          delegated = true
++          yield* background.wait({ id: jobID }).pipe(
++            Effect.flatMap((result) => {
++              if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
++              if (result.info?.status === "error") return inject("error", result.info.error ?? "")
++              return releaseFrame
++            }),
++            Effect.catchCause(() => releaseFrame),
++            Effect.onInterrupt(() => releaseFrame),
++            Effect.forkIn(scope, { startImmediately: true }),
++          )
++        })
+ 
+-      const info = yield* background.start({
+-        id: nextSession.id,
+-        type: id,
+-        title: params.description,
+-        metadata,
+-        onPromote: Effect.all([
+-          ctx.metadata({
++        if (yield* background.extend({ id: nextSession.id, run: runTask() })) {
++          delegated = true
++          yield* background
++            .wait({ id: nextSession.id })
++            .pipe(Effect.ensuring(releaseFrame), Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
++          return {
+             title: params.description,
+-            metadata: { ...metadata, background: true, jobId: nextSession.id },
+-          }),
+-          notify(nextSession.id),
+-        ]),
+-        run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
+-      })
++            metadata: {
++              ...metadata,
++              background: true,
++              jobId: nextSession.id,
++            },
++            output: renderOutput({
++              sessionID: nextSession.id,
++              state: "running",
++              summary: "Background task updated",
++              text: BACKGROUND_UPDATED,
++            }),
++          }
++        }
+ 
+-      function backgroundResult() {
+-        return {
++        const info = yield* background.start({
++          id: nextSession.id,
++          type: id,
+           title: params.description,
+-          metadata: {
+-            ...metadata,
+-            background: true,
+-            jobId: info.id,
+-          },
+-          output: renderOutput({
+-            sessionID: nextSession.id,
+-            state: "running",
+-            summary: "Background task started",
+-            text: BACKGROUND_STARTED,
+-          }),
++          metadata,
++          onPromote: Effect.all([
++            ctx.metadata({
++              title: params.description,
++              metadata: { ...metadata, background: true, jobId: nextSession.id },
++            }),
++            notify(nextSession.id),
++          ]),
++          run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id, frame?.execution.owner.runId))),
++        })
 +
-       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
-         state: "completed" | "error",
-         text: string,
-@@ -336,8 +432,27 @@ export const TaskTool = Tool.define(
-               background.waitForPromotion(nextSession.id),
-             )
-             if (result?.metadata?.background === true) return backgroundResult()
++        function backgroundResult() {
++          return {
++            title: params.description,
++            metadata: {
++              ...metadata,
++              background: true,
++              jobId: info.id,
++            },
++            output: renderOutput({
++              sessionID: nextSession.id,
++              state: "running",
++              summary: "Background task started",
++              text: BACKGROUND_STARTED,
++            }),
++          }
+         }
+-      }
+ 
+-      if (runInBackground) {
+-        yield* notify(info.id)
+-        return backgroundResult()
+-      }
++        if (runInBackground) {
++          yield* notify(info.id)
++          return backgroundResult()
++        }
+ 
+-      const runCancel = yield* EffectBridge.make()
+-      const cancel = ops.cancel(nextSession.id)
++        const runCancel = yield* EffectBridge.make()
++        const cancel = ops.cancel(nextSession.id, frame?.execution.owner.runId)
+ 
+-      function onAbort() {
+-        runCancel.fork(cancel)
+-      }
++        function onAbort() {
++          runCancel.fork(cancel)
++        }
+ 
+-      return yield* Effect.acquireUseRelease(
+-        Effect.sync(() => {
+-          ctx.abort.addEventListener("abort", onAbort)
+-        }),
+-        () =>
+-          Effect.gen(function* () {
+-            const result = yield* Effect.raceFirst(
+-              background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
+-              background.waitForPromotion(nextSession.id),
+-            )
+-            if (result?.metadata?.background === true) return backgroundResult()
 -            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
 -            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
-+            if (result?.status === "error" || result?.status === "cancelled") {
-+              const text =
-+                result.status === "error"
-+                  ? (result.error ?? "Subagent failed")
-+                  : "Subagent was cancelled"
+-            return {
+-              title: params.description,
+-              metadata,
+-              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
+-            }
++        return yield* Effect.acquireUseRelease(
++          Effect.sync(() => {
++            ctx.abort.addEventListener("abort", onAbort)
+           }),
+-        (_, exit) =>
+-          Effect.gen(function* () {
+-            if (Exit.hasInterrupts(exit))
+-              yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
+-          }).pipe(
+-            Effect.ensuring(
+-              Effect.sync(() => {
+-                ctx.abort.removeEventListener("abort", onAbort)
+-              }),
++          () =>
++            Effect.gen(function* () {
++              const result = yield* Effect.raceFirst(
++                background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
++                background.waitForPromotion(nextSession.id),
++              )
++              if (result?.metadata?.background === true) return backgroundResult()
++              if (result?.status === "error" || result?.status === "cancelled") {
++                const text = result.status === "error" ? (result.error ?? "Subagent failed") : "Subagent was cancelled"
++                return {
++                  title: params.description,
++                  metadata: {
++                    ...metadata,
++                    failed: true,
++                    failure: text,
++                    jobId: nextSession.id,
++                  },
++                  output: renderOutput({
++                    sessionID: nextSession.id,
++                    state: "error",
++                    summary: `Subagent failed: ${params.description}`,
++                    text,
++                  }),
++                }
++              }
 +              return {
 +                title: params.description,
-+                metadata: {
-+                  ...metadata,
-+                  failed: true,
-+                  failure: text,
-+                  jobId: nextSession.id,
-+                },
-+                output: renderOutput({
-+                  sessionID: nextSession.id,
-+                  state: "error",
-+                  summary: `Subagent failed: ${params.description}`,
-+                  text,
-+                }),
++                metadata,
++                output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
 +              }
-+            }
-             return {
-               title: params.description,
-               metadata,
++            }),
++          (_, exit) =>
++            Effect.gen(function* () {
++              if (Exit.hasInterrupts(exit))
++                yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
++            }).pipe(
++              Effect.ensuring(
++                Effect.sync(() => {
++                  ctx.abort.removeEventListener("abort", onAbort)
++                }),
++              ),
+             ),
+-          ),
+-      )
++        )
++      }).pipe(Effect.ensuring(Effect.suspend(() => (delegated ? Effect.void : releaseFrame))))
+     })
+ 
+     return {
 diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
 index da6e0f8..1871296 100644
 --- a/packages/opencode/test/session/prompt.test.ts
