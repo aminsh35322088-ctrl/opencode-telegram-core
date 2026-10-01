@@ -12,6 +12,51 @@ function binding(id: string, threadId: number): BindingIdentity {
 }
 
 describe("SessionEventRouter", () => {
+  test("execution events retain their original run across later arrivals and lookup replacement", async () => {
+    const bindings = new BindingRegistry();
+    const runs = new RunRegistry();
+    const a = binding("a", 11);
+    bindings.register(a);
+    const old = runs.start(a, 1, "old-run");
+    const origin = { version: 1, root: { sessionId: a.sessionId, runId: old.runId, directory },
+      producer: { sessionId: "child", runId: "child-run", directory }, epoch: 0 };
+    let release!: (parent: string | null) => void;
+    let started!: () => void;
+    const lookupStarted = new Promise<void>(resolve => { started = resolve; });
+    const router = new SessionEventRouter(bindings, runs, () => new Promise(resolve => { release = resolve; started(); }));
+    const pending = router.resolveExecution("child", directory, origin);
+    await lookupStarted;
+    runs.fence(a.bindingId);
+    const replacement = runs.start(a, 1, "replacement-run");
+    release(a.sessionId);
+    expect(await pending).toBeNull();
+    expect(await router.resolveExecution("child", directory, origin)).toBeNull();
+    const current = { ...origin, root: { ...origin.root, runId: replacement.runId } };
+    expect(await router.resolveExecution("child", directory, current)).toEqual(replacement);
+  });
+
+  test("execution routing rejects missing provenance, malformed owners and foreign producer workspaces", async () => {
+    const bindings = new BindingRegistry();
+    const runs = new RunRegistry();
+    const a = binding("a", 11);
+    bindings.register(a);
+    const run = runs.start(a, 1, "run-a");
+    const router = new SessionEventRouter(bindings, runs);
+    const owner = { sessionId: a.sessionId, runId: run.runId, directory };
+    const origin = { version: 1, root: owner, producer: owner, epoch: 0 };
+    expect(await router.resolveExecution(a.sessionId, directory, origin)).toEqual(run);
+    expect(await router.resolveExecution(a.sessionId, directory, null)).toBeNull();
+    expect(await router.resolveExecution(null, directory, origin)).toBeNull();
+    expect(await router.resolveExecution(a.sessionId, null, origin)).toBeNull();
+    expect(await router.resolveExecution(a.sessionId, directory, { ...origin, epoch: -1 })).toBeNull();
+    expect(await router.resolveExecution(a.sessionId, directory, {
+      ...origin, producer: { ...owner, directory: path.resolve("foreign") },
+    })).toBeNull();
+    expect(await router.resolveExecution(a.sessionId, directory, {
+      ...origin, producer: { ...owner, runId: "another-run" },
+    })).toBeNull();
+  });
+
   test("routes exact sessions and rejects directory ambiguity or a foreign directory", async () => {
     const bindings = new BindingRegistry();
     const runs = new RunRegistry();

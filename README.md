@@ -32,7 +32,7 @@ The machine-readable upstream/release source of truth is `upstream/lock.json`. M
 
 The migration remains on prereleases. See [migration and release gates](docs/MIGRATION_TO_V1.md) and [owned result polling](docs/RESULT_POLLING.md). Stable publication requires the complete ownership audit and a healthy production RC soak.
 
-Unreleased source also contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, fail-closed recovery, and a native acknowledgment adapter that holds tasks and Telegram delivery. A [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md) has passed Linux process-group regressions. Native integration verification, producer run tags, Bot pause/tool migration and persistent-daemon ownership remain release blockers.
+Unreleased source also contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, fail-closed recovery, and a native acknowledgment adapter that holds tasks and Telegram delivery. Core publisher provenance preserves original root/producer identity through live events; `SessionEventRouter.resolveExecution` requires that metadata and returns a complete run fence for execution delivery. A [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md) has passed Linux process-group regressions. Aligned artifact verification, Bot pause/tool/event migration and persistent-daemon ownership remain release blockers.
 
 The native runtime is under `runtime/`. Its main contracts include:
 

@@ -200,6 +200,7 @@ export class SessionExecutionLease {
   get epoch(): number { return this.#epoch; }
   get retained(): number { return this.#retained; }
   get parentOwner(): ExecutionOwner | undefined { return this.parent?.owner; }
+  get rootOwner(): ExecutionOwner { return this.parent?.rootOwner ?? this.owner; }
 
   descendsFrom(root: SessionExecutionLease): boolean {
     return this === root || Boolean(this.parent?.descendsFrom(root));

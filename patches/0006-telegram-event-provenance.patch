@@ -1,0 +1,132 @@
+diff --git a/packages/core/src/event.ts b/packages/core/src/event.ts
+index c92ac0a..a0cfc36 100644
+--- a/packages/core/src/event.ts
++++ b/packages/core/src/event.ts
+@@ -10,6 +10,12 @@ import { Location } from "./location"
+ import { makeGlobalNode } from "./effect/app-node"
+ import { isDeepStrictEqual } from "node:util"
+ import { Durable } from "@opencode-ai/schema/durable-event-manifest"
++import {
++  captureEventOrigin,
++  CurrentTelegramEpoch,
++  CurrentTelegramEventOrigin,
++  CurrentTelegramExecution,
++} from "./telegram-execution-context"
+ 
+ export const ID = Event.ID
+ export type ID = import("@opencode-ai/schema/event").ID
+@@ -418,17 +424,31 @@ export const layerWith = (options?: LayerOptions) =>
+ 
+       function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {
+         return Effect.gen(function* () {
++          const snapshot = yield* CurrentTelegramEventOrigin
++          const execution = yield* CurrentTelegramExecution
++          const epoch = yield* CurrentTelegramEpoch
++          if (execution && !snapshot && epoch === undefined)
++            return yield* Effect.die(new Error("event execution phase missing"))
++          const origin =
++            snapshot ?? (execution && epoch !== undefined ? captureEventOrigin(execution, epoch) : undefined)
++          if (execution && !snapshot) yield* Effect.promise((signal) => execution.completionCheckpoint(signal, epoch))
++          const metadata = { ...options?.metadata }
++          // Callers cannot forge an execution owner or make replay inherit a live run.
++          delete metadata.telegramExecution
++          if (origin) metadata.telegramExecution = origin
+           const serviceLocation = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+           const location =
+             options?.location ??
+             (serviceLocation
+               ? { directory: serviceLocation.directory, workspaceID: serviceLocation.workspaceID }
+               : undefined)
++          if (origin && location && location.directory !== origin.producer.directory)
++            return yield* Effect.die(new Error("event execution workspace mismatch"))
+           return yield* publishEvent(
+             definition,
+             {
+               id: options?.id ?? ID.create(),
+-              ...(options?.metadata ? { metadata: options.metadata } : {}),
++              ...(Object.keys(metadata).length ? { metadata } : {}),
+               type: definition.type,
+               ...(location ? { location } : {}),
+               data,
+diff --git a/packages/opencode/src/event-v2-bridge.ts b/packages/opencode/src/event-v2-bridge.ts
+index 8e65f27..87a8da6 100644
+--- a/packages/opencode/src/event-v2-bridge.ts
++++ b/packages/opencode/src/event-v2-bridge.ts
+@@ -40,7 +40,12 @@ const layer = Layer.effect(
+           directory: event.location?.directory ?? ctx?.directory,
+           project: ctx?.project.id,
+           workspace: workspaceID,
+-          payload: { id: event.id, type: event.type, properties: event.data },
++          payload: {
++            id: event.id,
++            type: event.type,
++            properties: event.data,
++            ...(event.metadata ? { metadata: event.metadata } : {}),
++          },
+         })
+         if (event.durable === undefined) return
+         GlobalBus.emit("event", {
+@@ -55,6 +60,7 @@ const layer = Layer.effect(
+               seq: event.durable.seq,
+               aggregateID: event.durable.aggregateID,
+               data: event.data,
++              ...(event.metadata ? { metadata: event.metadata } : {}),
+             },
+           },
+         })
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/api.ts b/packages/opencode/src/server/routes/instance/httpapi/api.ts
+index f5076ad..aca730c 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/api.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/api.ts
+@@ -37,6 +37,7 @@ const EventSchema = Schema.Union([
+     .map((definition) =>
+       Schema.Struct({
+         id: EventV2.ID,
++        metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+         type: Schema.Literal(definition.type),
+         properties: definition.data,
+       }).annotate({ identifier: `Event.${definition.type}` }),
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts
+index 5dded3a..3b58b31 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts
+@@ -27,6 +27,7 @@ const SyncEventSchemas = EventManifest.Latest.values()
+           seq: Schema.Finite,
+           aggregateID: Schema.String,
+           data: definition.data,
++          metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+         }),
+       }).annotate({ identifier: `SyncEvent.${definition.type}` }),
+     ]
+@@ -40,7 +41,12 @@ const GlobalEventSchema = Schema.Struct({
+   payload: Schema.Union([
+     ...EventManifest.Latest.values()
+       .map((definition) =>
+-        Schema.Struct({ id: EventV2.ID, type: Schema.Literal(definition.type), properties: definition.data }),
++        Schema.Struct({
++          id: EventV2.ID,
++          type: Schema.Literal(definition.type),
++          properties: definition.data,
++          metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
++        }),
+       )
+       .toArray(),
+     InstanceDisposed,
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts
+index 4f24fbb..7388f11 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts
+@@ -37,7 +37,12 @@ function eventResponse(events: EventV2.Interface) {
+           event.location?.directory === instance.directory &&
+           (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID),
+       ),
+-      Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
++      Stream.map((event) => ({
++        id: event.id,
++        type: event.type,
++        properties: event.data,
++        ...(event.metadata ? { metadata: event.metadata } : {}),
++      })),
+     )
+     const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>((queue) => {
+       const listener = (event: {

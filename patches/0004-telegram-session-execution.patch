@@ -333,10 +333,10 @@ index 9f85309..f928d04 100644
            "session.id": input.sessionID,
            messageID: input.assistantMessage.id,
 diff --git a/packages/opencode/src/session/run-state.ts b/packages/opencode/src/session/run-state.ts
-index 5cefdd0..35f3bc9 100644
+index 5cefdd0..5f1ae31 100644
 --- a/packages/opencode/src/session/run-state.ts
 +++ b/packages/opencode/src/session/run-state.ts
-@@ -3,24 +3,57 @@ import { InstanceState } from "@/effect/instance-state"
+@@ -3,24 +3,72 @@ import { InstanceState } from "@/effect/instance-state"
  import { SessionV1 } from "@opencode-ai/core/v1/session"
  import { Runner } from "@/effect/runner"
  import { BackgroundJob } from "@/background/job"
@@ -357,7 +357,19 @@ index 5cefdd0..35f3bc9 100644
 +  CurrentTelegramContinuation,
 +  CurrentTelegramEpoch,
 +  CurrentTelegramExecution,
++  CurrentTelegramEventOrigin,
++  captureEventOrigin,
 +} from "@opencode-ai/core/telegram-execution-context"
++import type { ExecutionEventOrigin } from "@opencode-ai/core/telegram-event-provenance"
++
++// Host lifecycle events preserve identity after retirement without granting
++// execution authority or inheriting a caller's unrelated producer context.
++const lifecycleEvent = <A, E, R>(work: Effect.Effect<A, E, R>, origin: ExecutionEventOrigin | undefined) =>
++  work.pipe(
++    Effect.provideService(CurrentTelegramEventOrigin, origin),
++    Effect.provideService(CurrentTelegramExecution, undefined),
++    Effect.provideService(CurrentTelegramEpoch, undefined),
++  )
 +
 +export interface ExecutionInfo {
 +  readonly runId: string
@@ -372,6 +384,9 @@ index 5cefdd0..35f3bc9 100644
 +}
  
  export interface Interface {
++  readonly preparePrompt: (
++    sessionID: SessionID,
++  ) => Effect.Effect<{ execution: SessionExecutionLease; epoch: number } | undefined>
 +  readonly setApplicationMetadata: (sessionID: SessionID, metadata: typeof Session.Metadata.Type) => Effect.Effect<void>
 +  readonly retainTask: (sessionID: SessionID) => Effect.Effect<SessionExecutionFrame>
 +  readonly releaseTask: (frame: SessionExecutionFrame) => Effect.Effect<void>
@@ -396,7 +411,7 @@ index 5cefdd0..35f3bc9 100644
    ) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
  }
  
-@@ -31,66 +64,265 @@ const layer = Layer.effect(
+@@ -31,66 +79,311 @@ const layer = Layer.effect(
    Effect.gen(function* () {
      const background = yield* BackgroundJob.Service
      const status = yield* SessionStatus.Service
@@ -436,12 +451,12 @@ index 5cefdd0..35f3bc9 100644
 +            // failures must never skip owned resource termination.
 +            const resources = yield* Effect.sync(() => control.dispose()).pipe(Effect.exit)
 +            const exits = yield* Effect.forEach(entries, ({ runner }) => runner.cancel.pipe(Effect.exit), {
++              concurrency: "unbounded",
++            })
++            const tools = yield* Effect.forEach(entries, ({ execution }) => drainTools(execution).pipe(Effect.exit), {
                concurrency: "unbounded",
 -              discard: true,
              })
-+            const tools = yield* Effect.forEach(entries, ({ execution }) => drainTools(execution).pipe(Effect.exit), {
-+              concurrency: "unbounded",
-+            })
 +            for (const end of cleanup) end()
              runners.clear()
 +            const errors = [resources, ...exits, ...tools]
@@ -490,14 +505,11 @@ index 5cefdd0..35f3bc9 100644
 +      // Trusted child/follow-up admission must wait for prior idle cleanup
 +      // before reopening its phase. Do not hold the admission semaphore here.
 +      if (continuation?.owner.sessionId === sessionID) {
-+        const previous = data.runners.get(sessionID)
-+        if (previous) yield* previous.runner.awaitIdle.pipe(Effect.orDie)
++        yield* preparePrompt(sessionID)
 +      }
 +      return yield* data.guard.withPermit(
 +        Effect.gen(function* () {
 +          if (data.closing > 0) return yield* Effect.die(new Error("execution workspace is retiring"))
-+          if (continuation?.owner.sessionId === sessionID)
-+            yield* Effect.sync(() => continuation.frame.continue(continuation.owner))
 +          if (parent)
 +            yield* Effect.sync(() =>
 +              parent.assertOwned(continuation?.owner.sessionId === sessionID ? undefined : epoch),
@@ -525,29 +537,48 @@ index 5cefdd0..35f3bc9 100644
 +            parent && parent.owner.sessionId !== sessionID ? parent.owner : undefined,
 +          )
 +          let interrupt = onInterrupt
-+          const next = Runner.make<SessionV1.WithParts>(data.scope, {
-+            onIdle: Effect.suspend(() => (execution.signal.aborted ? Effect.void : drainTools(execution))).pipe(
-+              Effect.andThen(
-+                data.guard.withPermit(
-+                  Effect.gen(function* () {
-+                    if (data.runners.get(sessionID)?.execution !== execution) return
-+                    const retired = data.control.get(execution.owner)
-+                      ? data.control.finish(execution.owner)
-+                      : [execution.owner]
-+                    for (const owner of retired) {
-+                      const id = SessionID.make(owner.sessionId)
-+                      if (data.runners.get(id)?.execution.owner.runId !== owner.runId) continue
-+                      const current = yield* sessions.get(id).pipe(Effect.orDie)
-+                      yield* sessions.setMetadata({
++          const finishIdle = Effect.gen(function* () {
++            while (true) {
++              if (!execution.signal.aborted) {
++                yield* Effect.promise((signal) => execution.completionCheckpoint(signal, execution.epoch))
++                yield* drainTools(execution)
++              }
++              const settled = yield* data.guard.withPermit(
++                Effect.gen(function* () {
++                  if (data.runners.get(sessionID)?.execution !== execution) return true
++                  // Pause can acquire the guard after the checkpoint. Retry
++                  // outside the guard so resume/cancel can still proceed.
++                  if (!execution.signal.aborted && execution.paused) return false
++                  const origins = new Map(
++                    [...data.runners].map(
++                      ([id, entry]) => [id, captureEventOrigin(entry.execution, entry.execution.epoch)] as const,
++                    ),
++                  )
++                  const retired = data.control.get(execution.owner)
++                    ? data.control.finish(execution.owner)
++                    : [execution.owner]
++                  for (const owner of retired) {
++                    const id = SessionID.make(owner.sessionId)
++                    if (data.runners.get(id)?.execution.owner.runId !== owner.runId) continue
++                    const current = yield* sessions.get(id).pipe(Effect.orDie)
++                    yield* lifecycleEvent(
++                      sessions.setMetadata({
 +                        sessionID: id,
 +                        metadata: { ...current.metadata, telegramExecution: null },
-+                      })
-+                      yield* status.set(id, { type: "idle" })
-+                      data.runners.delete(id)
-+                    }
-+                  }),
-+                ),
-+              ),
++                      }),
++                      origins.get(id),
++                    )
++                    yield* lifecycleEvent(status.set(id, { type: "idle" }), origins.get(id))
++                    data.runners.delete(id)
++                  }
++                  return true
++                }),
++              )
++              if (settled) return
++            }
++          })
++          const next = Runner.make<SessionV1.WithParts>(data.scope, {
++            onIdle: finishIdle.pipe(
 +              Effect.catchCause((cause) =>
 +                data.guard.withPermit(
 +                  Effect.gen(function* () {
@@ -569,7 +600,9 @@ index 5cefdd0..35f3bc9 100644
 +                ),
 +              ),
 +            ),
-+            onBusy: status.set(sessionID, { type: "busy" }),
++            onBusy: Effect.suspend(() =>
++              lifecycleEvent(status.set(sessionID, { type: "busy" }), captureEventOrigin(execution, execution.epoch)),
++            ),
 +            onInterrupt: Effect.suspend(() => interrupt),
 +          })
 +          const entry = {
@@ -590,24 +623,42 @@ index 5cefdd0..35f3bc9 100644
 +      )
      })
  
-     const assertNotBusy = Effect.fn("SessionRunState.assertNotBusy")(function* (sessionID: SessionID) {
+-    const assertNotBusy = Effect.fn("SessionRunState.assertNotBusy")(function* (sessionID: SessionID) {
++    const preparePrompt = Effect.fn("SessionRunState.preparePrompt")(function* (sessionID: SessionID) {
++      const continuation = yield* CurrentTelegramContinuation
++      if (continuation?.owner.sessionId !== sessionID) return undefined
        const data = yield* InstanceState.get(state)
-       const existing = data.runners.get(sessionID)
+-      const existing = data.runners.get(sessionID)
 -      if (existing?.busy) yield* busyError(sessionID)
-+      if (existing) yield* busyError(sessionID)
++      const previous = data.runners.get(sessionID)
++      if (previous) yield* previous.runner.awaitIdle.pipe(Effect.orDie)
++      yield* Effect.promise((signal) => continuation.frame.checkpoint(signal))
++      return yield* data.guard.withPermit(
++        Effect.sync(() => {
++          if (data.closing > 0) throw new Error("execution workspace is retiring")
++          const execution = data.control.get(continuation.owner)
++          if (!execution || data.runners.get(sessionID)?.execution !== execution) throw new StaleExecutionError()
++          continuation.frame.continue(continuation.owner)
++          return { execution, epoch: execution.epoch }
++        }),
++      )
      })
  
 -    const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
 -      yield* cancelBackgroundJobs(background, sessionID)
-+    const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID, runId?: string) {
++    const assertNotBusy = Effect.fn("SessionRunState.assertNotBusy")(function* (sessionID: SessionID) {
        const data = yield* InstanceState.get(state)
--      const existing = data.runners.get(sessionID)
+       const existing = data.runners.get(sessionID)
 -      if (!existing) {
 -        yield* status.set(sessionID, { type: "idle" })
 -        return
 -      }
 -      yield* existing.cancel
--    })
++      if (existing) yield* busyError(sessionID)
+     })
+ 
++    const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID, runId?: string) {
++      const data = yield* InstanceState.get(state)
 +      const owned = yield* data.guard.withPermit(
 +        Effect.gen(function* () {
 +          if (data.retiring.has(sessionID)) return undefined
@@ -622,10 +673,16 @@ index 5cefdd0..35f3bc9 100644
 +          for (const id of ids) data.retiring.add(id)
 +          data.closing += 1
 +          const cleanup = entries.map(({ execution }) => execution.beginCleanup(execution.epoch))
++          const origins = new Map(
++            entries.map(
++              ({ execution }) =>
++                [SessionID.make(execution.owner.sessionId), captureEventOrigin(execution, execution.epoch)] as const,
++            ),
++          )
 +          const retired = existing
 +            ? yield* Effect.sync(() => data.control.close(existing.execution.owner)).pipe(Effect.exit)
 +            : Exit.succeed(undefined)
-+          return { entries, ids, retired, cleanup }
++          return { entries, ids, retired, cleanup, origins }
 +        }),
 +      )
 +      if (!owned) return
@@ -648,8 +705,11 @@ index 5cefdd0..35f3bc9 100644
 +              .get(id)
 +              .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)))
 +            if (current)
-+              yield* sessions.setMetadata({ sessionID: id, metadata: { ...current.metadata, telegramExecution: null } })
-+            yield* status.set(id, { type: "idle" })
++              yield* lifecycleEvent(
++                sessions.setMetadata({ sessionID: id, metadata: { ...current.metadata, telegramExecution: null } }),
++                owned.origins.get(id),
++              )
++            yield* lifecycleEvent(status.set(id, { type: "idle" }), owned.origins.get(id))
 +            data.runners.delete(id)
 +          }
 +          // Cleanup failure keeps the workspace closed rather than permitting
@@ -670,7 +730,7 @@ index 5cefdd0..35f3bc9 100644
 +      yield* fibers
 +      yield* tools
 +    }, Effect.uninterruptible)
- 
++
      const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
        sessionID: SessionID,
        onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -684,12 +744,13 @@ index 5cefdd0..35f3bc9 100644
 +          Effect.provideService(CurrentTelegramExecution, entry.execution),
 +          Effect.provideService(CurrentTelegramEpoch, entry.execution.epoch),
 +          Effect.provideService(CurrentTelegramContinuation, undefined),
++          Effect.provideService(CurrentTelegramEventOrigin, undefined),
 +        ),
 +      )
      })
  
      const startShell = Effect.fn("SessionRunState.startShell")(function* (
-@@ -98,13 +330,121 @@ const layer = Layer.effect(
+@@ -98,13 +391,134 @@ const layer = Layer.effect(
        onInterrupt: Effect.Effect<SessionV1.WithParts>,
        work: Effect.Effect<SessionV1.WithParts>,
        ready?: Latch.Latch,
@@ -707,6 +768,7 @@ index 5cefdd0..35f3bc9 100644
 +            Effect.provideService(CurrentTelegramExecution, entry.execution),
 +            Effect.provideService(CurrentTelegramEpoch, entry.execution.epoch),
 +            Effect.provideService(CurrentTelegramContinuation, undefined),
++            Effect.provideService(CurrentTelegramEventOrigin, undefined),
 +          ),
 +          ready,
 +        )
@@ -731,10 +793,13 @@ index 5cefdd0..35f3bc9 100644
 +            if (!entry || entry.execution.owner.runId !== runId) return yield* Effect.die(new StaleExecutionError())
 +            const current = yield* sessions.get(sessionID).pipe(Effect.orDie)
 +            if (paused) yield* Effect.sync(() => data.control.pause(entry.execution.owner))
-+            yield* sessions.setMetadata({
-+              sessionID,
-+              metadata: { ...current.metadata, telegramExecution: { runId, paused } },
-+            })
++            yield* lifecycleEvent(
++              sessions.setMetadata({
++                sessionID,
++                metadata: { ...current.metadata, telegramExecution: { runId, paused } },
++              }),
++              captureEventOrigin(entry.execution, entry.execution.epoch),
++            )
 +            if (!paused) yield* Effect.sync(() => data.control.resume(entry.execution.owner))
 +            return { runId, paused: entry.execution.paused, continuation: "live" as const }
 +          }),
@@ -762,6 +827,11 @@ index 5cefdd0..35f3bc9 100644
 +      yield* data.guard.withPermit(
 +        Effect.gen(function* () {
 +          const entry = data.runners.get(SessionID.make(frame.execution.owner.sessionId))
++          const origins = new Map(
++            [...data.runners].map(
++              ([id, current]) => [id, captureEventOrigin(current.execution, current.execution.epoch)] as const,
++            ),
++          )
 +          if (entry?.execution === frame.execution && !entry.runner.busy && !entry.execution.finished) {
 +            data.control.finish(entry.execution.owner)
 +          }
@@ -770,8 +840,11 @@ index 5cefdd0..35f3bc9 100644
 +            const id = SessionID.make(owner.sessionId)
 +            if (data.runners.get(id)?.execution.owner.runId !== owner.runId) continue
 +            const current = yield* sessions.get(id).pipe(Effect.orDie)
-+            yield* sessions.setMetadata({ sessionID: id, metadata: { ...current.metadata, telegramExecution: null } })
-+            yield* status.set(id, { type: "idle" })
++            yield* lifecycleEvent(
++              sessions.setMetadata({ sessionID: id, metadata: { ...current.metadata, telegramExecution: null } }),
++              origins.get(id),
++            )
++            yield* lifecycleEvent(status.set(id, { type: "idle" }), origins.get(id))
 +            data.runners.delete(id)
 +          }
 +        }),
@@ -800,6 +873,7 @@ index 5cefdd0..35f3bc9 100644
 +      )
 +    })
 +    return Service.of({
++      preparePrompt,
 +      setApplicationMetadata,
 +      assertNotBusy,
 +      cancel,
@@ -814,7 +888,7 @@ index 5cefdd0..35f3bc9 100644
    }),
  )
  
-@@ -146,6 +486,10 @@ function busyError(sessionID: SessionID) {
+@@ -146,6 +560,10 @@ function busyError(sessionID: SessionID) {
    return new Session.BusyError({ sessionID })
  }
  

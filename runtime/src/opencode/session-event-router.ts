@@ -1,5 +1,6 @@
 import type { BindingRegistry } from "../runtime/binding-registry.js";
-import { sameBinding, type BindingIdentity } from "../runtime/identity.js";
+import { sameBinding, type BindingIdentity, type RunIdentity } from "../runtime/identity.js";
+import { parseExecutionEventOrigin } from "./event-provenance.js";
 import type { RunRegistry } from "../runtime/run-registry.js";
 import { withDeadline } from "../runtime/deadline.js";
 
@@ -22,6 +23,25 @@ export class SessionEventRouter {
     private readonly lookupParent?: SessionParentLookup,
     private readonly lookupTimeoutMs = 10_000,
   ) {}
+
+  /** Execution delivery requires the publisher's original owner and returns a complete run fence. */
+  async resolveExecution(
+    sessionId: string | null,
+    normalizedDirectory: string | null,
+    inputOrigin: unknown,
+  ): Promise<RunIdentity | null> {
+    const origin = parseExecutionEventOrigin(inputOrigin);
+    if (!sessionId || !normalizedDirectory || !origin || origin.root.directory !== normalizedDirectory) return null;
+    const roots = this.bindings.list().filter(binding =>
+      binding.sessionId === origin.root.sessionId && binding.normalizedDirectory === normalizedDirectory
+    );
+    if (roots.length !== 1) return null;
+    const binding = roots[0]!;
+    const run = this.runs.current(binding.bindingId);
+    if (!run || !sameBinding(run, binding) || run.runId !== origin.root.runId) return null;
+    const route = await this.resolve(sessionId, normalizedDirectory);
+    return route && sameBinding(route, run) && this.runs.accepts(run) ? run : null;
+  }
 
   async resolve(sessionId: string | null, normalizedDirectory: string | null): Promise<BindingIdentity | null> {
     const snapshot = this.bindings.list();

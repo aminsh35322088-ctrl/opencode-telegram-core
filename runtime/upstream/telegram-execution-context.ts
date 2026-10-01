@@ -1,6 +1,7 @@
 import { Cause, Context, Effect } from "effect"
 import { DeadlineExceededError, withDeadline } from "./telegram-deadline"
 import type { ExecutionOwner, SessionExecutionFrame, SessionExecutionLease } from "./session-execution-control"
+import type { ExecutionEventOrigin } from "./telegram-event-provenance"
 
 // Captured by the live runner and inherited by its Effect bridges. It must
 // never resolve an owner dynamically from the current session or Topic.
@@ -9,14 +10,33 @@ export const CurrentTelegramExecution = Context.Reference<SessionExecutionLease 
   { defaultValue: () => undefined },
 )
 
-export const CurrentTelegramContinuation = Context.Reference<{
-  readonly frame: SessionExecutionFrame
-  readonly owner: ExecutionOwner
-} | undefined>("@opencode/TelegramContinuation", { defaultValue: () => undefined })
+export const CurrentTelegramContinuation = Context.Reference<
+  | {
+      readonly frame: SessionExecutionFrame
+      readonly owner: ExecutionOwner
+    }
+  | undefined
+>("@opencode/TelegramContinuation", { defaultValue: () => undefined })
 
 export const CurrentTelegramEpoch = Context.Reference<number | undefined>("@opencode/TelegramEpoch", {
   defaultValue: () => undefined,
 })
+
+// Host lifecycle cleanup captures this before retiring an owner. It carries
+// event identity only, never execution or resource authority.
+export const CurrentTelegramEventOrigin = Context.Reference<ExecutionEventOrigin | undefined>(
+  "@opencode/TelegramEventOrigin",
+  { defaultValue: () => undefined },
+)
+
+export function captureEventOrigin(execution: SessionExecutionLease, epoch: number): ExecutionEventOrigin {
+  return Object.freeze({
+    version: 1,
+    root: Object.freeze({ ...execution.rootOwner }),
+    producer: Object.freeze({ ...execution.owner }),
+    epoch,
+  })
+}
 
 export const checkpoint = Effect.gen(function* () {
   const execution = yield* CurrentTelegramExecution
@@ -31,18 +51,26 @@ export const completionCheckpoint = Effect.gen(function* () {
 })
 
 export const drainTools = (execution: SessionExecutionLease) =>
-  Effect.promise((parentSignal) => withDeadline(() => execution.whenToolsSettled(), {
-    timeoutMs: 10_000,
-    label: "tool cleanup",
-    parentSignal,
-    // Ordinary completion still honors pause. Retirement opens the cleanup
-    // clock, allowing admitted tools to finalize under the destructive grant.
-    ...(!execution.signal.aborted ? { activity: {
-      get paused() { return !execution.signal.aborted && execution.paused },
-      subscribe: (listener: (error?: unknown) => void) =>
-        execution.subscribe((error) => listener(execution.signal.aborted ? undefined : error)),
-    } } : {}),
-  }))
+  Effect.promise((parentSignal) =>
+    withDeadline(() => execution.whenToolsSettled(), {
+      timeoutMs: 10_000,
+      label: "tool cleanup",
+      parentSignal,
+      // Ordinary completion still honors pause. Retirement opens the cleanup
+      // clock, allowing admitted tools to finalize under the destructive grant.
+      ...(!execution.signal.aborted
+        ? {
+            activity: {
+              get paused() {
+                return !execution.signal.aborted && execution.paused
+              },
+              subscribe: (listener: (error?: unknown) => void) =>
+                execution.subscribe((error) => listener(execution.signal.aborted ? undefined : error)),
+            },
+          }
+        : {}),
+    }),
+  )
 
 export function activeDeadline<A, E, R, E2, R2>(
   work: Effect.Effect<A, E, R>,
@@ -60,8 +88,9 @@ export function activeDeadline<A, E, R, E2, R2>(
       }),
     )
     return yield* Effect.raceFirst(work, clock).pipe(
-      Effect.catchCause((cause): Effect.Effect<A, E | E2, R | R2> =>
-        Cause.squash(cause) instanceof DeadlineExceededError ? onTimeout : Effect.failCause(cause),
+      Effect.catchCause(
+        (cause): Effect.Effect<A, E | E2, R | R2> =>
+          Cause.squash(cause) instanceof DeadlineExceededError ? onTimeout : Effect.failCause(cause),
       ),
     )
   })

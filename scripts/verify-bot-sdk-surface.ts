@@ -54,3 +54,32 @@ for (const operation of ["pause", "resume", "abort"]) {
   }
 }
 console.log("generated SDK execution controls retain directory and run identity")
+
+const origin = {
+  version: 1,
+  root: { sessionId: "sdk-contract", runId: "original-run", directory: "/topics/one" },
+  producer: { sessionId: "sdk-child", runId: "child-run", directory: "/topics/one" },
+  epoch: 1,
+}
+const streamingClient = createOpencodeClient({
+  baseUrl: "http://127.0.0.1:1",
+  fetch: async () => new Response(
+    `data: ${JSON.stringify({ type: "session.status", properties: { sessionID: "sdk-child", status: { type: "busy" } }, metadata: { telegramExecution: origin } })}\n\n`,
+    { headers: { "content-type": "text/event-stream" } },
+  ),
+})
+const events = streamingClient.event as {
+  subscribe: (parameters: { directory: string }, options: { signal: AbortSignal }) => Promise<{ stream: AsyncGenerator<unknown> }>
+}
+const controller = new AbortController()
+try {
+  const { stream } = await events.subscribe({ directory: "/topics/one" }, { signal: controller.signal })
+  const next = await stream.next()
+  const event = next.value as { metadata?: { telegramExecution?: unknown } } | undefined
+  if (next.done || JSON.stringify(event?.metadata?.telegramExecution) !== JSON.stringify(origin))
+    throw new Error("generated SDK lost original execution provenance in SSE delivery")
+  await stream.return()
+} finally {
+  controller.abort()
+}
+console.log("generated SDK SSE retains original root, child producer and execution phase")

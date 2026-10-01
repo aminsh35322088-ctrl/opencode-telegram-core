@@ -24,6 +24,7 @@ export * from "./opencode/execution-client.js";
 export * from "./opencode/session-client.js";
 export * from "./opencode/session-event-pump.js";
 export * from "./opencode/session-event-router.js";
+export * from "./opencode/event-provenance.js";
 export * from "./opencode/topic-worker.js";
 export type { ToolProcessPort } from "./opencode/tool-process.js";
 export * from "./opencode/temporary-session.js";
