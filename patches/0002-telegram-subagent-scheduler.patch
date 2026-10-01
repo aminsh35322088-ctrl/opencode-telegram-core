@@ -645,7 +645,7 @@ index d8ca640..ec893b4 100644
  
      return {
 diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
-index da6e0f8..40b31cd 100644
+index da6e0f8..13e2bb2 100644
 --- a/packages/opencode/test/session/prompt.test.ts
 +++ b/packages/opencode/test/session/prompt.test.ts
 @@ -1016,6 +1016,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
@@ -682,7 +682,74 @@ index da6e0f8..40b31cd 100644
  noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
    Effect.gen(function* () {
      const prompt = yield* SessionPrompt.Service
-@@ -2037,6 +2064,67 @@ unixNoLLMServer(
+@@ -1986,8 +2013,10 @@ unix(
+ 
+ unixNoLLMServer(
+   "cancel interrupts loop queued behind shell",
+-  () =>
+-    Effect.gen(function* () {
++  () => {
++    let phase = "setup"
++    const watchdog = setTimeout(() => console.error(`queued shell cancellation stalled at: ${phase}`), 5_000)
++    return Effect.gen(function* () {
+       const { prompt, chat } = yield* boot()
+ 
+       const sh = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "sleep 30" }).pipe(Effect.forkChild)
+@@ -1996,8 +2025,10 @@ unixNoLLMServer(
+       const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+       yield* Effect.sleep(50)
+ 
++      phase = "cancel"
+       yield* prompt.cancel(chat.id)
+ 
++      phase = "join queued loop"
+       const exit = yield* Fiber.await(loop)
+       expect(Exit.isSuccess(exit)).toBe(true)
+       if (Exit.isSuccess(exit)) {
+@@ -2005,16 +2036,20 @@ unixNoLLMServer(
+         expect(tool?.state.output).toContain("User aborted the command")
+       }
+ 
++      phase = "join shell"
+       yield* Fiber.await(sh)
+-    }),
++    }).pipe(Effect.ensuring(Effect.sync(() => clearTimeout(watchdog))))
++  },
+   { git: true, config: cfg },
+   30_000,
+ )
+ 
+ unixNoLLMServer(
+   "shell rejects when another shell is already running",
+-  () =>
+-    withSh(() =>
++  () => {
++    let phase = "setup"
++    const watchdog = setTimeout(() => console.error(`exclusive shell cancellation stalled at: ${phase}`), 5_000)
++    return withSh(() =>
+       Effect.gen(function* () {
+         const { prompt, chat } = yield* boot()
+ 
+@@ -2023,20 +2058,85 @@ unixNoLLMServer(
+           .pipe(Effect.forkChild)
+         yield* waitForBusy(chat.id)
+ 
++        phase = "reject second shell"
+         const exit = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo hi" }).pipe(Effect.exit)
+         expect(Exit.isFailure(exit)).toBe(true)
+         if (Exit.isFailure(exit)) {
+           expect(Cause.squash(exit.cause)).toBeInstanceOf(Session.BusyError)
+         }
+ 
++        phase = "cancel"
+         yield* prompt.cancel(chat.id)
++        phase = "join shell"
+         yield* Fiber.await(a)
+       }),
+-    ),
++    ).pipe(Effect.ensuring(Effect.sync(() => clearTimeout(watchdog))))
++  },
+   { git: true, config: cfg },
    30_000,
  )
  
