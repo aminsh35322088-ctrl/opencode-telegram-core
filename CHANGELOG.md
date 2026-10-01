@@ -4,6 +4,9 @@
 
 These entries describe prerelease development, not final v1 release notes.
 
+- Settle Runner cancellation when shell work finishes without opening readiness; cancel queued work without retaining a dead wait.
+- Share bounded process termination between scope cleanup and explicit kill, retain governor admission through uncertain cleanup and post-spawn errors, and preserve output completion at `close`. Linux shell notification stalls remain under investigation.
+
 - Add Core-owned result polling with immutable run identity, cancellation, finite deadlines/attempts and stale-result rejection.
 - Expose polling through the owned Topic task context, without allowing the application to replace its run fence.
 - Fix deadline handling so pre-aborted parents cannot start work and cancellation rejects uncooperative requests promptly.
