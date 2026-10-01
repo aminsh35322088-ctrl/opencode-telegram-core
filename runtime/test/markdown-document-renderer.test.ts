@@ -617,8 +617,8 @@ describe("Telegram Rich Block structural normalization", () => {
     const table = normalized.blocks[0];
     expect(table?.type).toBe("table");
     if (table?.type !== "table") throw new Error("expected table");
-    expect(table.cells[0]?.[0]?.colspan).toBe(4);
-    expect(table.cells[0]?.[1]?.colspan).toBe(3);
+    expect(table.cells[0]?.[0]?.colspan).toBe(3);
+    expect(table.cells[0]?.[1]?.colspan).toBe(1);
   });
 });
 
@@ -645,4 +645,95 @@ describe("Telegram renderer limit admission", () => {
       expect(() => chunkAgentDocument(document, { [key]: ceiling + 1 })).toThrow(RangeError);
     }
   });
+});
+
+ test("quote credits cannot overflow text or nested block chunk budgets", () => {
+  for (const block of [
+    { type: "quote", text: "x".repeat(20), credit: "credit" },
+    { type: "pullquote", text: "x".repeat(20), credit: "credit" },
+    { type: "quote", text: "", blocks: [{ type: "paragraph", text: "x".repeat(20) }], credit: "credit" },
+  ] as const) {
+    const chunks = chunkAgentDocument({ blocks: [block] }, { maxCharacters: 20 });
+    expect(chunks.every((chunk) => agentDocumentMetrics(chunk).characters <= 20)).toBe(true);
+    expect(chunks.map((chunk) => chunk.blocks.map((item) => {
+      if (item.type === "paragraph" || item.type === "quote" || item.type === "pullquote") return inlinePlainText(item.text);
+      return "";
+    }).join("")).join("")).toContain("credit");
+  }
+});
+
+test("simple quote metrics count the synthesized paragraph against the block budget", () => {
+  const chunks = chunkAgentDocument({ blocks: Array.from({ length: 500 }, () => ({ type: "quote" as const, text: "x" })) });
+  expect(chunks).toHaveLength(2);
+  for (const chunk of chunks) {
+    const rich = renderTelegramRichDocument(chunk, { draft: false });
+    const emitted = (rich.blocks ?? []).reduce((count, block) => count + 1 + (block.type === "blockquote" ? block.blocks.length : 0), 0);
+    expect(emitted).toBeLessThanOrEqual(500);
+    expect(agentDocumentMetrics(chunk).blocks).toBe(emitted);
+  }
+});
+
+test("block and inline wrappers share the Telegram nesting budget", () => {
+  let text: import("../src/index.js").AgentInline = "payload";
+  for (let i = 0; i < 10; i++) text = { type: "bold", text };
+  let block: import("../src/index.js").AgentBlock = { type: "paragraph", text };
+  for (let i = 0; i < 10; i++) block = { type: "details", summary: "summary", blocks: [block] };
+  const rich = renderTelegramRichDocument(chunkAgentDocument({ blocks: [block] })[0]!, { draft: false });
+  function depth(value: unknown): number {
+    if (!value || typeof value !== "object") return 0;
+    if (Array.isArray(value)) return Math.max(0, ...value.map(depth));
+    const node = value as { blocks?: unknown; text?: unknown };
+    return 1 + Math.max(depth(node.blocks), depth(node.text));
+  }
+  expect(depth(rich.blocks)).toBeLessThanOrEqual(16);
+});
+
+test("table rowspans reserve occupied columns in subsequent rows", () => {
+  const normalized = normalizeAgentDocument({ blocks: [{ type: "table", cells: [
+    [{ text: "A", colspan: 19, rowspan: 2 }, { text: "B" }],
+    [{ text: "C", colspan: 20 }, { text: "D" }],
+  ] }] });
+  const table = normalized.blocks[0];
+  if (table?.type !== "table") throw new Error("expected table");
+  expect(table.cells[1]?.reduce((sum, cell) => sum + (cell.colspan ?? 1), 19)).toBeLessThanOrEqual(20);
+  expect(table.cells[1]?.map((cell) => inlinePlainText(cell.text ?? "")).join(" ")).toContain("D");
+});
+
+test("table captions and minimal container budgets never exceed admitted limits", () => {
+  const table: AgentDocument = { blocks: [{ type: "table", cells: [[{ text: "x" }]], caption: { text: "c".repeat(32768) } }] };
+  expect(chunkAgentDocument(table).every((chunk) => agentDocumentMetrics(chunk).characters <= 32768)).toBe(true);
+  for (const block of [
+    { type: "list", items: [{ blocks: [{ type: "paragraph", text: "x" }] }] },
+    { type: "details", summary: "title", blocks: [{ type: "paragraph", text: "x" }] },
+    { type: "table", cells: [[{ text: "x" }]] },
+  ] as const) {
+    for (const maxBlocks of [1, 2]) expect(chunkAgentDocument({ blocks: [block] }, { maxBlocks }).every((chunk) => agentDocumentMetrics(chunk).blocks <= maxBlocks)).toBe(true);
+  }
+});
+
+test("oversized spanning tables degrade without emitting spans across chunk boundaries", () => {
+  const chunks = chunkAgentDocument({ blocks: [{ type: "table", cells: Array.from({ length: 501 }, (_, i) => [{ text: String(i), ...(i === 0 ? { rowspan: 501 } : {}) }]) }] });
+  for (const chunk of chunks) for (const block of chunk.blocks) {
+    if (block.type === "table") for (const [index, row] of block.cells.entries()) for (const cell of row) expect(cell.rowspan ?? 1).toBeLessThanOrEqual(block.cells.length - index);
+  }
+});
+
+test("deep container chains flatten before adding a block beyond the nesting ceiling", () => {
+  let block: import("../src/index.js").AgentBlock = { type: "paragraph", text: "payload" };
+  for (let i = 0; i < 20; i++) block = { type: "details", summary: "title", blocks: [block] };
+  const normalized = normalizeAgentDocument({ blocks: [block] });
+  let cursor = normalized.blocks[0]!;
+  let depth = 1;
+  while (cursor.type === "details") { cursor = cursor.blocks[0]!; depth++; }
+  expect(depth).toBeLessThanOrEqual(16);
+});
+
+test("fully occupied rowspan rows preserve overflow text across multiple rows", () => {
+  const normalized = normalizeAgentDocument({ blocks: [{ type: "table", cells: [
+    [{ text: "A", colspan: 20, rowspan: 3 }], [{ text: "C" }], [{ text: "D" }],
+  ] }] });
+  const table = normalized.blocks[0];
+  if (table?.type !== "table") throw new Error("expected table");
+  const text = table.cells.flat().map((cell) => inlinePlainText(cell.text ?? "")).join(" ");
+  expect(text).toContain("C"); expect(text).toContain("D");
 });

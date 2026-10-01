@@ -4,6 +4,7 @@
 
 These entries describe prerelease development, not final v1 release notes.
 
+- Enforce combined block/inline nesting and actual quote/container block costs, preserve credits within text budgets, account for cumulative table spans/rowspans and safely flatten oversized spanning tables.
 - Port PR #15 onto current pause/process/provenance architecture without its superseded shell cancellation patch. Reject non-finite, fractional, non-positive and oversized renderer budgets; verify pause between final chunks retains the same owned draft.
 
 - Capture original root/producer run provenance at Core event publication, preserve it through live SSE/global delivery and SDK schemas, and require it for native execution routing. Completion/cancellation snapshots retain retired ownership; ordinary completion honors pause even without pending tools. Bot adoption remains gated on a verified aligned prerelease.

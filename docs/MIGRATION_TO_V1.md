@@ -45,6 +45,22 @@ GFM/Telegram parsing, semantic blocks, recursive Persian/mixed-script direction
 handling and grapheme-safe chunking. Each chunk uses the current main delivery
 checkpoint and exact binding/run fence. Caller budgets must be positive integers
 within Telegram's hard limits; non-finite and oversized budgets fail closed.
+Independent review found and reproduced additional hard-limit failures in quote
+credits, combined block/inline nesting, synthesized quote blocks, cumulative table
+spans/rowspans, table captions and minimal container budgets. Regression tests now
+cover these; oversized spanning tables degrade to text rather than emitting spans
+across message boundaries. Local native typecheck and 298 tests pass; 24 release/
+toolchain contract tests passed. These results do not certify the full renderer
+or release gate.
+
+GitHub run 36909074671 passed native validation and the full upstream suite
+(158 pass, 2 skip), then reproduced `cancel interrupts loop queued behind shell`
+in the second focused repeat: release stalled and the expected abort marker was
+missing. This remains an active blocker; do not merge/release by rerunning until
+green. The first local upstream run also failed two custom-process tests because
+this cloud container PID 1 retained dead descendants as zombies. A test-only Linux
+subreaper restored all 14 applicable custom-process tests; production cleanup code
+was not weakened. Full local verification under that reaper is separate evidence.
 Bot adoption, aligned artifacts and production verification remain pending.
 
 Recovery confirmed Bot main `471f644aefe44950f07c2e11effced4ffca7d525`, version

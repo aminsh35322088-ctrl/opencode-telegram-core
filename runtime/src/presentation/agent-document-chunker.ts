@@ -93,9 +93,9 @@ export function agentBlockMetrics(block: AgentBlock): AgentDocumentMetrics {
         media: 0,
       };
     case "quote": {
-      const content = block.blocks && block.blocks.length > 0
+      const content = !block.expandable && block.blocks && block.blocks.length > 0
         ? addMetrics({ characters: 0, blocks: 1, media: 0 }, metricsForBlocks(block.blocks))
-        : { characters: inlineTelegramCharacterCount(block.text), blocks: 1, media: 0 };
+        : { characters: inlineTelegramCharacterCount(block.text), blocks: block.expandable ? 1 : 2, media: 0 };
       return {
         ...content,
         characters: content.characters +
@@ -213,8 +213,50 @@ function normalizeTableCell(
   };
 }
 
+function normalizeTableRows(rows: readonly (readonly AgentTableCell[])[], depth: number, limits: ResolvedLimits): AgentTableCell[][] {
+  const occupied = Array<number>(limits.maxTableColumns).fill(0);
+  const output: AgentTableCell[][] = [];
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex]!;
+    const cells: AgentTableCell[] = [];
+    let cursor = 0;
+    for (let index = 0; index < row.length; index++) {
+      const normalized = normalizeTableCell(row[index]!, depth + 3, limits.maxNesting);
+      while (cursor < occupied.length && occupied[cursor]! > 0) cursor++;
+      if (cursor >= occupied.length) {
+        // Preserve overflow content in an existing cell without adding columns.
+        const target = cells.length > 0 ? cells : output.findLast((previous) => previous.length > 0);
+        if (target && target.length > 0) {
+          const last = target.at(-1)!;
+          target[target.length - 1] = { ...last, text: [last.text ?? "", " | ", normalized.text ?? ""] };
+        }
+        continue;
+      }
+      let contiguous = 0;
+      while (cursor + contiguous < occupied.length && occupied[cursor + contiguous] === 0) contiguous++;
+      const free = occupied.slice(cursor).filter((value) => value === 0).length;
+      const reserve = Math.min(row.length - index - 1, free - 1);
+      const requested = normalized.colspan ?? 1;
+      const colspan = Number.isInteger(requested) && requested > 0
+        ? Math.min(requested, contiguous, free - reserve) : 1;
+      const requestedRows = normalized.rowspan ?? 1;
+      const rowspan = Number.isInteger(requestedRows) && requestedRows > 0
+        ? Math.min(requestedRows, rows.length - rowIndex) : 1;
+      for (let column = cursor; column < cursor + colspan; column++) occupied[column] = rowspan;
+      cells.push({ ...normalized,
+        ...(normalized.colspan === undefined ? {} : { colspan }),
+        ...(normalized.rowspan === undefined ? {} : { rowspan }),
+      });
+      cursor += colspan;
+    }
+    output.push(cells);
+    for (let column = 0; column < occupied.length; column++) occupied[column] = Math.max(0, occupied[column]! - 1);
+  }
+  return output;
+}
+
 function normalizeBlock(block: AgentBlock, depth: number, limits: ResolvedLimits): AgentBlock {
-  if (depth >= limits.maxNesting) {
+  if (depth >= limits.maxNesting || (block.type === "quote" && !block.expandable && !block.blocks && depth + 1 >= limits.maxNesting)) {
     return { type: "paragraph", text: blockPlainText(block) };
   }
   switch (block.type) {
@@ -223,22 +265,22 @@ function normalizeBlock(block: AgentBlock, depth: number, limits: ResolvedLimits
     case "code":
     case "thinking":
     case "footer":
-      return { ...block, text: normalizeInline(block.text, 1, limits.maxNesting) };
+      return { ...block, text: normalizeInline(block.text, depth + 1, limits.maxNesting) };
     case "pullquote":
       return {
         ...block,
-        text: normalizeInline(block.text, 1, limits.maxNesting),
+        text: normalizeInline(block.text, depth + 1, limits.maxNesting),
         ...(block.credit === undefined
           ? {}
-          : { credit: normalizeInline(block.credit, 1, limits.maxNesting) }),
+          : { credit: normalizeInline(block.credit, depth + 1, limits.maxNesting) }),
       };
     case "quote":
       return {
         ...block,
-        text: normalizeInline(block.text, 1, limits.maxNesting),
+        text: normalizeInline(block.text, depth + (block.type === "quote" && !block.expandable && !block.blocks ? 2 : 1), limits.maxNesting),
         ...(block.credit === undefined
           ? {}
-          : { credit: normalizeInline(block.credit, 1, limits.maxNesting) }),
+          : { credit: normalizeInline(block.credit, depth + 1, limits.maxNesting) }),
         ...(block.blocks === undefined
           ? {}
           : { blocks: block.blocks.map((inner) => normalizeBlock(inner, depth + 1, limits)) }),
@@ -250,28 +292,21 @@ function normalizeBlock(block: AgentBlock, depth: number, limits: ResolvedLimits
         ...block,
         items: block.items.map((item) => ({
           ...item,
-          blocks: item.blocks.map((inner) => normalizeBlock(inner, depth + 1, limits)),
+          blocks: item.blocks.map((inner) => normalizeBlock(inner, depth + 2, limits)),
         })),
       };
     case "table":
       return {
         ...block,
-        cells: block.cells.map((row) =>
-          row.slice(0, limits.maxTableColumns).map((cell, index) => {
-            const normalized = normalizeTableCell(cell, 1, limits.maxNesting);
-            const remainingColumns = limits.maxTableColumns - index;
-            return normalized.colspan !== undefined && normalized.colspan > remainingColumns
-              ? { ...normalized, colspan: remainingColumns }
-              : normalized;
-          })),
+        cells: normalizeTableRows(block.cells, depth, limits),
         ...(block.caption === undefined
           ? {}
-          : { caption: normalizeCaption(block.caption, 1, limits.maxNesting) }),
+          : { caption: normalizeCaption(block.caption, depth + 1, limits.maxNesting) }),
       } as AgentBlock;
     case "details":
       return {
         ...block,
-        summary: normalizeInline(block.summary, 1, limits.maxNesting),
+        summary: normalizeInline(block.summary, depth + 1, limits.maxNesting),
         blocks: block.blocks.map((inner) => normalizeBlock(inner, depth + 1, limits)),
       };
     case "collage":
@@ -281,7 +316,7 @@ function normalizeBlock(block: AgentBlock, depth: number, limits: ResolvedLimits
         blocks: block.blocks.map((inner) => normalizeBlock(inner, depth + 1, limits)),
         ...(block.caption === undefined
           ? {}
-          : { caption: normalizeCaption(block.caption, 1, limits.maxNesting) }),
+          : { caption: normalizeCaption(block.caption, depth + 1, limits.maxNesting) }),
       } as AgentBlock;
     case "photo":
     case "video":
@@ -294,7 +329,7 @@ function normalizeBlock(block: AgentBlock, depth: number, limits: ResolvedLimits
         ...block,
         ...(block.caption === undefined
           ? {}
-          : { caption: normalizeCaption(block.caption, 1, limits.maxNesting) }),
+          : { caption: normalizeCaption(block.caption, depth + 1, limits.maxNesting) }),
       } as AgentBlock;
     case "map": {
       let width = block.width === undefined ? undefined : Math.min(10000, Math.max(0, Math.trunc(block.width)));
@@ -317,7 +352,7 @@ function normalizeBlock(block: AgentBlock, depth: number, limits: ResolvedLimits
         ...(height === undefined ? {} : { height }),
         ...(block.caption === undefined
           ? {}
-          : { caption: normalizeCaption(block.caption, 1, limits.maxNesting) }),
+          : { caption: normalizeCaption(block.caption, depth + 1, limits.maxNesting) }),
       } as AgentBlock;
     }
     case "math":
@@ -473,6 +508,13 @@ function splitTextBlock(
   >,
   maxCharacters: number,
 ): AgentBlock[] {
+  if ((block.type === "quote" || block.type === "pullquote") && block.credit !== undefined) {
+    const { credit, ...content } = block;
+    return [
+      ...splitTextBlock(content, maxCharacters),
+      ...splitInline(credit, maxCharacters).map((text): AgentBlock => ({ type: "paragraph", text })),
+    ];
+  }
   const parts = block.type === "code" && typeof block.text === "string"
     ? splitCodeText(block.text, maxCharacters)
     : splitInline(block.text, maxCharacters);
@@ -492,6 +534,20 @@ function rowPlainText(row: readonly AgentTableCell[]): string {
 }
 
 function splitTable(block: Extract<AgentBlock, { type: "table" }>, limits: ResolvedLimits): AgentBlock[] {
+  if (block.caption !== undefined) {
+    const { caption, ...content } = block;
+    return [
+      ...splitBlock(content, limits),
+      ...splitInline(caption.text, limits.maxCharacters).map((text): AgentBlock => ({ type: "paragraph", text })),
+      ...(caption.credit === undefined ? [] : splitInline(caption.credit, limits.maxCharacters)
+        .map((text): AgentBlock => ({ type: "paragraph", text }))),
+    ];
+  }
+  if (block.cells.some((row) => row.some((cell) => (cell.rowspan ?? 1) > 1))) {
+    // A spanning row group cannot be cut into independent Telegram tables.
+    return splitNaturalText(blockPlainText(block), limits.maxCharacters)
+      .map((text): AgentBlock => ({ type: "paragraph", text }));
+  }
   const output: AgentBlock[] = [];
   let rows: AgentTableCell[][] = [];
   let currentCharacters = 0;
@@ -665,8 +721,23 @@ function splitQuote(
   block: Extract<AgentBlock, { type: "quote" }>,
   limits: ResolvedLimits,
 ): AgentBlock[] {
+  if (limits.maxBlocks === 1 && !block.expandable) {
+    return splitInline(blockPlainText(block), limits.maxCharacters)
+      .map((text): AgentBlock => ({ type: "paragraph", text }));
+  }
   if (!block.blocks || block.blocks.length === 0 || block.expandable) {
     return splitTextBlock(block, limits.maxCharacters);
+  }
+  if (block.credit !== undefined) {
+    const { credit, ...content } = block;
+    return [
+      ...splitQuote(content, limits),
+      ...splitInline(credit, limits.maxCharacters).map((text): AgentBlock => ({ type: "paragraph", text })),
+    ];
+  }
+  if (limits.maxBlocks === 1) {
+    return splitInline(blockPlainText(block), limits.maxCharacters)
+      .map((text): AgentBlock => ({ type: "paragraph", text }));
   }
   const nested = chunkAgentDocument(
     { blocks: block.blocks },
@@ -734,7 +805,11 @@ export function chunkAgentDocument(
 ): AgentDocument[] {
   const limits = resolveLimits(options);
   const normalized = normalizeAgentDocument(document, options);
-  const pieces = normalized.blocks.flatMap((block) => splitBlock(block, limits));
+  const pieces = normalized.blocks.flatMap((block) => splitBlock(block, limits))
+    .flatMap((block) => fits(agentBlockMetrics(block), limits) ? [block] :
+      splitNaturalText(blockPlainText(block), limits.maxCharacters)
+        .map((text): AgentBlock => ({ type: "paragraph", text })));
+
   if (pieces.length === 0) return [];
 
   const documents: AgentDocument[] = [];
