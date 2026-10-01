@@ -36,6 +36,35 @@ racing a rich mutation. Full Linux CI and aligned artifact checks precede Bot us
 - Core now captures original root and independent producer ownership before live publication, with the producer phase and workspace. SSE/global events and generated SDK schemas preserve `metadata.telegramExecution`; durable replay stays untagged. Native `SessionEventRouter.resolveExecution` requires this provenance and returns the complete captured run fence after ancestry validation. Delayed old-root events and replacement during lookup fail closed. Callers must retain and recheck that fence at delivery; the legacy `resolve` method is for session/control routing, not untagged execution delivery. Bot adoption remains gated on a verified aligned prerelease and final routing audit.
 - Host completion/cancellation events capture each retired owner's identity without retaining runtime authority. Ordinary completion waits through pause and rechecks pause under the admission guard before retirement; destructive cancellation still finalizes the original tree.
 
+## Renderer integration checkpoint (2026-10-01)
+
+PR #15 renderer work is ported onto Core `ef65524978b3eadd117c5fee6068cec9e1071d4a`
+on the integration branch. The older branch's shell cancellation patch is omitted;
+`patches/series` and current runtime patches remain unchanged. Final output uses
+GFM/Telegram parsing, semantic blocks, recursive Persian/mixed-script direction
+handling and grapheme-safe chunking. Each chunk uses the current main delivery
+checkpoint and exact binding/run fence. Caller budgets must be positive integers
+within Telegram's hard limits; non-finite and oversized budgets fail closed.
+Bot adoption, aligned artifacts and production verification remain pending.
+
+Recovery confirmed Bot main `471f644aefe44950f07c2e11effced4ffca7d525`, version
+0.26.2 and the pre.7 compatibility pin. Bot PRs #176 and #110 remain open and
+must be reconciled against current Core before adopting their runtime behavior.
+Core main and Bot main CI were green at inspection. Railway Core smoke for
+`ef655249` passed 238 native tests and its healthcheck, then slept normally.
+Production Bot remains on `a0a0f4d0910659b9732da8650b2b3cab156f5eb6`; it was not
+redeployed during recovery.
+
+Railway production baseline at recovery (24-hour summary): reported memory
+current 0.5028 GB, average 0.5956 GB, maximum 0.9999 GB; CPU current 0.0216,
+average 0.0181, maximum 0.8229. Recent watchdog samples reported Bot RSS 124 MiB,
+service working set about 475 MiB, raw service memory about 480 MiB, cgroup limit
+954 MiB and six service processes (one admitted OpenCode server). These distinct
+measurements are observations of the older deployment, not before/after
+optimization evidence or a leak-free certification. Investigate the peak and
+collect scenario-based trends before RC. Smoke metrics describe the smoke server,
+not a full running model/tool workload.
+
 ## Review focus
 
 - A read or process spawn finishes after its owner is rotated or deleted: reject output and clean the exact old child.

@@ -177,7 +177,13 @@ test("paused rich drafts retain their lease and finalize only after resume", asy
   const mutations: string[] = [];
   const rich = new TelegramRichStreamController(bindings, runs, {
     sendDraft: async (_route, _id, message) => { mutations.push("draft:" + message.markdown); },
-    sendFinal: async (_route, message) => { mutations.push("final:" + message.markdown); },
+    sendFinal: async (_route, message) => {
+      const first = message.blocks?.[0];
+      const text = first?.type === "paragraph" && typeof first.text === "string"
+        ? first.text
+        : message.markdown;
+      mutations.push("final:" + text);
+    },
   }, async () => { throw new Error("pause must not abort"); });
   const route = { chatId: 10, messageThreadId: 11 };
   const draft = await rich.startMarkdown(run, route, "first");
@@ -427,4 +433,32 @@ test("polling rechecks a pause arriving as its checkpoint resolves", async () =>
   runs.observeExecution(run, { runId: "run", paused: false, continuation: "live" });
   expect(await pending).toBe("done");
   expect(whilePaused).toBe(0);
+});
+
+test("multi-chunk renderer parks remaining messages on pause and resumes the same draft", async () => {
+  const bindings = new BindingRegistry(); const owner = binding(); bindings.register(owner);
+  const runs = new RunRegistry(); const run = runs.start(owner, 1, "chunk-pause");
+  const messages: unknown[] = [];
+  let firstSent!: () => void;
+  const first = new Promise<void>((resolve) => { firstSent = resolve; });
+  const rich = new TelegramRichStreamController(bindings, runs, {
+    sendDraft: async () => {},
+    sendFinal: async (_route, message) => {
+      messages.push(message);
+      if (messages.length === 1) {
+        runs.observeExecution(run, { runId: run.runId, paused: true, continuation: "live" });
+        firstSent();
+      }
+    },
+  }, async () => {});
+  const route = { chatId: owner.chatId, messageThreadId: owner.threadId };
+  const draft = await rich.startMarkdown(run, route, "working");
+  const pending = rich.finalizeMarkdown(run, route, draft!, "متن فارسی English ".repeat(4000));
+  await first;
+  await Bun.sleep(20);
+  expect(messages).toHaveLength(1);
+  expect(runs.accepts(run)).toBe(true);
+  runs.observeExecution(run, { runId: run.runId, paused: false, continuation: "live" });
+  expect(await pending).toBe(true);
+  expect(messages.length).toBeGreaterThan(1);
 });

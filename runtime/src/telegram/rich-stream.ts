@@ -1,5 +1,8 @@
 import type { InputRichMessageWithoutUpload } from "grammy/types";
+import { detectMarkdownDirection, optimizeAgentDocumentBidi } from "../presentation/agent-document-bidi.js";
+import { chunkAgentDocument } from "../presentation/agent-document-chunker.js";
 import type { AgentDocument } from "../presentation/agent-document.js";
+import { parseMarkdownDocument } from "../presentation/markdown-document-parser.js";
 import { renderTelegramRichDocument, renderTelegramRichMarkdown } from "../presentation/telegram-rich-renderer.js";
 import type { BindingRegistry } from "../runtime/binding-registry.js";
 import { sameRun, type RunIdentity } from "../runtime/identity.js";
@@ -70,6 +73,13 @@ function baseDraftId(runId: string): number {
   return (hash >>> 1) || 1;
 }
 
+function renderMarkdownWithDirection(markdown: string): InputRichMessageWithoutUpload {
+  return renderTelegramRichMarkdown(
+    markdown,
+    detectMarkdownDirection(markdown) === "rtl" ? { rtl: true } : {},
+  );
+}
+
 export class TelegramRichStreamController {
   readonly #leases = new Map<string, DraftLease>();
 
@@ -98,9 +108,11 @@ export class TelegramRichStreamController {
     const key = routeKey(route, draftId);
     const lease: DraftLease = { run, route, draftId };
     this.#leases.set(key, lease);
+    const optimized = optimizeAgentDocumentBidi(document);
+    const preview = chunkAgentDocument(optimized)[0] ?? optimized;
     try {
       if (!await this.#deliver(key, lease, signal, () =>
-        this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal))) return null;
+        this.port.sendDraft(route, draftId, renderTelegramRichDocument(preview, { draft: true }), signal))) return null;
     } catch (error) {
       this.#dropLease(key, lease, "Draft send failed");
       throw error;
@@ -125,7 +137,7 @@ export class TelegramRichStreamController {
     this.#leases.set(key, lease);
     try {
       if (!await this.#deliver(key, lease, signal, () =>
-        this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal))) return null;
+        this.port.sendDraft(route, draftId, renderMarkdownWithDirection(markdown), signal))) return null;
     } catch (error) {
       this.#dropLease(key, lease, "Draft send failed");
       throw error;
@@ -232,7 +244,7 @@ export class TelegramRichStreamController {
       return false;
     }
     return await this.#deliver(key, lease, signal, () =>
-      this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal)) !== null;
+      this.port.sendDraft(route, draftId, renderMarkdownWithDirection(markdown), signal)) !== null;
   }
 
   async finalizeMarkdown(
@@ -249,10 +261,25 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft finalize");
       return false;
     }
-    if (!await this.#deliver(key, lease, signal, () =>
-      this.port.sendFinal(route, renderTelegramRichMarkdown(markdown), signal))) return false;
-    this.#dropLease(key, lease, "Draft finalized");
-    return true;
+    const documents = chunkAgentDocument(
+      optimizeAgentDocumentBidi(parseMarkdownDocument(markdown)),
+    );
+    if (documents.length === 0 && markdown.trim().length === 0) {
+      this.#dropLease(key, lease, "Draft finalized empty");
+      return true;
+    }
+    if (documents.length === 0 && markdown.length > 0) {
+      try {
+        if (!await this.#deliver(key, lease, signal, () =>
+          this.port.sendFinal(route, renderMarkdownWithDirection(markdown), signal))) return false;
+      } catch (error) {
+        this.#dropLease(key, lease, "Final send failed");
+        throw error;
+      }
+      this.#dropLease(key, lease, "Draft finalized");
+      return true;
+    }
+    return this.#finalizeDocuments(key, lease, route, documents, signal);
   }
 
   async update(
@@ -269,8 +296,10 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft update");
       return false;
     }
+    const optimized = optimizeAgentDocumentBidi(document);
+    const preview = chunkAgentDocument(optimized)[0] ?? optimized;
     return await this.#deliver(key, lease, signal, () =>
-      this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal)) !== null;
+      this.port.sendDraft(route, draftId, renderTelegramRichDocument(preview, { draft: true }), signal)) !== null;
   }
 
   async finalize(
@@ -287,8 +316,36 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft finalize");
       return false;
     }
-    if (!await this.#deliver(key, lease, signal, () =>
-      this.port.sendFinal(route, renderTelegramRichDocument(document, { draft: false }), signal))) return false;
+    const documents = chunkAgentDocument(optimizeAgentDocumentBidi(document));
+    return this.#finalizeDocuments(key, lease, route, documents, signal);
+  }
+
+  async #finalizeDocuments(
+    key: string,
+    lease: DraftLease,
+    route: RichDraftRoute,
+    documents: readonly AgentDocument[],
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (documents.length === 0) {
+      this.#dropLease(key, lease, "Draft finalized empty");
+      return true;
+    }
+
+    try {
+      for (const document of documents) {
+        if (!await this.#deliver(key, lease, signal, () =>
+          this.port.sendFinal(
+            route,
+            renderTelegramRichDocument(document, { draft: false }),
+            signal,
+          ))) return false;
+      }
+    } catch (error) {
+      this.#dropLease(key, lease, "Final send failed");
+      throw error;
+    }
+
     this.#dropLease(key, lease, "Draft finalized");
     return true;
   }

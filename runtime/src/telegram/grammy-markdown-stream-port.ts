@@ -1,5 +1,6 @@
 import { streamApi } from "@grammyjs/stream";
 import type { Api } from "grammy";
+import { detectMarkdownDirection } from "../presentation/agent-document-bidi.js";
 import {
   RichStreamFencedError,
   type NativeMarkdownStreamPort,
@@ -7,6 +8,37 @@ import {
 } from "./rich-stream.js";
 
 type StreamRawApi = Parameters<typeof streamApi>[0];
+
+function withDetectedRtl(args: readonly unknown[]): unknown[] {
+  const [first, ...rest] = args;
+  if (first === null || typeof first !== "object" || Array.isArray(first)) return [...args];
+
+  const payload = first as Record<string, unknown>;
+  const richMessage = payload.rich_message;
+  if (richMessage === null || typeof richMessage !== "object" || Array.isArray(richMessage)) {
+    return [...args];
+  }
+
+  const rich = richMessage as Record<string, unknown>;
+  if (
+    typeof rich.markdown !== "string" ||
+    rich.is_rtl !== undefined ||
+    detectMarkdownDirection(rich.markdown) !== "rtl"
+  ) {
+    return [...args];
+  }
+
+  return [
+    {
+      ...payload,
+      rich_message: {
+        ...rich,
+        is_rtl: true,
+      },
+    },
+    ...rest,
+  ];
+}
 
 export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort {
   constructor(private readonly api: Api) {}
@@ -36,7 +68,7 @@ export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort 
             const mutate = async () => {
               options.signal.throwIfAborted();
               if (!options.guard()) throw new RichStreamFencedError();
-              return Reflect.apply(value, target, args);
+              return Reflect.apply(value, target, withDetectedRtl(args));
             };
             return options.withMutation ? options.withMutation(mutate) : mutate();
           };
