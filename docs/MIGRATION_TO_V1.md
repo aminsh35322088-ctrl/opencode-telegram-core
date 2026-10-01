@@ -12,6 +12,11 @@ All runtime implementations below belong in this repository. Bot changes are lim
 
 Use focused changes and red/green regression tests per task. Keep SDK, native library and Linux runtime aligned in each immutable prerelease. Document API changes and migration notes in README/CHANGELOG; final public release notes remain deferred.
 
+The unreleased [custom-tool process contract](CUSTOM_TOOL_PROCESSES.md) now reaches
+the existing plugin registry using captured runtime context and the authoritative
+governor. Portable regressions cover ownership and admission races. Actual Linux
+group tests and persistent-daemon inspection precede Bot migration and release.
+
 ### Pause integration boundaries
 
 The Bot currently uses the upstream legacy `SessionPrompt`/`SessionRunState` execution path. Live gates now integrate there in unreleased source, with the runtime control API, model phase fencing, and retained background task ownership covered by Core tests. See [the pause contract and remaining gates](PAUSE_RESUME.md). The shared execution authority runs in the upstream runtime; native clients consume its API. The published Bot pin remains pre.7 while native/process/delivery integration is incomplete.

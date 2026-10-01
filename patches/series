@@ -2,3 +2,4 @@
 0002-telegram-subagent-scheduler.patch
 0003-telegram-process-budget.patch
 0004-telegram-session-execution.patch
+0005-telegram-custom-process-context.patch

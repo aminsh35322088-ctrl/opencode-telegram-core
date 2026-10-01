@@ -867,18 +867,47 @@ index 99f7aec..baa0eca 100644
    const permission = yield* Permission.Service
    const registry = yield* ToolRegistry.Service
 diff --git a/packages/opencode/src/tool/registry.ts b/packages/opencode/src/tool/registry.ts
-index 9167cb3..e5ba0f2 100644
+index 9167cb3..8792606 100644
 --- a/packages/opencode/src/tool/registry.ts
 +++ b/packages/opencode/src/tool/registry.ts
-@@ -3,6 +3,7 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
+@@ -3,6 +3,9 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
  import { Ripgrep } from "@opencode-ai/core/ripgrep"
  import { PlanExitTool } from "./plan"
  import { Session } from "@/session/session"
 +import { SessionRunState } from "@/session/run-state"
++import { createToolProcessScope } from "@opencode-ai/core/telegram-tool-process"
++import { CurrentTelegramExecution, CurrentTelegramEpoch } from "@opencode-ai/core/telegram-execution-context"
  import { QuestionTool } from "./question"
  import { ShellTool } from "./shell"
  import { EditTool } from "./edit"
-@@ -435,6 +436,7 @@ export const node = LayerNode.make({
+@@ -145,13 +148,25 @@ const layer = Layer.effect(
+                 // Bridge the host's Effect-based `ask` into a Promise-returning
+                 // function for the plugin to make sure context persists
+                 const bridge = yield* EffectBridge.make()
++                const execution = yield* CurrentTelegramExecution
++                const epoch = yield* CurrentTelegramEpoch
++                const processes = createToolProcessScope(
++                  execution,
++                  epoch,
++                  toolCtx.sessionID,
++                  ctx.directory,
++                  toolCtx.abort,
++                )
+                 const pluginCtx: PluginToolContext = {
+                   ...toolCtx,
++                  process: processes.port,
+                   ask: (req) => bridge.promise(toolCtx.ask(req)),
+                   directory: ctx.directory,
+                   worktree: ctx.worktree,
+                 }
+-                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
++                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx)).pipe(
++                  Effect.ensuring(Effect.promise(() => processes.close())),
++                )
+                 const output = typeof result === "string" ? result : result.output
+                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
+                 const attachments = typeof result === "string" ? undefined : result.attachments
+@@ -435,6 +450,7 @@ export const node = LayerNode.make({
      Agent.node,
      Skill.node,
      Session.node,

@@ -32,7 +32,7 @@ The machine-readable upstream/release source of truth is `upstream/lock.json`. M
 
 The migration remains on prereleases. See [migration and release gates](docs/MIGRATION_TO_V1.md) and [owned result polling](docs/RESULT_POLLING.md). Stable publication requires the complete ownership audit and a healthy production RC soak.
 
-Unreleased source also contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, and fail-closed recovery. Its native/Bot integration and custom-tool process ownership remain release blockers.
+Unreleased source also contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, and fail-closed recovery, plus a [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md). Native/Bot pause integration, Linux process validation, Bot tool migration and persistent-daemon ownership remain release blockers.
 
 The native runtime is under `runtime/`. Its main contracts include:
 

@@ -149,10 +149,9 @@ index e5be4d4..82b8aa4 100644
          title: input.title || `Terminal ${id.slice(-4)}`,
 diff --git a/packages/core/src/telegram-process-budget.ts b/packages/core/src/telegram-process-budget.ts
 new file mode 100644
-index 0000000..c0b5a01
 --- /dev/null
 +++ b/packages/core/src/telegram-process-budget.ts
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,287 @@
 +import { readFileSync } from "node:fs"
 +import path from "node:path"
 +
@@ -176,7 +175,7 @@ index 0000000..c0b5a01
 +  readonly id: string
 +  readonly kind: TelegramProcessKind
 +  readonly admittedAt: number
-+  bindPid(pid: number | null | undefined): void
++  bindPid(pid: number | null | undefined, retainUntilRelease?: boolean): void
 +  release(): void
 +}
 +
@@ -187,6 +186,7 @@ index 0000000..c0b5a01
 +  readonly reserveBytes: number
 +  readonly reserveUntil: number
 +  pid?: number
++  retainUntilRelease?: boolean
 +}
 +
 +const RULES: Readonly<Record<TelegramProcessKind, TelegramProcessRule>> = Object.freeze({
@@ -373,10 +373,13 @@ index 0000000..c0b5a01
 +      id,
 +      kind,
 +      admittedAt,
-+      bindPid: (pid) => {
++      bindPid: (pid, retainUntilRelease = false) => {
 +        if (!pid || released) return
 +        const lease = this.#active.get(id)
-+        if (lease) lease.pid = pid
++        if (lease) {
++          lease.pid = pid
++          lease.retainUntilRelease = retainUntilRelease
++        }
 +      },
 +      release: () => {
 +        if (released) return
@@ -401,7 +404,7 @@ index 0000000..c0b5a01
 +
 +  #prune(): void {
 +    for (const [id, lease] of this.#active) {
-+      if (lease.pid && !this.isPidAlive(lease.pid)) this.#active.delete(id)
++      if (lease.pid && !lease.retainUntilRelease && !this.isPidAlive(lease.pid)) this.#active.delete(id)
 +    }
 +  }
 +
