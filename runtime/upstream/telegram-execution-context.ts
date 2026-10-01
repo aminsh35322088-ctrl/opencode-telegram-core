@@ -24,6 +24,26 @@ export const checkpoint = Effect.gen(function* () {
   if (execution) yield* Effect.promise((signal) => execution.checkpoint(signal, epoch))
 })
 
+export const completionCheckpoint = Effect.gen(function* () {
+  const execution = yield* CurrentTelegramExecution
+  const epoch = yield* CurrentTelegramEpoch
+  if (execution) yield* Effect.promise((signal) => execution.completionCheckpoint(signal, epoch))
+})
+
+export const drainTools = (execution: SessionExecutionLease) =>
+  Effect.promise((parentSignal) => withDeadline(() => execution.whenToolsSettled(), {
+    timeoutMs: 10_000,
+    label: "tool cleanup",
+    parentSignal,
+    // Ordinary completion still honors pause. Retirement opens the cleanup
+    // clock, allowing admitted tools to finalize under the destructive grant.
+    ...(!execution.signal.aborted ? { activity: {
+      get paused() { return !execution.signal.aborted && execution.paused },
+      subscribe: (listener: (error?: unknown) => void) =>
+        execution.subscribe((error) => listener(execution.signal.aborted ? undefined : error)),
+    } } : {}),
+  }))
+
 export function activeDeadline<A, E, R, E2, R2>(
   work: Effect.Effect<A, E, R>,
   timeoutMs: number,

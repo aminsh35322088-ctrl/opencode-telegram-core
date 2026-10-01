@@ -1,3 +1,48 @@
+diff --git a/packages/opencode/src/effect/runner.ts b/packages/opencode/src/effect/runner.ts
+index f21a61c..c65f444 100644
+--- a/packages/opencode/src/effect/runner.ts
++++ b/packages/opencode/src/effect/runner.ts
+@@ -3,6 +3,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, Synchronize
+ export interface Runner<A, E = never> {
+   readonly state: State<A, E>
+   readonly busy: boolean
++  readonly awaitIdle: Effect.Effect<void, E | Cancelled>
+   readonly ensureRunning: (work: Effect.Effect<A, E>) => Effect.Effect<A, E>
+   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy>
+   readonly cancel: Effect.Effect<void>
+@@ -73,10 +74,16 @@ export const make = <A, E = never>(
+       (st) =>
+         [
+           Effect.gen(function* () {
+-            if (st._tag === "Running" && st.run.id === id) yield* idle
+-            yield* complete(done, exit)
++            const cleanup = yield* (st._tag === "Running" && st.run.id === id ? idle : Effect.void).pipe(Effect.exit)
++            yield* SynchronizedRef.update(ref, (current) =>
++              current._tag === "Running" && current.run.id === id ? ({ _tag: "Idle" } as const) : current,
++            )
++            // Cleanup failure must settle the same completion Deferred as work
++            // failure. Otherwise callers remain parked after the runner is idle.
++            yield* complete(done, Exit.isFailure(cleanup) ? Exit.failCause(cleanup.cause) : exit)
++            yield* cleanup
+           }),
+-          st._tag === "Running" && st.run.id === id ? ({ _tag: "Idle" } as const) : st,
++          st,
+         ] as const,
+     ).pipe(Effect.flatten)
+ 
+@@ -208,6 +215,12 @@ export const make = <A, E = never>(
+     get busy() {
+       return state()._tag !== "Idle"
+     },
++    awaitIdle: Effect.suspend(() => {
++      const st = state()
++      if (st._tag === "Running" || st._tag === "ShellThenRun") return Deferred.await(st.run.done).pipe(Effect.asVoid)
++      if (st._tag === "Shell") return Fiber.join(st.shell.fiber).pipe(Effect.asVoid)
++      return Effect.void
++    }),
+     ensureRunning,
+     startShell,
+     cancel,
 diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
 index 959a303..874e6af 100644
 --- a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
@@ -201,45 +246,52 @@ index 6625850..2461b87 100644
        .handle("share", share)
        .handle("unshare", unshare)
 diff --git a/packages/opencode/src/session/processor.ts b/packages/opencode/src/session/processor.ts
-index 9f85309..90fcf3f 100644
+index 9f85309..f928d04 100644
 --- a/packages/opencode/src/session/processor.ts
 +++ b/packages/opencode/src/session/processor.ts
-@@ -25,6 +25,7 @@ import { isRecord } from "@/util/record"
+@@ -25,6 +25,11 @@ import { isRecord } from "@/util/record"
  import { EventV2Bridge } from "@/event-v2-bridge"
  import { Database } from "@opencode-ai/core/database/database"
  import { Usage, type LLMEvent } from "@opencode-ai/llm"
-+import { CurrentTelegramEpoch, CurrentTelegramExecution } from "@opencode-ai/core/telegram-execution-context"
++import {
++  drainTools,
++  CurrentTelegramEpoch,
++  CurrentTelegramExecution,
++} from "@opencode-ai/core/telegram-execution-context"
  
  const DOOM_LOOP_THRESHOLD = 3
  export type Result = "compact" | "stop" | "continue"
-@@ -96,6 +97,10 @@ const layer = Layer.effect(
+@@ -96,6 +101,13 @@ const layer = Layer.effect(
      const database = yield* Database.Service
  
      const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
 +      const execution = yield* CurrentTelegramExecution
 +      const epoch = yield* CurrentTelegramEpoch
 +      const checkpoint = execution ? Effect.promise((signal) => execution.checkpoint(signal, epoch)) : Effect.void
++      const completionCheckpoint = execution
++        ? Effect.promise((signal) => execution.completionCheckpoint(signal, epoch))
++        : Effect.void
 +      yield* checkpoint
        // Pre-capture snapshot before the LLM stream starts. The AI SDK
        // may execute tools internally before emitting start-step events,
        // so capturing inside the event handler can be too late.
-@@ -145,6 +150,7 @@ const layer = Layer.effect(
+@@ -145,6 +157,7 @@ const layer = Layer.effect(
          toolCallID: string,
          update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
        ) {
-+        yield* checkpoint
++        yield* completionCheckpoint
          const match = yield* readToolCall(toolCallID)
          if (!match) return undefined
          const part = yield* session.updatePart(update(match.part))
-@@ -166,6 +172,7 @@ const layer = Layer.effect(
+@@ -166,6 +179,7 @@ const layer = Layer.effect(
            attachments?: SessionV1.FilePart[]
          },
        ) {
-+        yield* checkpoint
++        yield* completionCheckpoint
          const match = yield* readToolCall(toolCallID)
          if (!match || match.part.state.status !== "running") return
          yield* session.updatePart({
-@@ -276,6 +283,7 @@ const layer = Layer.effect(
+@@ -276,6 +290,7 @@ const layer = Layer.effect(
        }
  
        const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
@@ -247,7 +299,18 @@ index 9f85309..90fcf3f 100644
          switch (value.type) {
            case "reasoning-start":
              if (value.id in ctx.reasoningMap) return
-@@ -639,6 +647,7 @@ const layer = Layer.effect(
+@@ -582,6 +597,10 @@ const layer = Layer.effect(
+         }
+         ctx.reasoningMap = {}
+ 
++        // The AI SDK tool bridges are detached from the model fiber. Give
++        // admitted calls their bounded cleanup before replacing partial output
++        // with an abort error. SessionRunState separately fences a timeout.
++        if (execution) yield* drainTools(execution).pipe(Effect.ignoreCause)
+         yield* Effect.forEach(
+           Object.values(ctx.toolcalls),
+           (call) => Deferred.await(call.done).pipe(Effect.timeout("250 millis"), Effect.ignore),
+@@ -639,6 +658,7 @@ const layer = Layer.effect(
        })
  
        const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
@@ -256,10 +319,10 @@ index 9f85309..90fcf3f 100644
            "session.id": input.sessionID,
            messageID: input.assistantMessage.id,
 diff --git a/packages/opencode/src/session/run-state.ts b/packages/opencode/src/session/run-state.ts
-index 5cefdd0..bbdb56a 100644
+index 5cefdd0..35f3bc9 100644
 --- a/packages/opencode/src/session/run-state.ts
 +++ b/packages/opencode/src/session/run-state.ts
-@@ -3,24 +3,56 @@ import { InstanceState } from "@/effect/instance-state"
+@@ -3,24 +3,57 @@ import { InstanceState } from "@/effect/instance-state"
  import { SessionV1 } from "@opencode-ai/core/v1/session"
  import { Runner } from "@/effect/runner"
  import { BackgroundJob } from "@/background/job"
@@ -276,6 +339,7 @@ index 5cefdd0..bbdb56a 100644
 +} from "@opencode-ai/core/session-execution-control"
 +import {
 +  checkpoint,
++  drainTools,
 +  CurrentTelegramContinuation,
 +  CurrentTelegramEpoch,
 +  CurrentTelegramExecution,
@@ -318,7 +382,7 @@ index 5cefdd0..bbdb56a 100644
    ) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
  }
  
-@@ -31,66 +63,219 @@ const layer = Layer.effect(
+@@ -31,66 +64,265 @@ const layer = Layer.effect(
    Effect.gen(function* () {
      const background = yield* BackgroundJob.Service
      const status = yield* SessionStatus.Service
@@ -351,22 +415,24 @@ index 5cefdd0..bbdb56a 100644
          yield* Effect.addFinalizer(
            Effect.fnUntraced(function* () {
 -            yield* Effect.forEach(runners.values(), (runner) => runner.cancel, {
--              concurrency: "unbounded",
--              discard: true,
--            })
 +            lifecycle.closing += 1
++            const entries = [...runners.values()]
++            const cleanup = entries.map(({ execution }) => execution.beginCleanup(execution.epoch))
 +            // Retire authority before interrupting fibers. Idle/persistence
 +            // failures must never skip owned resource termination.
 +            const resources = yield* Effect.sync(() => control.dispose()).pipe(Effect.exit)
-+            const exits = yield* Effect.forEach(
-+              [...runners.values()],
-+              ({ runner }) => runner.cancel.pipe(Effect.exit),
-+              {
-+                concurrency: "unbounded",
-+              },
-+            )
++            const exits = yield* Effect.forEach(entries, ({ runner }) => runner.cancel.pipe(Effect.exit), {
+               concurrency: "unbounded",
+-              discard: true,
+             })
++            const tools = yield* Effect.forEach(entries, ({ execution }) => drainTools(execution).pipe(Effect.exit), {
++              concurrency: "unbounded",
++            })
++            for (const end of cleanup) end()
              runners.clear()
-+            const errors = [resources, ...exits].filter(Exit.isFailure).map((exit) => Cause.squash(exit.cause))
++            const errors = [resources, ...exits, ...tools]
++              .filter(Exit.isFailure)
++              .map((exit) => Cause.squash(exit.cause))
 +            if (errors.length)
 +              return yield* Effect.die(new AggregateError(errors, "execution workspace cleanup failed"))
            }),
@@ -407,6 +473,12 @@ index 5cefdd0..bbdb56a 100644
 +      const parent = yield* CurrentTelegramExecution
 +      const continuation = yield* CurrentTelegramContinuation
 +      const epoch = yield* CurrentTelegramEpoch
++      // Trusted child/follow-up admission must wait for prior idle cleanup
++      // before reopening its phase. Do not hold the admission semaphore here.
++      if (continuation?.owner.sessionId === sessionID) {
++        const previous = data.runners.get(sessionID)
++        if (previous) yield* previous.runner.awaitIdle.pipe(Effect.orDie)
++      }
 +      return yield* data.guard.withPermit(
 +        Effect.gen(function* () {
 +          if (data.closing > 0) return yield* Effect.die(new Error("execution workspace is retiring"))
@@ -440,24 +512,48 @@ index 5cefdd0..bbdb56a 100644
 +          )
 +          let interrupt = onInterrupt
 +          const next = Runner.make<SessionV1.WithParts>(data.scope, {
-+            onIdle: data.guard.withPermit(
-+              Effect.gen(function* () {
-+                if (data.runners.get(sessionID)?.execution !== execution) return
-+                const retired = data.control.get(execution.owner)
-+                  ? data.control.finish(execution.owner)
-+                  : [execution.owner]
-+                for (const owner of retired) {
-+                  const id = SessionID.make(owner.sessionId)
-+                  if (data.runners.get(id)?.execution.owner.runId !== owner.runId) continue
-+                  const current = yield* sessions.get(id).pipe(Effect.orDie)
-+                  yield* sessions.setMetadata({
-+                    sessionID: id,
-+                    metadata: { ...current.metadata, telegramExecution: null },
-+                  })
-+                  yield* status.set(id, { type: "idle" })
-+                  data.runners.delete(id)
-+                }
-+              }),
++            onIdle: Effect.suspend(() => (execution.signal.aborted ? Effect.void : drainTools(execution))).pipe(
++              Effect.andThen(
++                data.guard.withPermit(
++                  Effect.gen(function* () {
++                    if (data.runners.get(sessionID)?.execution !== execution) return
++                    const retired = data.control.get(execution.owner)
++                      ? data.control.finish(execution.owner)
++                      : [execution.owner]
++                    for (const owner of retired) {
++                      const id = SessionID.make(owner.sessionId)
++                      if (data.runners.get(id)?.execution.owner.runId !== owner.runId) continue
++                      const current = yield* sessions.get(id).pipe(Effect.orDie)
++                      yield* sessions.setMetadata({
++                        sessionID: id,
++                        metadata: { ...current.metadata, telegramExecution: null },
++                      })
++                      yield* status.set(id, { type: "idle" })
++                      data.runners.delete(id)
++                    }
++                  }),
++                ),
++              ),
++              Effect.catchCause((cause) =>
++                data.guard.withPermit(
++                  Effect.gen(function* () {
++                    // An ordinary completion fault must retire owned resources and
++                    // quarantine admission before the failed caller is released.
++                    if (data.control.get(execution.owner)) {
++                      data.closing += 1
++                      const cleanup = yield* Effect.sync(() => data.control.close(execution.owner)).pipe(Effect.exit)
++                      if (Exit.isFailure(cleanup))
++                        return yield* Effect.die(
++                          new AggregateError(
++                            [Cause.squash(cause), Cause.squash(cleanup.cause)],
++                            "execution completion cleanup failed",
++                          ),
++                        )
++                    }
++                    return yield* Effect.failCause(cause)
++                  }),
++                ),
++              ),
 +            ),
 +            onBusy: status.set(sessionID, { type: "busy" }),
 +            onInterrupt: Effect.suspend(() => interrupt),
@@ -511,10 +607,11 @@ index 5cefdd0..bbdb56a 100644
 +          const ids = new Set([sessionID, ...entries.map((entry) => SessionID.make(entry.execution.owner.sessionId))])
 +          for (const id of ids) data.retiring.add(id)
 +          data.closing += 1
++          const cleanup = entries.map(({ execution }) => execution.beginCleanup(execution.epoch))
 +          const retired = existing
 +            ? yield* Effect.sync(() => data.control.close(existing.execution.owner)).pipe(Effect.exit)
 +            : Exit.succeed(undefined)
-+          return { entries, ids, retired }
++          return { entries, ids, retired, cleanup }
 +        }),
 +      )
 +      if (!owned) return
@@ -525,6 +622,11 @@ index 5cefdd0..bbdb56a 100644
 +        concurrency: "unbounded",
 +        discard: true,
 +      }).pipe(Effect.exit)
++      const tools = yield* Effect.forEach(owned.entries, ({ execution }) => drainTools(execution), {
++        concurrency: "unbounded",
++        discard: true,
++      }).pipe(Effect.exit)
++      for (const end of owned.cleanup) end()
 +      yield* data.guard.withPermit(
 +        Effect.gen(function* () {
 +          for (const id of owned.ids) {
@@ -538,7 +640,12 @@ index 5cefdd0..bbdb56a 100644
 +          }
 +          // Cleanup failure keeps the workspace closed rather than permitting
 +          // a replacement alongside an execution whose ownership is uncertain.
-+          if (Exit.isSuccess(owned.retired) && Exit.isSuccess(jobs) && Exit.isSuccess(fibers)) {
++          if (
++            Exit.isSuccess(owned.retired) &&
++            Exit.isSuccess(jobs) &&
++            Exit.isSuccess(fibers) &&
++            Exit.isSuccess(tools)
++          ) {
 +            for (const id of owned.ids) data.retiring.delete(id)
 +            data.closing -= 1
 +          }
@@ -547,6 +654,7 @@ index 5cefdd0..bbdb56a 100644
 +      yield* owned.retired
 +      yield* jobs
 +      yield* fibers
++      yield* tools
 +    }, Effect.uninterruptible)
  
      const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
@@ -567,7 +675,7 @@ index 5cefdd0..bbdb56a 100644
      })
  
      const startShell = Effect.fn("SessionRunState.startShell")(function* (
-@@ -98,13 +283,118 @@ const layer = Layer.effect(
+@@ -98,13 +330,121 @@ const layer = Layer.effect(
        onInterrupt: Effect.Effect<SessionV1.WithParts>,
        work: Effect.Effect<SessionV1.WithParts>,
        ready?: Latch.Latch,
@@ -579,6 +687,9 @@ index 5cefdd0..bbdb56a 100644
 +      return yield* entry.runner
 +        .startShell(
 +          Effect.andThen(checkpoint, work).pipe(
++            // Cancellation can retire the lease before shellImpl starts and
++            // opens its process-readiness latch. Always release that wait.
++            Effect.ensuring(ready ? ready.open : Effect.void),
 +            Effect.provideService(CurrentTelegramExecution, entry.execution),
 +            Effect.provideService(CurrentTelegramEpoch, entry.execution.epoch),
 +            Effect.provideService(CurrentTelegramContinuation, undefined),
@@ -689,7 +800,7 @@ index 5cefdd0..bbdb56a 100644
    }),
  )
  
-@@ -146,6 +436,10 @@ function busyError(sessionID: SessionID) {
+@@ -146,6 +486,10 @@ function busyError(sessionID: SessionID) {
    return new Session.BusyError({ sessionID })
  }
  
@@ -719,26 +830,38 @@ index a2a91cd..64e3d35 100644
          cost: 0,
          tokens: EmptyTokens,
 diff --git a/packages/opencode/src/session/tools.ts b/packages/opencode/src/session/tools.ts
-index 99f7aec..7399f48 100644
+index 99f7aec..baa0eca 100644
 --- a/packages/opencode/src/session/tools.ts
 +++ b/packages/opencode/src/session/tools.ts
-@@ -23,6 +23,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
+@@ -23,6 +23,12 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
  import { ModelV2 } from "@opencode-ai/core/model"
  import { isRecord } from "@/util/record"
  import { RuntimeFlags } from "@/effect/runtime-flags"
-+import { checkpoint } from "@opencode-ai/core/telegram-execution-context"
++import {
++  checkpoint,
++  completionCheckpoint,
++  CurrentTelegramExecution,
++  CurrentTelegramEpoch,
++} from "@opencode-ai/core/telegram-execution-context"
  
  const MCP_RESOURCE_TOOLS = {
    list: "list_mcp_resources",
-@@ -48,7 +49,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+@@ -48,7 +54,18 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
    promptOps: TaskPromptOps
  }) {
    const tools: Record<string, AITool> = {}
 -  const run = yield* EffectBridge.make()
 +  const bridge = yield* EffectBridge.make()
++  const execution = yield* CurrentTelegramExecution
++  const epoch = yield* CurrentTelegramEpoch
 +  const run = {
-+    promise: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-+      bridge.promise(Effect.andThen(checkpoint, effect).pipe(Effect.tap(() => checkpoint))),
++    promise: <A, E, R>(effect: Effect.Effect<A, E, R>) => {
++      const operation = () =>
++        bridge.promise(Effect.andThen(checkpoint, effect).pipe(Effect.tap(() => completionCheckpoint)))
++      if (!execution) return operation()
++      if (epoch === undefined) return Promise.reject(new Error("tool execution phase missing"))
++      return execution.trackTool(operation, epoch)
++    },
 +  }
    const plugin = yield* Plugin.Service
    const permission = yield* Permission.Service
@@ -763,3 +886,57 @@ index 9167cb3..e5ba0f2 100644
      BackgroundJob.node,
      Provider.node,
      LSP.node,
+diff --git a/packages/opencode/test/effect/runner.test.ts b/packages/opencode/test/effect/runner.test.ts
+index 27fe9e0..f078768 100644
+--- a/packages/opencode/test/effect/runner.test.ts
++++ b/packages/opencode/test/effect/runner.test.ts
+@@ -9,6 +9,49 @@ const waitForState = <A, E>(runner: Runner.Runner<A, E>, tag: Runner.State<A, E>
+   }).pipe(Effect.timeout("1 second"))
+ 
+ describe("Runner", () => {
++  it.live(
++    "async idle cleanup keeps admission busy and joins concurrent callers",
++    Effect.gen(function* () {
++      const scope = yield* Scope.Scope
++      const entered = yield* Deferred.make<void>()
++      const release = yield* Deferred.make<void>()
++      const runner = Runner.make<string>(scope, {
++        onIdle: Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
++      })
++      const first = yield* runner.ensureRunning(Effect.succeed("original")).pipe(Effect.forkChild)
++      yield* Deferred.await(entered)
++      const busy = runner.busy
++      let duplicated = false
++      const second = yield* runner
++        .ensureRunning(
++          Effect.sync(() => {
++            duplicated = true
++            return "duplicate"
++          }),
++        )
++        .pipe(Effect.forkChild)
++      yield* Effect.sleep("10 millis")
++      yield* Deferred.succeed(release, undefined)
++      const a = yield* Fiber.join(first)
++      const b = yield* Fiber.join(second)
++      expect(busy).toBe(true)
++      expect(duplicated).toBe(false)
++      expect(a).toBe("original")
++      expect(b).toBe("original")
++    }),
++  )
++  it.live(
++    "idle cleanup failure resolves all callers with the cleanup error",
++    Effect.gen(function* () {
++      const scope = yield* Scope.Scope
++      const failure = new Error("idle cleanup failed")
++      const runner = Runner.make<string>(scope, { onIdle: Effect.die(failure) })
++      const exit = yield* runner.ensureRunning(Effect.succeed("done")).pipe(Effect.timeout("100 millis"), Effect.exit)
++      expect(Exit.isFailure(exit)).toBe(true)
++      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(failure)
++      expect(runner.busy).toBe(false)
++    }),
++  )
+   // --- ensureRunning semantics ---
+ 
+   it.live(

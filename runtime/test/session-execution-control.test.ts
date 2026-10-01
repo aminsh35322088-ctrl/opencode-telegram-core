@@ -368,6 +368,55 @@ describe("live session execution control", () => {
     control.close(other.owner);
   });
 
+  test("retirement permits only bounded completion of the captured phase, never fresh work", async () => {
+    const control = new SessionExecutionControl();
+    const run = control.start(owner("parent"));
+    const epoch = run.epoch;
+    const endCleanup = run.beginCleanup(epoch);
+    control.close(run.owner);
+    await expect(run.checkpoint(undefined, epoch)).rejects.toThrow();
+    expect(() => run.attach({ pause() {}, resume() {}, terminate() {} })).toThrow();
+    await run.completionCheckpoint(undefined, epoch);
+    await expect(run.completionCheckpoint(undefined, epoch + 1)).rejects.toThrow();
+    await expect(run.completionCheckpoint()).rejects.toThrow();
+    endCleanup();
+    endCleanup();
+    const replacement = control.start(owner("parent", "replacement"));
+    await expect(run.completionCheckpoint(undefined, epoch)).rejects.toThrow();
+    await replacement.checkpoint();
+    control.close(replacement.owner);
+  });
+
+  test("a completion gate still waits for live pause rather than bypassing it", async () => {
+    const control = new SessionExecutionControl();
+    const run = control.start(owner("parent"));
+    const epoch = run.epoch;
+    const endCleanup = run.beginCleanup(epoch);
+    control.pause(run.owner);
+    let completed = false;
+    const waiting = run.completionCheckpoint(undefined, epoch).then(() => { completed = true; });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    control.resume(run.owner);
+    await waiting;
+    endCleanup();
+    control.close(run.owner);
+  });
+
+  test("abort releases an already paused tool completion into the bounded cleanup window", async () => {
+    const control = new SessionExecutionControl();
+    const run = control.start(owner("parent"));
+    const epoch = run.epoch;
+    control.pause(run.owner);
+    const completing = run.completionCheckpoint(undefined, epoch);
+    const ordinary = run.checkpoint(undefined, epoch);
+    const endCleanup = run.beginCleanup(epoch);
+    control.close(run.owner);
+    await Promise.all([completing, expect(ordinary).rejects.toThrow()]);
+    endCleanup();
+    await expect(run.completionCheckpoint(undefined, epoch)).rejects.toThrow();
+  });
+
   test("ordinary finish refuses live owned resources rather than orphaning them", () => {
     const control = new SessionExecutionControl();
     const run = control.start(owner("parent"));
@@ -377,6 +426,38 @@ describe("live session execution control", () => {
     expect(terminated).toBe(false);
     control.close(run.owner);
     expect(terminated).toBe(true);
+  });
+
+  test("retirement drains admitted tool bridges before cleanup can release ownership", async () => {
+    const control = new SessionExecutionControl();
+    const run = control.start(owner("parent"));
+    const epoch = run.epoch;
+    let release!: () => void;
+    let completed = false;
+    const pending = run.trackTool(() => new Promise<void>((resolve) => { release = resolve; }), epoch);
+    await Promise.resolve();
+    expect(() => control.finish(run.owner)).toThrow("live tool calls");
+    const endCleanup = run.beginCleanup(epoch);
+    control.close(run.owner);
+    const draining = run.whenToolsSettled().then(() => { completed = true; });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    let admitted = false;
+    await expect(run.trackTool(async () => { admitted = true; }, epoch)).rejects.toThrow();
+    expect(admitted).toBe(false);
+    release();
+    await pending;
+    await draining;
+    expect(completed).toBe(true);
+    endCleanup();
+  });
+
+  test("failed tool bridges settle their ownership without hiding the caller error", async () => {
+    const control = new SessionExecutionControl();
+    const run = control.start(owner("parent"));
+    await expect(run.trackTool(() => { throw new Error("tool failed"); }, run.epoch)).rejects.toThrow("tool failed");
+    await run.whenToolsSettled();
+    expect(control.finish(run.owner)).toEqual([run.owner]);
   });
 
   test("failed child resume fences the whole tree and re-suspends resumed resources", async () => {

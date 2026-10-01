@@ -181,6 +181,8 @@ export class SessionExecutionLease {
   readonly #waiters = new Set<() => void>();
   readonly #observers = new Set<(error?: unknown) => void>();
   readonly #children = new Set<SessionExecutionLease>();
+  readonly #cleanup = new Set<{ readonly epoch: number }>();
+  readonly #tools = new Set<Promise<unknown>>();
   #paused = false;
   #finished = false;
   #epoch = 1;
@@ -236,13 +238,47 @@ export class SessionExecutionLease {
     return this.#checkpoint(signal, false, epoch);
   }
 
+  // Used only by the host while awaiting destructive fiber/tool cleanup.
+  // It grants completion of existing calls, never admission of work/resources.
+  beginCleanup(epoch: number): () => void {
+    if (epoch !== this.#epoch) throw new Error("stale execution cleanup");
+    const token = { epoch };
+    this.#cleanup.add(token);
+    return () => { this.#cleanup.delete(token); };
+  }
+
+  async trackTool<A>(operation: () => Promise<A>, epoch: number): Promise<A> {
+    if (epoch !== this.#epoch) throw new Error("stale execution tool phase");
+    this.assertOwned(epoch);
+    const pending = Promise.resolve().then(() => {
+      this.assertOwned(epoch);
+      return operation();
+    });
+    this.#tools.add(pending);
+    void pending.then(() => this.#tools.delete(pending), () => this.#tools.delete(pending));
+    return pending;
+  }
+
+  async whenToolsSettled(): Promise<void> {
+    await Promise.allSettled([...this.#tools]);
+  }
+
+  completionCheckpoint(signal?: AbortSignal, epoch?: number): Promise<void> {
+    return this.#checkpoint(signal, false, epoch, true);
+  }
+
   retainedCheckpoint(signal?: AbortSignal): Promise<void> {
     return this.#checkpoint(signal, true);
   }
 
-  async #checkpoint(signal: AbortSignal | undefined, retained: boolean, epoch?: number): Promise<void> {
+  async #checkpoint(signal: AbortSignal | undefined, retained: boolean, epoch?: number, completion = false): Promise<void> {
     while (true) {
       if (epoch !== undefined && epoch !== this.#epoch) throw new Error("stale execution continuation");
+      if (completion && this.signal.aborted && !this.#normalFinish && !this.#failure && epoch === this.#epoch &&
+          [...this.#cleanup].some((token) => token.epoch === epoch)) {
+        signal?.throwIfAborted();
+        return;
+      }
       if (retained) this.#assertTreeLive(); else this.#assertLive();
       signal?.throwIfAborted();
       if (!this.paused) return;
@@ -307,6 +343,7 @@ export class SessionExecutionLease {
   finish(): void {
     this.#assertTreeLive();
     if (this.#resources.size) throw new Error("cannot finish execution with live owned resources");
+    if (this.#tools.size) throw new Error("cannot finish execution with live tool calls");
     this.#finished = true;
     this.#wake();
     this.#assertTreeLive();

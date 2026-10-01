@@ -43,6 +43,23 @@ before a new run. It never replays lost work to simulate continuation.
   the child budget; cancellation and execution failure still interrupt it.
 - Cancellation reserves admission before interrupting fibers. Reentrant child
   cancellation cannot deadlock on the admission semaphore.
+- A shell that fails its execution gate before starting still releases its
+  readiness latch, so cancellation cannot wait forever for an unstarted process.
+- Destructive cancellation and disposal grant existing tool calls a bounded
+  completion window for partial output and normal truncation. The grant is
+  limited to the captured phase, admits no new work or resources, and closes
+  after owned fiber cleanup before replacement admission. Ordinary model stream
+  events and callbacks arriving after cleanup remain fenced.
+- Admitted tool bridges remain tracked on that lease even though the AI SDK
+  runs them outside the model fiber. Processor cleanup drains them before
+  replacing partial results, and cancellation/disposal joins them before
+  releasing admission. Tool draining has a ten-second bound; a timeout keeps
+  the workspace fenced rather than admitting a replacement over unfinished work.
+- Ordinary completion also joins admitted tools. Its deadline freezes while
+  paused and resumes on retirement. The runner stays busy throughout idle
+  cleanup, and trusted follow-up admission waits outside the admission semaphore
+  before reopening a phase. An idle-cleanup failure resolves callers with the
+  failure and quarantines owned runtime state instead of leaving them parked.
 - Delete cancels before removing stored sessions. Disposal retires authority
   and attempts all owned resource and runner cleanup despite individual errors.
 

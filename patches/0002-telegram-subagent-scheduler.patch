@@ -645,10 +645,10 @@ index d8ca640..ec893b4 100644
  
      return {
 diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
-index da6e0f8..1871296 100644
+index da6e0f8..40b31cd 100644
 --- a/packages/opencode/test/session/prompt.test.ts
 +++ b/packages/opencode/test/session/prompt.test.ts
-@@ -1016,6 +1016,38 @@ it.instance("subtask child inherits parent session external_directory allow", ()
+@@ -1016,6 +1016,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
    }),
  )
  
@@ -665,12 +665,7 @@ index da6e0f8..1871296 100644
 +      for (let index = 0; index < 5; index++) {
 +        yield* addSubtask(chat.id, msg.id)
 +      }
-+      yield* llm.push(
-+        reply().hang().item(),
-+        reply().hang().item(),
-+        reply().hang().item(),
-+        reply().hang().item(),
-+      )
++      yield* llm.push(reply().hang().item(), reply().hang().item(), reply().hang().item(), reply().hang().item())
 +
 +      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
 +      yield* awaitWithTimeout(llm.wait(4), "timed out waiting for four concurrent subtasks", "5 seconds")
@@ -687,6 +682,74 @@ index da6e0f8..1871296 100644
  noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
    Effect.gen(function* () {
      const prompt = yield* SessionPrompt.Service
+@@ -2037,6 +2064,67 @@ unixNoLLMServer(
+   30_000,
+ )
+ 
++it.instance(
++  "cancel preserves an admitted tool result after cleanup longer than the processor grace window",
++  () =>
++    Effect.gen(function* () {
++      const { dir, llm } = yield* useServerConfig(providerCfg)
++      const prompt = yield* SessionPrompt.Service
++      const sessions = yield* Session.Service
++      const registry = yield* ToolRegistry.Service
++      const { read } = yield* registry.named()
++      const original = read.execute
++      const ready = yield* Deferred.make<void>()
++      read.execute = (_args, ctx) =>
++        Effect.gen(function* () {
++          yield* Deferred.succeed(ready, undefined)
++          yield* Effect.callback<void>((resume) => {
++            if (ctx.abort.aborted) return resume(Effect.void)
++            const onAbort = () => resume(Effect.void)
++            ctx.abort.addEventListener("abort", onAbort, { once: true })
++            return Effect.sync(() => ctx.abort.removeEventListener("abort", onAbort))
++          })
++          yield* Effect.sleep("700 millis")
++          return {
++            title: "partial read",
++            metadata: { preview: "partial", loaded: [], truncated: false },
++            output: "preserved partial tool output",
++          }
++        })
++      yield* Effect.addFinalizer(() =>
++        Effect.sync(() => {
++          read.execute = original
++        }),
++      )
++      const chat = yield* sessions.create({ permission: [{ permission: "*", pattern: "*", action: "allow" }] })
++      yield* prompt.prompt({
++        sessionID: chat.id,
++        agent: "build",
++        noReply: true,
++        parts: [{ type: "text", text: "read" }],
++      })
++      yield* llm.tool("read", { filePath: path.join(dir, "partial.txt") })
++      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
++      yield* awaitWithTimeout(Deferred.await(ready), "tool admission did not start", "5 seconds")
++      yield* pollWithTimeout(
++        Effect.gen(function* () {
++          const messages = yield* MessageV2.filterCompactedEffect(chat.id)
++          const assistant = messages.findLast((item) => item.info.role === "assistant")
++          if (assistant && toolPart(assistant.parts)?.state.status === "running") return true
++        }),
++        "tool call did not become running",
++      )
++      yield* prompt.cancel(chat.id)
++      const exit = yield* Fiber.await(run)
++      expect(Exit.isSuccess(exit)).toBe(true)
++      if (Exit.isSuccess(exit)) {
++        expect(completedTool(exit.value.parts)?.state.output).toBe("preserved partial tool output")
++      }
++    }),
++  { git: true },
++  30_000,
++)
++
+ // Abort signal propagation tests for inline tool execution
+ 
+ function hangUntilAborted(tool: { execute: (...args: any[]) => any }) {
 diff --git a/packages/opencode/test/tool/task.test.ts b/packages/opencode/test/tool/task.test.ts
 index 42f46fd..a044ac7 100644
 --- a/packages/opencode/test/tool/task.test.ts

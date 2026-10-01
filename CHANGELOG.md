@@ -13,3 +13,4 @@ These entries describe prerelease development, not final v1 release notes.
 - Add run-fenced runtime pause/resume controls, protected recovery intent, workspace checks, and destructive cleanup before session deletion.
 - Fence earlier model phases and ensure workspace disposal attempts all resource cleanup after runner errors.
 - Add actual upstream runtime/API regressions and generated SDK wire-contract checks to CI. Native delivery/control and custom-process integration are still incomplete.
+- Settle shell readiness when cancellation fences work before shell startup; preserve bounded existing-tool result finalization and truncation during destructive cleanup while rejecting new work and late callbacks.
