@@ -45,6 +45,8 @@ export class AuthoritativeRunReconciler {
     signal?: AbortSignal,
   ): Promise<ReconcileResult> {
     if (!this.runs.accepts(run)) return "stale";
+    const activity = this.runs.activity(run);
+    if (activity.paused) return "active";
 
     const status = await withDeadline(
       (deadlineSignal) => this.port.status(run, deadlineSignal),
@@ -56,6 +58,7 @@ export class AuthoritativeRunReconciler {
     );
 
     if (!this.runs.accepts(run)) return "stale";
+    if (activity.paused) return "active";
 
     if (status === "idle" || status === "error") {
       this.#finish(run);
@@ -63,9 +66,13 @@ export class AuthoritativeRunReconciler {
     }
 
     const now = this.options.now ?? Date.now;
-    if (status === "retry" && now() - runStartedAt >= this.options.providerRetryCeilingMs) {
-      await withDeadline(
-        (deadlineSignal) => this.port.interrupt(run, deadlineSignal),
+    if (status === "retry" && activity.activeTime(now()) - runStartedAt >= this.options.providerRetryCeilingMs) {
+      const interrupted = await withDeadline(
+        async (deadlineSignal) => {
+          if (!this.runs.accepts(run) || activity.paused) return false;
+          await this.port.interrupt(run, deadlineSignal);
+          return true;
+        },
         {
           timeoutMs: this.options.requestTimeoutMs,
           label: "OpenCode retry ceiling interrupt",
@@ -73,6 +80,7 @@ export class AuthoritativeRunReconciler {
         },
       );
       if (!this.runs.accepts(run)) return "stale";
+      if (!interrupted) return "active";
       this.#finish(run);
       return "aborted_retry_ceiling";
     }

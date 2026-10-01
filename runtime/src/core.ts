@@ -2,7 +2,8 @@ import { AtomicBindingStore } from "./runtime/atomic-binding-store.js";
 import type { BindingIdentity, RunIdentity } from "./runtime/identity.js";
 import { OutboundGateway, type OutboundSink } from "./runtime/outbound-gateway.js";
 import { RunLivenessTracker } from "./runtime/liveness-tracker.js";
-import { RunRegistry } from "./runtime/run-registry.js";
+import { RunRegistry, type RuntimeExecutionInfo } from "./runtime/run-registry.js";
+import { OpenCodeExecutionClient, type OpenCodeExecutionControlPort } from "./opencode/execution-client.js";
 import { PerRunStuckDetector } from "./runtime/stuck-detector.js";
 import { WorkerSupervisor, type WorkerFactory } from "./runtime/worker-supervisor.js";
 import { WorkerOutboundGate } from "./ipc/worker-outbound-gate.js";
@@ -38,6 +39,7 @@ export interface TelegramNativeCoreOptions {
   readonly admissionPolicy: TelegramAdmissionPolicy;
   readonly railwayPolicy: RailwayResourcePolicy;
   readonly stuckRepeatThreshold?: number;
+  readonly executionControl?: { readonly port: OpenCodeExecutionControlPort; readonly requestTimeoutMs: number };
 }
 
 export class TelegramNativeCore {
@@ -50,6 +52,7 @@ export class TelegramNativeCore {
   readonly liveness: RunLivenessTracker;
   readonly stuck: PerRunStuckDetector;
   readonly resources: RailwayResourceGovernor;
+  readonly #execution: OpenCodeExecutionClient | undefined;
 
   private constructor(private readonly options: TelegramNativeCoreOptions) {
     this.bindings = new AtomicBindingStore(options.bindingStorePath);
@@ -77,6 +80,20 @@ export class TelegramNativeCore {
       options.stuckRepeatThreshold ?? 5,
     );
     this.resources = new RailwayResourceGovernor(options.railwayPolicy);
+    if (options.executionControl) {
+      this.#execution = new OpenCodeExecutionClient(this.runs, (run) => {
+        const worker = this.workers.current(run);
+        const target = worker instanceof OpenCodeTopicWorker ? worker.executionTarget(run) : null;
+        if (!target || !this.bindings.registry.getExact(run) || !this.runs.accepts(run)) {
+          throw new Error("Core run has no current owned execution target");
+        }
+        return {
+          target: Object.freeze({ ...target, runId: run.runId }),
+          isCurrent: () => this.bindings.registry.getExact(run) !== null && this.workers.current(run) === worker &&
+            worker instanceof OpenCodeTopicWorker && worker.executionTarget(run) === target,
+        };
+      }, options.executionControl.port, options.executionControl.requestTimeoutMs);
+    }
   }
 
   static async open(options: TelegramNativeCoreOptions): Promise<TelegramNativeCore> {
@@ -141,7 +158,22 @@ export class TelegramNativeCore {
     if (!(worker instanceof OpenCodeTopicWorker) || worker.generation !== run.workerGeneration || !this.workers.isCurrent(binding, worker)) {
       throw new Error("Core worker changed before task dispatch");
     }
-    return worker.executeTask(run, label, operation, options);
+    return worker.executeTask(run, label, operation, { ...options, activity: this.runs.activity(run) });
+  }
+
+  async pauseRun(run: RunIdentity, signal?: AbortSignal): Promise<RuntimeExecutionInfo> {
+    if (!this.#execution) throw new Error("runtime execution control port is not configured");
+    return this.#execution.request(run, "pause", signal);
+  }
+
+  async resumeRun(run: RunIdentity, signal?: AbortSignal): Promise<RuntimeExecutionInfo> {
+    if (!this.#execution) throw new Error("runtime execution control port is not configured");
+    return this.#execution.request(run, "resume", signal);
+  }
+
+  async inspectExecution(run: RunIdentity, signal?: AbortSignal): Promise<RuntimeExecutionInfo> {
+    if (!this.#execution) throw new Error("runtime execution control port is not configured");
+    return this.#execution.request(run, "execution", signal);
   }
 
   async rotateBinding(

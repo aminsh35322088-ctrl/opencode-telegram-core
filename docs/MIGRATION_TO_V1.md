@@ -14,12 +14,19 @@ Use focused changes and red/green regression tests per task. Keep SDK, native li
 
 The unreleased [custom-tool process contract](CUSTOM_TOOL_PROCESSES.md) now reaches
 the existing plugin registry using captured runtime context and the authoritative
-governor. Portable regressions cover ownership and admission races. Actual Linux
-group tests and persistent-daemon inspection precede Bot migration and release.
+governor. Portable and Linux process-group regressions cover ownership, pause,
+cancellation and admission races. Persistent-daemon ownership remains a blocker
+before complete Bot tool migration and release.
 
 ### Pause integration boundaries
 
 The Bot currently uses the upstream legacy `SessionPrompt`/`SessionRunState` execution path. Live gates now integrate there in unreleased source, with the runtime control API, model phase fencing, and retained background task ownership covered by Core tests. See [the pause contract and remaining gates](PAUSE_RESUME.md). The shared execution authority runs in the upstream runtime; native clients consume its API. The published Bot pin remains pre.7 while native/process/delivery integration is incomplete.
+
+The native source now serializes control requests against existing exact worker
+targets and mirrors only valid runtime acknowledgments. Pending/uncertain requests
+hold client work; queue/poll deadlines, temporary completion and Telegram delivery
+respect that observation. Review regressions cover cleanup during pause and fences
+racing a rich mutation. Full Linux CI and aligned artifact checks precede Bot use.
 
 - Capture the runtime execution lease once per model stream/tool invocation. Checkpoints before model/tool admission and stream/output processing retain the same live continuation across pause/resume; late callbacks cannot look up a replacement lease.
 - Scope control to the canonical workspace plus session and an opaque run token. The native adapter additionally verifies the complete Topic/binding/run/generation identity before runtime control requests. Pause/resume payloads must include the captured runtime token and reject replacement or recovered owners.

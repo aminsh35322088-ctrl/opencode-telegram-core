@@ -158,6 +158,12 @@ export class WorkerSupervisor {
     slot.worker.complete?.(run);
   }
 
+  current(run: RunIdentity): TopicWorker | null {
+    const slot = this.#workers.get(run.bindingId);
+    return slot && slot.worker.generation === run.workerGeneration && sameBinding(slot.binding, run)
+      ? slot.worker : null;
+  }
+
   size(): number {
     return (
       this.#workers.size +

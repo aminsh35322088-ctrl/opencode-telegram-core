@@ -1,4 +1,4 @@
-import { DeadlineExceededError } from "./deadline.js";
+import { withDeadline, type DeadlineActivity } from "./deadline.js";
 
 export class QueuePoisonedError extends Error {
   constructor(message: string, readonly rootCause?: unknown) {
@@ -27,6 +27,7 @@ export class SerialTaskQueue {
     label: string,
     task: (signal: AbortSignal) => Promise<T>,
     timeoutMs = this.options.defaultTimeoutMs,
+    activity?: DeadlineActivity,
   ): Promise<T> {
     if (this.#poisoned) return Promise.reject(this.#poisoned);
 
@@ -44,25 +45,22 @@ export class SerialTaskQueue {
       }
 
       const controller = new AbortController();
-      let taskSettled = false;
-      const taskPromise = Promise.resolve()
-        .then(() => task(controller.signal))
-        .finally(() => {
-          taskSettled = true;
-        });
+      let taskSettled = true;
+      let taskPromise: Promise<unknown> = Promise.resolve();
 
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            const error = new DeadlineExceededError(timeoutMs, `queue task ${label}`);
-            controller.abort(error);
-            reject(error);
-          }, timeoutMs);
-        });
-        resolveResult(await Promise.race([taskPromise, timeout]));
+        resolveResult(await withDeadline(() => {
+          taskSettled = false;
+          const started = (async () => task(controller.signal))().finally(() => { taskSettled = true; });
+          taskPromise = started;
+          return started;
+        }, {
+          timeoutMs, label: `queue task ${label}`, parentSignal: controller.signal,
+          ...(activity ? { activity } : {}),
+        }));
       } catch (error) {
-        if (error instanceof DeadlineExceededError && !taskSettled) {
+        controller.abort(error);
+        if (!taskSettled) {
           await Promise.race([
             taskPromise.then(() => undefined, () => undefined),
             new Promise<void>((resolve) => setTimeout(resolve, this.options.cancellationGraceMs)),
@@ -85,8 +83,6 @@ export class SerialTaskQueue {
           }
         }
         rejectResult(error);
-      } finally {
-        if (timer) clearTimeout(timer);
       }
     });
 

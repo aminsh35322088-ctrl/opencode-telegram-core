@@ -26,7 +26,7 @@ export class RunLivenessTracker {
     if (!this.runs.accepts(run)) return false;
     this.#states.set(run.bindingId, {
       run,
-      lastActivityAt: now,
+      lastActivityAt: this.runs.activity(run).activeTime(now),
       activeTools: new Map(),
     });
     return true;
@@ -35,15 +35,16 @@ export class RunLivenessTracker {
   touch(run: RunIdentity, now = Date.now()): boolean {
     const state = this.#current(run);
     if (!state) return false;
-    state.lastActivityAt = now;
+    state.lastActivityAt = this.runs.activity(run).activeTime(now);
     return true;
   }
 
   toolStarted(run: RunIdentity, toolCallId: string, now = Date.now()): boolean {
     const state = this.#current(run);
     if (!state) return false;
-    state.activeTools.set(toolCallId, { startedAt: now });
-    state.lastActivityAt = now;
+    const activeNow = this.runs.activity(run).activeTime(now);
+    state.activeTools.set(toolCallId, { startedAt: activeNow });
+    state.lastActivityAt = activeNow;
     return true;
   }
 
@@ -51,7 +52,7 @@ export class RunLivenessTracker {
     const state = this.#current(run);
     if (!state) return false;
     state.activeTools.delete(toolCallId);
-    state.lastActivityAt = now;
+    state.lastActivityAt = this.runs.activity(run).activeTime(now);
     return true;
   }
 
@@ -65,7 +66,8 @@ export class RunLivenessTracker {
   ): LivenessAssessment {
     const state = this.#current(run);
     if (!state) return "stale";
-    const now = options.now ?? Date.now();
+    if (this.runs.activity(run).paused) return "healthy";
+    const now = this.runs.activity(run).activeTime(options.now ?? Date.now());
 
     for (const tool of state.activeTools.values()) {
       if (now - tool.startedAt >= options.toolTimeoutMs) return "tool_timeout";

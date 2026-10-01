@@ -20,6 +20,7 @@ export * from "./railway/resource-governor.js";
 export * from "./ipc/json-line-worker-channel.js";
 export * from "./ipc/worker-outbound-gate.js";
 export * from "./opencode/run-reconciler.js";
+export * from "./opencode/execution-client.js";
 export * from "./opencode/session-client.js";
 export * from "./opencode/session-event-pump.js";
 export * from "./opencode/session-event-router.js";

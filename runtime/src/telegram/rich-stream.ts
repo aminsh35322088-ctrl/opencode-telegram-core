@@ -38,6 +38,7 @@ export interface NativeMarkdownStreamPort {
     options: {
       readonly signal: AbortSignal;
       readonly guard: () => boolean;
+      readonly withMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
     },
   ): Promise<void>;
 }
@@ -98,7 +99,8 @@ export class TelegramRichStreamController {
     const lease: DraftLease = { run, route, draftId };
     this.#leases.set(key, lease);
     try {
-      await this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal);
+      if (!await this.#deliver(key, lease, signal, () =>
+        this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal))) return null;
     } catch (error) {
       this.#dropLease(key, lease, "Draft send failed");
       throw error;
@@ -122,7 +124,8 @@ export class TelegramRichStreamController {
     const lease: DraftLease = { run, route, draftId };
     this.#leases.set(key, lease);
     try {
-      await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
+      if (!await this.#deliver(key, lease, signal, () =>
+        this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal))) return null;
     } catch (error) {
       this.#dropLease(key, lease, "Draft send failed");
       throw error;
@@ -155,6 +158,11 @@ export class TelegramRichStreamController {
     try {
       await streamPort.streamMarkdown(route, draftId, chunks, {
         signal: combinedSignal,
+        withMutation: async <T>(operation: () => Promise<T>) => {
+          const delivered = await this.#deliver(key, lease, combinedSignal, operation);
+          if (!delivered) throw new RichStreamFencedError();
+          return delivered.value;
+        },
         guard: () => {
           const current = this.#leases.get(key);
           return current === lease && this.#accepts(run);
@@ -223,8 +231,8 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft update");
       return false;
     }
-    await this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal);
-    return true;
+    return await this.#deliver(key, lease, signal, () =>
+      this.port.sendDraft(route, draftId, renderTelegramRichMarkdown(markdown), signal)) !== null;
   }
 
   async finalizeMarkdown(
@@ -241,7 +249,8 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft finalize");
       return false;
     }
-    await this.port.sendFinal(route, renderTelegramRichMarkdown(markdown), signal);
+    if (!await this.#deliver(key, lease, signal, () =>
+      this.port.sendFinal(route, renderTelegramRichMarkdown(markdown), signal))) return false;
     this.#dropLease(key, lease, "Draft finalized");
     return true;
   }
@@ -260,8 +269,8 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft update");
       return false;
     }
-    await this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal);
-    return true;
+    return await this.#deliver(key, lease, signal, () =>
+      this.port.sendDraft(route, draftId, renderTelegramRichDocument(document, { draft: true }), signal)) !== null;
   }
 
   async finalize(
@@ -278,7 +287,8 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft finalize");
       return false;
     }
-    await this.port.sendFinal(route, renderTelegramRichDocument(document, { draft: false }), signal);
+    if (!await this.#deliver(key, lease, signal, () =>
+      this.port.sendFinal(route, renderTelegramRichDocument(document, { draft: false }), signal))) return false;
     this.#dropLease(key, lease, "Draft finalized");
     return true;
   }
@@ -300,6 +310,30 @@ export class TelegramRichStreamController {
     this.finishRun(lease.run);
     await this.abortRun(lease.run, "telegram_stop");
     return true;
+  }
+
+  async #deliver<T>(key: string, lease: DraftLease, signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<{ value: T } | null> {
+    while (true) {
+      try {
+        const activity = this.runs.activity(lease.run);
+        await activity.checkpoint(signal);
+        // The gate and transport call share this continuation: pause/fence
+        // cannot enter between the last check and admission of the mutation.
+        if (activity.paused) continue;
+      } catch (error) {
+        this.#dropLease(key, lease, "Draft checkpoint failed");
+        if (signal?.aborted) throw error;
+        return null;
+      }
+      if (!this.#currentLease(key, lease)) return null;
+      return { value: await operation() };
+    }
+  }
+
+  #currentLease(key: string, lease: DraftLease): boolean {
+    if (this.#leases.get(key) === lease && this.#accepts(lease.run)) return true;
+    this.#dropLease(key, lease, "Draft fenced before send");
+    return false;
   }
 
   #dropLease(key: string, lease: DraftLease, reason: string): boolean {

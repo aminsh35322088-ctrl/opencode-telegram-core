@@ -1,5 +1,6 @@
 import path from "node:path";
 import { withDeadline } from "../runtime/deadline.js";
+import type { RunActivity } from "../runtime/run-registry.js";
 
 export interface SessionOwner {
   readonly sessionId: string;
@@ -41,6 +42,8 @@ export class TemporarySessionRunner {
       readonly acquire: (session: TemporarySessionIdentity) => void;
       readonly release: () => void;
       readonly cleanupFailed?: (error: unknown) => void;
+      readonly activity?: RunActivity;
+      readonly beginCleanup?: () => void;
     },
   ): Promise<T> {
     signal.throwIfAborted();
@@ -58,21 +61,38 @@ export class TemporarySessionRunner {
     const session = Object.freeze({ ...created, directory: owner.directory });
     let retained = false;
     let acquired = false;
+    let completed = false;
     try {
       signal.throwIfAborted();
       lifecycle?.acquire(session);
       acquired = true;
+      if (lifecycle?.activity) do { await lifecycle.activity.checkpoint(signal); } while (lifecycle.activity.paused);
       const result = await operation(Object.freeze({
         ...session, signal,
         retainForInspection: () => { signal.throwIfAborted(); retained = true; },
       }));
       signal.throwIfAborted();
+      completed = true;
       return result;
     } finally {
       const failures: unknown[] = [];
+      let completionError: unknown;
       try {
-        await withDeadline((cleanupSignal) => this.port.abort(session, cleanupSignal),
-          { timeoutMs: this.cleanupTimeoutMs, label: "temporary session cleanup" });
+        while (true) {
+          if (completed && !signal.aborted && lifecycle?.activity) {
+            try { await lifecycle.activity.checkpoint(signal); }
+            catch (error) { completionError = error; completed = false; }
+          }
+          const stopped = await withDeadline((cleanupSignal) => {
+            // Recheck in this continuation, immediately before destruction.
+            // A pause racing the awaited checkpoint parks outside cleanup's
+            // wall-clock bound; cancellation still enters bounded cleanup.
+            if (completed && !signal.aborted && lifecycle?.activity?.paused) return Promise.resolve(false);
+            lifecycle?.beginCleanup?.();
+            return this.port.abort(session, cleanupSignal).then(() => true);
+          }, { timeoutMs: this.cleanupTimeoutMs, label: "temporary session cleanup" });
+          if (stopped) break;
+        }
       } catch (error) { failures.push(error); }
       if (!retained || signal.aborted || failures.length > 0) {
         try {
@@ -86,6 +106,7 @@ export class TemporarySessionRunner {
         throw error;
       }
       if (acquired) lifecycle?.release();
+      if (completionError !== undefined) throw completionError;
     }
   }
 }

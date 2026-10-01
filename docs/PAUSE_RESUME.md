@@ -63,12 +63,55 @@ before a new run. It never replays lost work to simulate continuation.
 - Delete cancels before removing stored sessions. Disposal retires authority
   and attempts all owned resource and runner cleanup despite individual errors.
 
+## Native acknowledgment adapter (unreleased)
+
+`TelegramNativeCore` accepts an optional `executionControl` configuration with
+an `OpenCodeExecutionControlPort` and a finite `requestTimeoutMs`. The port maps
+`execution`, `pause` and `resume` to the runtime API above, carrying the captured
+session, canonical directory and logical run ID. Model admission must pass that
+same ID as `telegramRunId` to the legacy prompt/command/shell API.
+
+`pauseRun`, `resumeRun` and `inspectExecution` operate on an existing worker's
+owned target. They never create a worker or session. Temporary tasks use their
+actual temporary target; cleanup retires that control target before destructive
+requests and restores the root only after cleanup succeeds. A callback completing
+while paused retains its temporary session until resume or explicit cancellation.
+
+Requests are serialized per captured native run observation. Pending requests
+hold client work, delivery and active-time budgets immediately. A successful
+response must identify the same live run and report the requested state before
+the hold is released. Binding, worker, run and temporary-target identities are
+checked before and after transport. The returned response is the acknowledgment;
+`RunActivity.paused` also includes pending or uncertain client holds and must not
+be presented as proof that the remote runtime has acknowledged pause.
+
+A timeout, failed request, unavailable continuation or malformed acknowledgment
+leaves client work held and requires explicit abort/retirement. A later GET cannot
+prove ordering against a timed-out write. Control transport has a wall-clock
+deadline even while execution budgets are held; ordinary pause never invokes
+the worker's abort port.
+
+Owned tasks inherit the observation for queue deadlines, checkpoints and result
+polling. Poll reads/results and Telegram mutations recheck pause after awaited
+checkpoints, immediately before admission. Rich streams retain their draft lease;
+custom native Markdown stream adapters must use `options.withMutation` for each
+actual Telegram mutation, in addition to the ownership guard. The bundled grammY
+adapter does this at its raw API boundary. Operations admitted before pause may
+still finish; new mutations wait. Rotation, deletion and run retirement reject
+held output instead of moving it into another generation.
+
+Liveness and repeated-tool decisions remain non-destructive while held. Provider
+retry ceilings exclude held time; reconciliation's `runStartedAt` must be the
+original run-start wall-clock timestamp. Observer failure cancels client deadlines
+and rejects checkpoints instead of leaving a broken observation silently parked.
+
 ## Remaining release gates
 
-This runtime source is not the complete client-facing migration. Native worker
-control, delivery gates, client deadline/liveness behavior, producer run tags,
-custom-tool process ownership, and the Bot's Telegram controls still require
-integration and verification. Runtime, generated SDK, and native artifacts must
+This source is not the complete client-facing migration. The native adapter and
+delivery/deadline/liveness changes require full Linux verification and aligned
+artifact verification. Producer run tags, persistent custom-tool daemon ownership,
+Bot tool migration and the Bot's Telegram controls still require integration.
+Runtime, generated SDK, and native artifacts must
 ship from one verified prerelease before the Bot removes its old pause behavior.
 Full Linux CI, artifact identity checks, ownership audit, Railway validation and
 production RC soak remain required. No stable release is implied by these tests.

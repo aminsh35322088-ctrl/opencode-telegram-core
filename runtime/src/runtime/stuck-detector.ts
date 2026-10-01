@@ -21,6 +21,7 @@ export class PerRunStuckDetector {
 
   observeTool(run: RunIdentity, toolName: string, args: unknown): StuckObservation {
     if (!this.runs.accepts(run)) return "stale";
+    if (this.runs.activity(run).paused) return "ok";
     const fingerprint = toolName + ":" + stableJson(args);
     let state = this.#states.get(run.bindingId);
     if (!state || state.runId !== run.runId) {

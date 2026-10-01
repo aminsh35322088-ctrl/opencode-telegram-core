@@ -1,5 +1,5 @@
 import type { RunIdentity } from "./identity.js";
-import { abortableSleep, withDeadline } from "./deadline.js";
+import { abortableSleep, withDeadline, type DeadlineActivity } from "./deadline.js";
 
 export type PollOutcome<T> = { readonly status: "pending"; readonly retryAfterMs?: number } | { readonly status: "complete"; readonly value: T } | { readonly status: "failed"; readonly error: Error };
 export interface PollOptions {
@@ -8,6 +8,8 @@ export interface PollOptions {
   readonly intervalMs: number;
   readonly maxAttempts: number;
   readonly isCurrent: (run: RunIdentity) => boolean;
+  readonly activity?: DeadlineActivity;
+  readonly checkpoint?: (signal: AbortSignal) => Promise<void>;
 }
 
 export class StalePollRunError extends Error {
@@ -30,8 +32,16 @@ export async function pollRunResult<T>(inputRun: RunIdentity, read: (signal: Abo
   return withDeadline(async (signal) => {
     for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
       check(signal);
+      do {
+        await options.checkpoint?.(signal);
+        check(signal);
+      } while (options.checkpoint && options.activity?.paused);
       const outcome = await read(signal);
       check(signal);
+      do {
+        await options.checkpoint?.(signal);
+        check(signal);
+      } while (options.checkpoint && options.activity?.paused);
       if (outcome.status === "complete") return outcome.value;
       if (outcome.status === "failed") throw outcome.error;
       const delay = outcome.retryAfterMs ?? options.intervalMs;
@@ -39,5 +49,7 @@ export async function pollRunResult<T>(inputRun: RunIdentity, read: (signal: Abo
       if (attempt + 1 < options.maxAttempts) await abortableSleep(Math.min(delay, options.intervalMs), signal);
     }
     throw new PollAttemptsExceededError(options.maxAttempts);
-  }, { timeoutMs: options.timeoutMs, label: "result polling", parentSignal: options.signal });
+  }, { timeoutMs: options.timeoutMs, label: "result polling", parentSignal: options.signal,
+    ...(options.activity ? { activity: options.activity } : {}),
+  });
 }

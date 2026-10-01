@@ -8,6 +8,7 @@ import { sameBinding, sameRun, type BindingIdentity, type RunIdentity } from "..
 import type { TopicWorker, WorkerFactory } from "../runtime/worker-supervisor.js";
 import { TemporarySessionRunner, type TemporarySessionLease, type TemporarySessionOptions, type TemporarySessionPort } from "./temporary-session.js";
 import { pollRunResult, type PollOutcome, type PollOptions } from "../runtime/result-poller.js";
+import type { RunActivity } from "../runtime/run-registry.js";
 
 export interface OpenCodePromptPort {
   prompt(
@@ -61,6 +62,7 @@ export interface OpenCodeAbortTarget {
 
 export interface OpenCodeTaskContext {
   readonly signal: AbortSignal;
+  checkpoint(): Promise<void>;
   setAbortTarget(target: OpenCodeAbortTarget | null): void;
   withTemporarySession<T>(options: TemporarySessionOptions, operation: (session: TemporarySessionLease) => Promise<T>): Promise<T>;
   poll<T>(read: (signal: AbortSignal) => Promise<PollOutcome<T>>, options: Pick<PollOptions, "timeoutMs" | "intervalMs" | "maxAttempts">): Promise<T>;
@@ -69,6 +71,7 @@ export interface OpenCodeTaskContext {
 export interface OpenCodeTaskOptions {
   readonly abortTarget?: OpenCodeAbortTarget | null;
   readonly timeoutMs?: number;
+  readonly activity?: RunActivity;
 }
 
 export class OpenCodeTopicWorker implements TopicWorker {
@@ -81,6 +84,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
   #binding: BindingIdentity;
   #activeRun: RunIdentity | null = null;
   #activeAbortTarget: OpenCodeAbortTarget | null = null;
+  #targetClosing = false;
   #ownedTask: object | null = null;
   readonly #controller = new AbortController();
   readonly #inFlight = new Set<Promise<unknown>>();
@@ -139,6 +143,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
     const token = {};
     this.#activeRun = run;
     this.#activeAbortTarget = target;
+    this.#targetClosing = false;
     this.#ownedTask = token;
     const assertActive = (): void => {
       if (this.poisoned) throw new Error("worker isolation boundary is poisoned");
@@ -151,12 +156,23 @@ export class OpenCodeTopicWorker implements TopicWorker {
       return await this.#enqueue(label, async (signal) => {
         assertActive();
         signal.throwIfAborted();
+        const checkpoint = async (): Promise<void> => {
+          assertActive();
+          signal.throwIfAborted();
+          await options.activity?.checkpoint(signal);
+          assertActive();
+          signal.throwIfAborted();
+        };
+        if (options.activity) do { await checkpoint(); } while (options.activity.paused);
         let temporaryActive = false;
         const result = await operation({
           signal,
+          checkpoint,
           poll: (read, pollOptions) => {
             assertActive();
-            return pollRunResult(run, read, { ...pollOptions, signal, isCurrent: () => {
+            return pollRunResult(run, read, { ...pollOptions, signal,
+              ...(options.activity ? { activity: options.activity, checkpoint: (pollSignal: AbortSignal) => options.activity!.checkpoint(pollSignal) } : {}),
+              isCurrent: () => {
               try { assertActive(); return true; } catch { return false; }
             } });
           },
@@ -169,6 +185,7 @@ export class OpenCodeTopicWorker implements TopicWorker {
           withTemporarySession: async (sessionOptions, callback) => {
             assertActive();
             signal.throwIfAborted();
+            if (options.activity) do { await checkpoint(); } while (options.activity.paused);
             if (temporaryActive) throw new Error("owned task already has an active temporary session");
             if (!this.options.temporarySessionPort) throw new Error("temporary session port is not configured");
             temporaryActive = true;
@@ -176,9 +193,14 @@ export class OpenCodeTopicWorker implements TopicWorker {
             try {
               return await new TemporarySessionRunner(this.options.temporarySessionPort, this.options.stopTimeoutMs).run(
                 { sessionId: run.sessionId, directory: run.normalizedDirectory }, sessionOptions, callback, signal, {
-                  acquire: (session) => { assertActive(); this.#activeAbortTarget = this.#normalizeAbortTarget(session); },
+                  acquire: (session) => { assertActive(); this.#activeAbortTarget = this.#normalizeAbortTarget(session); this.#targetClosing = false; },
+                  ...(options.activity ? { activity: options.activity } : {}),
+                  beginCleanup: () => { this.#targetClosing = true; },
                   release: () => {
-                    if (this.#ownedTask === token && this.#activeRun && sameRun(this.#activeRun, run)) this.#activeAbortTarget = previousTarget;
+                    if (this.#ownedTask === token && this.#activeRun && sameRun(this.#activeRun, run)) {
+                      this.#activeAbortTarget = this.#normalizeAbortTarget(previousTarget);
+                      this.#targetClosing = false;
+                    }
                   },
                   cleanupFailed: (error) => {
                     this.#poisoned = true;
@@ -191,10 +213,11 @@ export class OpenCodeTopicWorker implements TopicWorker {
           },
         });
         if (temporaryActive) throw new Error("owned task returned before temporary session completed");
+        if (options.activity) do { await checkpoint(); } while (options.activity.paused);
         assertActive();
         signal.throwIfAborted();
         return result;
-      }, options.timeoutMs);
+      }, options.timeoutMs, options.activity);
     } catch (error) {
       try {
         if (!this.#stopped && this.#ownedTask === token && this.#activeAbortTarget) {
@@ -222,6 +245,12 @@ export class OpenCodeTopicWorker implements TopicWorker {
     if (!this.#activeRun || !sameRun(this.#activeRun, run)) return;
     this.#activeRun = null;
     if (!this.#ownedTask && !this.poisoned) this.#activeAbortTarget = null;
+  }
+
+  /** Captures the existing target; control never admits or recreates execution. */
+  executionTarget(run: RunIdentity): OpenCodeAbortTarget | null {
+    if (this.#stopped || this.poisoned || this.#targetClosing || !this.#activeRun || !sameRun(this.#activeRun, run)) return null;
+    return this.#activeAbortTarget;
   }
 
   executePrompt(
@@ -271,10 +300,10 @@ export class OpenCodeTopicWorker implements TopicWorker {
     );
   }
 
-  #enqueue<T>(label: string, operation: (signal: AbortSignal) => Promise<T>, timeoutMs?: number): Promise<T> {
+  #enqueue<T>(label: string, operation: (signal: AbortSignal) => Promise<T>, timeoutMs?: number, activity?: RunActivity): Promise<T> {
     const task = this.#queue.enqueue(label, (taskSignal) => operation(
       AbortSignal.any([taskSignal, this.#controller.signal]),
-    ), timeoutMs);
+    ), timeoutMs, activity);
     this.#inFlight.add(task);
     void task.then(
       () => this.#inFlight.delete(task),

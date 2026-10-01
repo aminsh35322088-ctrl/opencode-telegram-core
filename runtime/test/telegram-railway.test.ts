@@ -54,7 +54,7 @@ describe("Railway resource governor", () => {
 
   test("reads a positive service memory footprint and reclaim-aware working set", () => {
     const total = RailwayResourceGovernor.serviceMemoryBytes();
-    const workingSet = RailwayResourceGovernor.serviceWorkingSetBytes();
+    const workingSet = RailwayResourceGovernor.serviceWorkingSetBytes(total);
     expect(total).toBeGreaterThan(0);
     expect(workingSet).toBeGreaterThan(0);
     expect(workingSet).toBeLessThanOrEqual(total);

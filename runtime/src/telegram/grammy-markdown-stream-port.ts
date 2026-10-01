@@ -18,6 +18,7 @@ export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort 
     options: {
       readonly signal: AbortSignal;
       readonly guard: () => boolean;
+      readonly withMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
     },
   ): Promise<void> {
     const thread = route.messageThreadId === undefined
@@ -31,9 +32,13 @@ export class GrammyNativeMarkdownStreamPort implements NativeMarkdownStreamPort 
         if (typeof value !== "function") return value;
 
         if (property === "sendRichMessageDraft" || property === "sendRichMessage") {
-          return (...args: unknown[]) => {
-            if (!options.guard()) throw new RichStreamFencedError();
-            return Reflect.apply(value, target, args);
+          return async (...args: unknown[]) => {
+            const mutate = async () => {
+              options.signal.throwIfAborted();
+              if (!options.guard()) throw new RichStreamFencedError();
+              return Reflect.apply(value, target, args);
+            };
+            return options.withMutation ? options.withMutation(mutate) : mutate();
           };
         }
         return value.bind(target);

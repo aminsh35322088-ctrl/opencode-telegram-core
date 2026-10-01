@@ -15,3 +15,7 @@ These entries describe prerelease development, not final v1 release notes.
 - Add actual upstream runtime/API regressions and generated SDK wire-contract checks to CI. Native delivery/control and custom-process integration are still incomplete.
 - Settle shell readiness when cancellation fences work before shell startup; preserve bounded existing-tool result finalization and truncation during destructive cleanup while rejecting new work and late callbacks.
 - Add an unreleased, invocation-scoped custom-tool process capability using the existing governor, captured runtime ownership, canonical workspace checks, pause-aware deadlines and bounded process-group cleanup. Bot tool migration and persistent-daemon integration remain release gates.
+- Add an unreleased native runtime-control adapter with exact owned targets, serialized pause/resume requests, acknowledgment validation and fail-closed transport uncertainty.
+- Hold queue/poll budgets, temporary-session completion and Telegram mutations through pause; preserve draft leases and recheck pause/fencing at actual admission boundaries.
+- Exclude paused time from liveness/retry decisions, suppress destructive stuck decisions while held, and propagate native observer failure to deadlines and checkpoints.
+- Fix the service-memory regression test to compare working set with the same raw sample rather than two independently changing samples.
