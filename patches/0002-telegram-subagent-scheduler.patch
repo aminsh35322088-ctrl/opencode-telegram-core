@@ -1,5 +1,5 @@
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 0f85d44..87daf84 100644
+index 0f85d44..9695548 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
 @@ -44,8 +44,9 @@ import { decodeDataUrl } from "@/util/data-url"
@@ -70,6 +70,42 @@ index 0f85d44..87daf84 100644
              input: part.state.input,
            },
          } satisfies SessionV1.ToolPart)
+@@ -452,7 +458,7 @@ const layer = Layer.effect(
+       return yield* Effect.uninterruptibleMask((restore) =>
+         Effect.gen(function* () {
+           const markReady = ready ? ready.open.pipe(Effect.asVoid) : Effect.void
+-          const { msg, part, cwd } = yield* Effect.gen(function* () {
++          const { msg, part, cwd } = yield* Effect.fn("SessionPrompt.shell.setup")(function* () {
+             const ctx = yield* InstanceState.context
+             const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+             if (session.revert) {
+@@ -517,7 +523,7 @@ const layer = Layer.effect(
+             }
+             yield* sessions.updatePart(part)
+             return { msg, part, cwd: ctx.directory }
+-          }).pipe(Effect.ensuring(markReady))
++          })().pipe(Effect.ensuring(markReady))
+ 
+           const cfg = yield* config.get()
+           const sh = Shell.preferred(cfg.shell)
+@@ -526,7 +532,7 @@ const layer = Layer.effect(
+           let aborted = false
+ 
+           const finish = Effect.uninterruptible(
+-            Effect.gen(function* () {
++            Effect.fn("SessionPrompt.shell.finish")(function* () {
+               if (aborted) {
+                 output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
+               }
+@@ -546,7 +552,7 @@ const layer = Layer.effect(
+                 }
+                 yield* sessions.updatePart(part)
+               }
+-            }),
++            })(),
+           )
+ 
+           const exit = yield* restore(
 @@ -1067,7 +1073,7 @@ const layer = Layer.effect(
        }
  

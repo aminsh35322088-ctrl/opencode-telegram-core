@@ -11,7 +11,7 @@ index 5488a1d..c51ea2e 100644
    },
    "imports": {
 diff --git a/packages/core/src/cross-spawn-spawner.ts b/packages/core/src/cross-spawn-spawner.ts
-index 6ea9022..e577460 100644
+index 6ea9022..a0abb33 100644
 --- a/packages/core/src/cross-spawn-spawner.ts
 +++ b/packages/core/src/cross-spawn-spawner.ts
 @@ -26,6 +26,7 @@ import { PassThrough } from "node:stream"
@@ -115,6 +115,15 @@ index 6ea9022..e577460 100644
          resume(Effect.succeed([proc, signal]))
        })
        return Effect.sync(() => {
+@@ -379,7 +442,7 @@ export const make = Effect.gen(function* () {
+               shell: command.options.shell,
+               windowsHide: process.platform === "win32",
+             }),
+-            Effect.fnUntraced(function* ([proc, signal]) {
++            Effect.fn("CrossSpawnSpawner.release")(function* ([proc, signal]) {
+               const done = yield* Deferred.isDone(signal)
+               const kill = timeout(proc, command, command.options)
+               if (done) {
 diff --git a/packages/core/src/pty.ts b/packages/core/src/pty.ts
 index e5be4d4..82b8aa4 100644
 --- a/packages/core/src/pty.ts
