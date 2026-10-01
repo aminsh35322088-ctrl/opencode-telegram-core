@@ -50,7 +50,10 @@ Current stability gate: Linux validation reproduced intermittent stalls inside
 shell. The complete suite can pass immediately before the focused repeat fails.
 Five repetitions of those two cases now run after the upstream suite; test-only
 watchdogs report the blocked caller stage and Linux child process state. A passing
-rerun does not close this gate. Identify and fix the cancellation cause before
+rerun does not close this gate. A separate deterministic Runner regression now
+covers cancellation when shell work ends without opening its readiness latch;
+Core waits for readiness or shell completion before interrupting. This fix is not
+yet evidence for the intermittent Linux stall. Identify and fix its cause before
 claiming the runtime stable or deploying the pause migration to the Bot.
 
 After all three tasks, audit both repositories for duplicated Core responsibilities, unjustified shims, bypass routes, ambiguous identity, General/ALL execution, stale/late delivery, lifecycle ownership and artifact identity.

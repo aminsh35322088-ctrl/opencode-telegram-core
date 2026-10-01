@@ -1,5 +1,5 @@
 diff --git a/packages/opencode/src/effect/runner.ts b/packages/opencode/src/effect/runner.ts
-index f21a61c..c65f444 100644
+index f21a61c..ffbde5e 100644
 --- a/packages/opencode/src/effect/runner.ts
 +++ b/packages/opencode/src/effect/runner.ts
 @@ -3,6 +3,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, Synchronize
@@ -30,7 +30,21 @@ index f21a61c..c65f444 100644
          ] as const,
      ).pipe(Effect.flatten)
  
-@@ -208,6 +215,12 @@ export const make = <A, E = never>(
+@@ -107,7 +114,12 @@ export const make = <A, E = never>(
+ 
+   const stopShell = (shell: ShellHandle<A, E>) =>
+     Effect.gen(function* () {
+-      if (shell.ready) yield* shell.ready.await.pipe(Effect.exit, Effect.asVoid)
++      if (shell.ready)
++        // Cancellation is masked; these non-owning waits must still release the losing observer.
++        yield* Effect.raceFirst(
++          shell.ready.await.pipe(Effect.interruptible),
++          Fiber.await(shell.fiber).pipe(Effect.asVoid, Effect.interruptible),
++        ).pipe(Effect.exit, Effect.asVoid)
+       yield* Deferred.succeed(shell.cancelled, undefined).pipe(Effect.asVoid)
+       yield* Fiber.interrupt(shell.fiber)
+     })
+@@ -208,6 +220,12 @@ export const make = <A, E = never>(
      get busy() {
        return state()._tag !== "Idle"
      },
@@ -916,13 +930,40 @@ index 9167cb3..8792606 100644
      Provider.node,
      LSP.node,
 diff --git a/packages/opencode/test/effect/runner.test.ts b/packages/opencode/test/effect/runner.test.ts
-index 27fe9e0..f078768 100644
+index 27fe9e0..9874497 100644
 --- a/packages/opencode/test/effect/runner.test.ts
 +++ b/packages/opencode/test/effect/runner.test.ts
-@@ -9,6 +9,49 @@ const waitForState = <A, E>(runner: Runner.Runner<A, E>, tag: Runner.State<A, E>
+@@ -9,6 +9,76 @@ const waitForState = <A, E>(runner: Runner.Runner<A, E>, tag: Runner.State<A, E>
    }).pipe(Effect.timeout("1 second"))
  
  describe("Runner", () => {
++  it.live(
++    "cancel settles when a shell ends without opening readiness",
++    Effect.gen(function* () {
++      const scope = yield* Scope.Scope
++      const ready = yield* Latch.make()
++      const release = yield* Deferred.make<void>()
++      const runner = Runner.make<string>(scope, { onInterrupt: Effect.succeed("cancelled") })
++      const shell = yield* runner.startShell(Deferred.await(release).pipe(Effect.as("finished")), ready).pipe(Effect.forkChild)
++      yield* waitForState(runner, "Shell")
++      const queued = yield* runner.ensureRunning(Effect.succeed("unexpected queued work")).pipe(Effect.forkChild)
++      yield* waitForState(runner, "ShellThenRun")
++      const cancelling = yield* runner.cancel.pipe(Effect.forkChild)
++      yield* waitForState(runner, "Idle")
++      yield* Deferred.succeed(release, undefined)
++      yield* Fiber.await(shell)
++      const settled = yield* Effect.raceFirst(
++        Fiber.await(cancelling).pipe(Effect.as(true)),
++        Effect.sleep("50 millis").pipe(Effect.as(false)),
++      )
++      // Release the old implementation's wait so the failing test cleans up.
++      if (!settled) yield* ready.open
++      yield* Fiber.await(cancelling)
++      expect(settled).toBe(true)
++      expect(yield* Fiber.join(queued)).toBe("cancelled")
++    }),
++  )
++
 +  it.live(
 +    "async idle cleanup keeps admission busy and joins concurrent callers",
 +    Effect.gen(function* () {
