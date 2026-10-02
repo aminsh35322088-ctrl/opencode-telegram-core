@@ -110,8 +110,10 @@ and rejects checkpoints instead of leaving a broken observation silently parked.
 This source is not the complete client-facing migration. The aligned pre.8
 artifacts passed compatibility/identity verification and are published from
 `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`; Bot adoption remains pending.
-OS suspension for intended manual/model-shell processes and the imported
-ShellTool active-time timeout change remain separate integration gates. Native
+The actual ShellTool timeout now uses Core’s active-time deadline. A real-tool
+regression with a controlled process handle proves that parent pause does not
+kill the child on its timeout and resume uses the remaining active budget.
+OS suspension for intended manual/model-shell processes remains an integration gate. Native
 delivery/deadline/liveness and producer-run provenance require Bot adoption and
 aligned artifact verification. Persistent custom-tool daemon ownership, Bot tool
 migration and the Bot's Telegram controls still require integration.
