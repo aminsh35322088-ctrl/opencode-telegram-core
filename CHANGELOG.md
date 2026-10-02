@@ -1,8 +1,8 @@
 # Changelog
 
-## v1.18.33-bot.13-pre.8 candidate
+## v1.18.33-bot.13-pre.8 (2026-10-02)
 
-Source candidate for the next aligned runtime/SDK/native prerelease. Artifact verification and publication are pending; these are not final v1 release notes.
+Verified aligned runtime/SDK/native prerelease from `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`. Compatibility, identity and checksum verification passed in release workflow `36979098365`; these are not final v1 release notes.
 
 - Enforce combined block/inline nesting and actual quote/container block costs, preserve credits within text budgets, account for cumulative table spans/rowspans and safely flatten oversized spanning tables.
 - Port PR #15 onto current pause/process/provenance architecture without its superseded shell cancellation patch. Reject non-finite, fractional, non-positive and oversized renderer budgets; verify pause between final chunks retains the same owned draft.

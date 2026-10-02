@@ -1,4 +1,4 @@
-# Live execution pause/resume (pre.8 source candidate)
+# Live execution pause/resume (pre.8 prerelease)
 
 The source integration uses the existing upstream `SessionRunState` runners and
 model/tool fibers. It does not abort, recreate sessions, or send a synthetic
@@ -107,8 +107,9 @@ and rejects checkpoints instead of leaving a broken observation silently parked.
 
 ## Remaining release gates
 
-This source is not the complete client-facing migration. The pre.8 artifacts must
-pass compatibility/identity verification before publication and Bot adoption.
+This source is not the complete client-facing migration. The aligned pre.8
+artifacts passed compatibility/identity verification and are published from
+`f110bd25419b6bedc40db36e9ae929bc4e52b9ac`; Bot adoption remains pending.
 OS suspension for intended manual/model-shell processes and the imported
 ShellTool active-time timeout change remain separate integration gates. Native
 delivery/deadline/liveness and producer-run provenance require Bot adoption and
