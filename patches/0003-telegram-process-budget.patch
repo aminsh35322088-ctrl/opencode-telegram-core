@@ -773,7 +773,7 @@ index 4f687b1..3184708 100644
      stdout: "pipe",
      stderr: "pipe",
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
-index 05f12fa..e7f4fe5 100644
+index 05f12fa..a68facc 100644
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
 @@ -6,7 +6,7 @@ import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -854,7 +854,7 @@ index 05f12fa..e7f4fe5 100644
        )
      })
  
-@@ -415,29 +415,6 @@ const layer = Layer.effect(
+@@ -415,31 +415,16 @@ const layer = Layer.effect(
      )
      const cfgSvc = yield* Config.Service
  
@@ -881,13 +881,32 @@ index 05f12fa..e7f4fe5 100644
 -      Effect.scoped,
 -      Effect.catch(() => Effect.succeed([] as number[])),
 -    )
- 
+-
      function watch(s: State, name: string, client: MCPClient, bridge: EffectBridge.Shape, timeout?: number) {
++      client.onerror = () => {
++        if (s.clients[name] !== client) return
++        // Transport failure does not prove process death. Retain its original
++        // service owner, withdraw tools and require explicit joined cleanup.
++        s.status[name] = { status: "failed", error: "MCP transport failed" }
++        delete s.defs[name]
++        delete s.instructions[name]
++        bridge.fork(events.publish(ToolsChanged, { server: name }).pipe(Effect.ignore))
++      }
        client.onclose = () => {
-@@ -538,15 +515,6 @@ const layer = Layer.effect(
-               clients,
-               (client) =>
-                 Effect.gen(function* () {
+         if (s.clients[name] !== client) return
+         delete s.clients[name]
+@@ -530,27 +515,12 @@ const layer = Layer.effect(
+ 
+         yield* Effect.addFinalizer(() =>
+           Effect.gen(function* () {
+-            const clients = Object.values(s.clients)
+-            s.clients = {}
+-            s.defs = {}
+-            s.instructions = {}
+-            yield* Effect.forEach(
+-              clients,
+-              (client) =>
+-                Effect.gen(function* () {
 -                  const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : null
 -                  if (typeof pid === "number") {
 -                    const pids = yield* descendants(pid)
@@ -897,10 +916,70 @@ index 05f12fa..e7f4fe5 100644
 -                      } catch {}
 -                    }
 -                  }
-                   yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
-                 }),
+-                  yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+-                }),
++            const exits = yield* Effect.forEach(
++              Object.keys(s.clients), (name) => closeClient(s, name).pipe(Effect.exit),
                { concurrency: "unbounded" },
-@@ -998,7 +966,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
+             )
++            const failed = exits.find(Exit.isFailure)
++            if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause)
+             pendingOAuthTransports.clear()
+           }),
+         )
+@@ -561,11 +531,22 @@ const layer = Layer.effect(
+ 
+     function closeClient(s: State, name: string) {
+       const client = s.clients[name]
+-      delete s.clients[name]
+-      delete s.defs[name]
+-      delete s.instructions[name]
+       if (!client) return Effect.void
+-      return Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
++      return Effect.tryPromise(() => client.close()).pipe(
++        Effect.tap(() => Effect.sync(() => {
++          if (s.clients[name] !== client) return
++          delete s.clients[name]
++          delete s.defs[name]
++          delete s.instructions[name]
++        })),
++        Effect.catch((error) => Effect.sync(() => {
++          if (s.clients[name] === client) {
++            s.status[name] = { status: "failed", error: "MCP service cleanup failed" }
++            delete s.defs[name]
++            delete s.instructions[name]
++          }
++        }).pipe(Effect.andThen(Effect.die(error)))),
++      )
+     }
+ 
+     const storeClient = Effect.fnUntraced(function* (
+@@ -577,14 +558,13 @@ const layer = Layer.effect(
+       timeout?: number,
+     ) {
+       const bridge = yield* EffectBridge.make()
+-      const previous = s.clients[name]
++      if (s.clients[name] && s.clients[name] !== client) yield* closeClient(s, name)
+       s.status[name] = { status: "connected" }
+       s.clients[name] = client
+       s.defs[name] = listed
+       if (instructions) s.instructions[name] = instructions
+       else delete s.instructions[name]
+       watch(s, name, client, bridge, timeout)
+-      if (previous) yield* Effect.tryPromise(() => previous.close()).pipe(Effect.ignore)
+       return s.status[name]
+     })
+ 
+@@ -626,6 +606,8 @@ const layer = Layer.effect(
+ 
+     const createAndStore = Effect.fn("MCP.createAndStore")(function* (name: string, mcp: ConfigMCPV1.Info) {
+       const s = yield* InstanceState.get(state)
++      // A persistent service must retire before replacement admission.
++      yield* closeClient(s, name)
+       const result = yield* create(name, mcp)
+ 
+       s.status[name] = result.status
+@@ -998,7 +980,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
  export const node = LayerNode.make({
    service: Service,
    layer: layer,

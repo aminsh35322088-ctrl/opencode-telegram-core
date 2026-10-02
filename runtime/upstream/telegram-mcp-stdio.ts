@@ -17,6 +17,7 @@ export class StdioClientTransport implements Transport {
   private closing = false
   private notified = false
   private cleanup?: Promise<void>
+  private failure?: Error
 
   constructor(private readonly params: StdioServerParameters) {
     if (params.stderr !== undefined && params.stderr !== "pipe" && params.stderr !== "inherit" && params.stderr !== "ignore") {
@@ -52,8 +53,13 @@ export class StdioClientTransport implements Transport {
     })
     if (this.stderrStream && child.stderr) child.stderr.pipe(this.stderrStream)
     void child.exited.then(() => this.finish(), (error) => {
-      this.onerror?.(error as Error)
-      this.finish()
+      this.closing = true
+      this.failure = error as Error
+      this.buffer.clear()
+      this.stderrStream?.end()
+      // A failed group cleanup is not a confirmed close. Keep the original
+      // workspace record and admission quarantined; reject further work.
+      this.onerror?.(this.failure)
     })
     await new Promise<void>((resolve, reject) => {
       child.once("spawn", () => resolve())
@@ -71,6 +77,7 @@ export class StdioClientTransport implements Transport {
   close(): Promise<void> {
     this.closing = true
     return this.cleanup ??= (async () => {
+      if (this.failure) throw this.failure
       if (this.child) {
         await Process.stop(this.child)
         await this.child.exited

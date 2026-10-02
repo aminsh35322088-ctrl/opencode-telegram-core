@@ -7,5 +7,5 @@ const child = spawn("/bin/bash", ["-c", "trap '' TERM; exec sleep 60"], { stdio:
 await Bun.write(process.env.MCP_TEST_CHILD_PID!, String(child.pid))
 process.on("SIGTERM", () => {})
 const server = new Server({ name: "owned-service", version: "1.0.0" }, { capabilities: { tools: {} } })
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }))
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "probe", inputSchema: { type: "object" } }] }))
 await server.connect(new StdioServerTransport())

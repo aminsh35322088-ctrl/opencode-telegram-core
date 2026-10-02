@@ -82,3 +82,12 @@ Further gate found during this boundary audit: standalone Telegram headless serv
 currently does not activate the process-budget environment flag itself. Bot historically
 supplied it. Core stable must activate/verify governors independently at the headless
 entrypoint; this candidate does not claim that activation or actual runtime soak.
+
+Initial MCP candidate full gate passed308 tests/2 expected skips, original five
+cancellation repeats and CI37007067132, but review found a cleanup-failure notification
+gap. Deterministic regressions reproduced false onclose, disconnect swallowing failure
+and dropped workspace owner, and connected/tool state after fatal transport failure.
+Candidate now preserves failed identity/admission, withdraws tools, propagates cleanup
+failure, joins all workspace service closes and retires a service before replacement
+admission.25 focused MCP lifecycle/transport tests pass after these fixes; full/review
+verification is running. Initial green CI alone did not close the gate.
