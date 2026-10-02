@@ -36,9 +36,9 @@ racing a rich mutation. Full Linux CI and aligned artifact checks precede Bot us
 - Core now captures original root and independent producer ownership before live publication, with the producer phase and workspace. SSE/global events and generated SDK schemas preserve `metadata.telegramExecution`; durable replay stays untagged. Native `SessionEventRouter.resolveExecution` requires this provenance and returns the complete captured run fence after ancestry validation. Delayed old-root events and replacement during lookup fail closed. Callers must retain and recheck that fence at delivery; the legacy `resolve` method is for session/control routing, not untagged execution delivery. Bot adoption remains gated on a verified aligned prerelease and final routing audit.
 - Host completion/cancellation events capture each retired owner's identity without retaining runtime authority. Ordinary completion waits through pause and rechecks pause under the admission guard before retirement; destructive cancellation still finalizes the original tree.
 
-## Renderer integration checkpoint (2026-10-01)
+## Renderer integration checkpoint (2026-10-02)
 
-PR #15 renderer work is ported onto Core `ef65524978b3eadd117c5fee6068cec9e1071d4a`
+PR #15 renderer work is refreshed onto Core `da4f28ab9c86b1bc9949f0635426caf85a6dac22`
 on the integration branch. The older branch's shell cancellation patch is omitted;
 `patches/series` and current runtime patches remain unchanged. Final output uses
 GFM/Telegram parsing, semantic blocks, recursive Persian/mixed-script direction
@@ -56,8 +56,14 @@ or release gate.
 GitHub run 36909074671 passed native validation and the full upstream suite
 (158 pass, 2 skip), then reproduced `cancel interrupts loop queued behind shell`
 in the second focused repeat: release stalled and the expected abort marker was
-missing. This remains an active blocker; do not merge/release by rerunning until
-green. The first local upstream run also failed two custom-process tests because
+missing. PR #16 subsequently fixed the deterministically reproduced output-reader
+acquisition race. Its latest-main validation passed 160 upstream tests (2 skips),
+all five focused repeats, 238 native tests and 24 toolchain contracts. GitHub
+run 36975712031 passed both required jobs; Railway deployment
+`93c6d6cb-707f-49ee-bc28-a53bad4ca57b` on `da4f28ab` passed 238 tests and health.
+An additional 20 repeats of both focused cases had no process-release stalls;
+two setup/readJson delays were observed under concurrent build load. The refreshed
+renderer still needs its own full CI and actual-candidate Railway smoke. The first local upstream run also failed two custom-process tests because
 this cloud container PID 1 retained dead descendants as zombies. A test-only Linux
 subreaper restored all 14 applicable custom-process tests; production cleanup code
 was not weakened. Full local verification under that reaper is separate evidence.
@@ -92,22 +98,23 @@ not a full running model/tool workload.
 ## Audit and stability matrix
 
 Current stability gate: Linux validation reproduced intermittent stalls inside
-`SessionPrompt.cancel` for a shell with a queued model turn and for an exclusive
-shell. The complete suite can pass immediately before the focused repeat fails.
-Five repetitions of those two cases now run after the upstream suite; test-only
-watchdogs report the blocked caller stage and Linux child process state. A passing
-rerun does not close this gate. A separate deterministic Runner regression now
-covers cancellation when shell work ends without opening its readiness latch;
-Core waits for readiness or shell completion before interrupting. This fix is not
-yet evidence for the intermittent Linux stall. Later traced runs locate that stall
-in `CrossSpawnSpawner.release`, while awaiting terminal notification after signal
-delivery. Core now bounds the post-KILL wait, propagates uncertain cleanup failure,
-and retains its budget reservation. Scope release and explicit kill share this
-termination path. Four deterministic process fixtures cover missing notification,
-signal-error escalation, explicit kill and trailing output. Linux validation must
-still establish successful cancellation; bounded failure alone does not close this
-gate. Identify and fix the notification/cleanup cause before
-claiming the runtime stable or deploying the pause migration to the Bot.
+`SessionPrompt.cancel` for queued and exclusive shells. The terminal-notification
+cause is now reproduced deterministically: the Effect Node stream adapter attaches
+output listeners before registering their scope finalizer; interruption in that
+gap leaves a `readable` listener that prevents Bun's exit-time resume from draining
+the pipe. The process exits but never emits `close`, so bounded cleanup fails.
+Core now makes output-reader acquisition (stdout, stderr and extra output FDs)
+uninterruptible through finalizer registration. Output reads remain interruptible;
+signal escalation, close deadlines and uncertain governor admission are unchanged.
+A deterministic regression interrupts exactly after listener attachment and checks
+listener removal and pipe destruction. A Linux regression cancels 50 actual shells
+during merged-output admission and requires terminal close without cleanup defects.
+Existing fixtures still cover missing close, failed TERM delivery, explicit kill
+and trailing output. The deterministic regression, Linux stress, full verification,
+GitHub CI and actual-main Railway smoke cited above resolve this specific fault.
+The refreshed renderer candidate still requires its own CI and Railway smoke;
+Bot adoption and the remaining release gates stay open. A passing rerun alone is
+insufficient.
 
 After all three tasks, audit both repositories for duplicated Core responsibilities, unjustified shims, bypass routes, ambiguous identity, General/ALL execution, stale/late delivery, lifecycle ownership and artifact identity.
 
