@@ -186,3 +186,50 @@ The tracked Bot `node_modules` Linux pointer was restored before scope freeze; B
    Final ownership audit, stability matrix, performance/resource checks and real RC soak remain gates.
 
 This checkpoint is preservation, not feature completion. Development stops after remote verification.
+
+## Cloud continuation: cancellation reader-acquisition race
+
+Checkpoint `99a2ea9` was recovered unchanged and clean. Fix checkpoint:
+`f875baec6bba414f6341bc1f567e93a110dcddc8` on the same handoff branch.
+
+The shell stall is reproduced without SessionPrompt: cancel a real Linux shell
+using `Shell.args` while merged output readers are being admitted. Bare `bash -c`
+and an unconsumed handle did not expose the same race. The failing shell had exited
+but one pipe retained a `readable` listener and never closed.
+
+The installed Effect beta.83 NodeStream adapter attaches listeners synchronously,
+then returns the Effect that registers their scope finalizer. Interruption in
+between leaks the listener. Bun 1.3.14's exit-time `resume()` cannot drain that pipe
+while it has a `readable` listener. A deterministic test interrupts the fiber from
+`once("end")` after attachment: before the fix it retained one readable listener;
+after the fix the listeners are removed and the pipe is destroyed. Core now wraps
+only reader acquisition through finalizer registration in an uninterruptible,
+suspended channel transform. Reads, cancellation, deadlines and governor retention
+remain unchanged. The fix covers stdout/stderr and extra output FD adapters.
+
+Verification on this checkpoint's source:
+
+- Permanent process-release suite: 6 pass, 0 fail, including the deterministic
+  acquisition race and 50 real Linux shell cancellations with merged output.
+- Additional diagnostic probe: 300 spawn-synchronized real shell cancellations
+  passed after the fix; the same probe failed on its first round before the fix.
+- Fresh `scripts/test-upstream-runtime.sh`: typecheck and SDK generation/surface
+  validation passed; 161 pass, 2 expected skips, 0 fail; all five focused two-case
+  repeats passed with no cancellation watchdog stalls.
+- Core runtime typecheck and tests: 238 pass, 0 fail.
+- Python toolchain/release contracts: 24 pass.
+- Focused independent code review found no actionable issues.
+
+The VM's PID 1 does not reap orphaned descendants. The first exact baseline script
+therefore had two known custom-process zombie failures and also showed a nine-second
+shell-release stall despite a passing exclusive-shell assertion. Full validation
+used a test-only Linux subreaper wrapper that reaps adopted descendants; production
+cleanup has not been weakened. One isolated governed fixture also rejected admission
+under concurrent typecheck memory pressure; after that load ended the unchanged
+fixture passed, including its uncertain-admission checks.
+
+Do not treat this local evidence as Railway or GitHub candidate evidence. The fix
+needs isolated latest-main CI and Railway smoke before integration/release. Main
+was still `ef655249`; PR #15 was `c36cc274` with two green checks. Production Bot
+remains on its existing deployment and pre.7 pin. Renderer refresh, aligned release,
+Bot adoption, resource measurements and RC/soak gates remain pending.
