@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Make the actual ShellTool timeout consume active execution time, preserving parent/child continuation while paused. OS shell suspension remains a separate integration gate.
+
 ## v1.18.33-bot.13-pre.8 (2026-10-02)
 
 Verified aligned runtime/SDK/native prerelease from `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`. Compatibility, identity and checksum verification passed in release workflow `36979098365`; these are not final v1 release notes.
