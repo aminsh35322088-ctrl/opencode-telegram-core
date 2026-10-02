@@ -3,14 +3,14 @@ import type { TelegramProcessLease } from "./telegram-process-budget"
 import { abortableSleep, withDeadline } from "./telegram-deadline"
 
 /** Workspace service ownership survives leader exit until terminal/group cleanup. */
-export function ownServiceProcess(proc: ChildProcess, budget: TelegramProcessLease) {
+export function ownServiceProcess(proc: ChildProcess, budget: TelegramProcessLease | null) {
   const pid = proc.pid
   if (!pid || !Number.isSafeInteger(pid) || pid < 1) throw new Error("service process has no OS identity")
   let retired = false
   let spawned = false
   let cleanup: Promise<void> | undefined
   const started = new Promise<void>((resolve) => {
-    proc.once("spawn", () => { spawned = true; budget.bindPid(pid, true); resolve() })
+    proc.once("spawn", () => { spawned = true; budget?.bindPid(pid, true); resolve() })
     proc.once("error", () => resolve())
   })
   const closed = new Promise<void>((resolve) => proc.once("close", () => resolve()))
@@ -30,7 +30,7 @@ export function ownServiceProcess(proc: ChildProcess, budget: TelegramProcessLea
       await closed
       if (spawned) while (signal(0)) await abortableSleep(20, abort)
       retired = true
-      budget.release()
+      budget?.release()
     }, { timeoutMs: 5_000, label: "workspace service process group cleanup" }),
   }
 }

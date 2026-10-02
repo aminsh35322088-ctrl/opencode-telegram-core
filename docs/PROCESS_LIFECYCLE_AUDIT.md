@@ -8,7 +8,7 @@ remaining Core gates, not a stable release claim.
 | --- | --- | --- |
 | Manual/model shell via CrossSpawnSpawner | Captured runtime execution and phase, when governed as shell | New physical Linux regressions cover parent pause/resume, abort while stopped, normal leader exit with descendants and retired identity. Merged PR #20: upstream 168 pass/2 expected skip, native 298 pass, Python 24 pass, 100 further Linux owned-shell stress passes; candidate and main CI/native Railway smoke green. |
 | Custom-tool execFile | Captured invocation/run/session/canonical workspace | Existing group accounting, cancellation, pause/time limits, output bounds and invocation cleanup tests must stay green. No daemon-launcher lifetime assumption. |
-| MCP stdio transport | Workspace instance's cached client and finalizer | **Open gate:** SDK owns spawning; wrapper releases admission in close finally even if close fails and binds leader PID without retention. Finalizer uses best-effort descendant discovery/TERM. Must establish explicit service/group cleanup before releasing. |
+| MCP stdio transport | Workspace instance's cached client and finalizer | **Candidate:** SDK framing/client protocol retained; Core stdio adapter uses existing Process service/group ownership and joins cleanup. SDK-owned spawn, close-finally release and best-effort pgrep cleanup removed. Focused physical descendant/compatibility checks passed; full/review pending. Workspace startup/teardown race remains open. |
 | LSP | Workspace instance's client and shutdown | **Open gate:** Process.spawn binds only leader; exit releases admission, and Process.stop sends leader TERM without joining confirmed group death. Must retain lifetime through group cleanup. |
 | PTY | Core workspace PTY service/session | **Open gate:** high-level core Pty service already acquires PTY admission, but releases on leader exit; teardown sends kill without joining group cleanup. Low-level adapters are behind that existing governed boundary. Retain service lifetime through confirmed cleanup. |
 
@@ -66,3 +66,19 @@ fail deterministically; restoring it passed 20 focused repetitions. No productio
 cancellation ordering, cleanup deadline or timeout was changed. The expanded full
 gate is being verified before merge. Initial candidate Railway smoke was cancelled
 by restoring main before its health probe; it is not accepted as passing evidence.
+
+## MCP transport candidate
+
+Physical MCP disconnect initially returned with a descendant alive; Core-owned
+stdio service cleanup now passes that regression. SDK framing is reused; no SDK
+private fields or raw spawn fallback. Focused MCP, LSP and Process suite:96 pass.
+The old startup-timeout test relied on a PID file being written during SDK's slow
+shutdown; it now observes the actual Process.spawn PID and asserts death immediately
+when failure returns. A separate disabled-admission regression reproduced unjoined
+service cleanup; POSIX service group lifetime now remains independent of optional
+admission accounting. Windows MCP service launch fails closed.
+
+Further gate found during this boundary audit: standalone Telegram headless serve
+currently does not activate the process-budget environment flag itself. Bot historically
+supplied it. Core stable must activate/verify governors independently at the headless
+entrypoint; this candidate does not claim that activation or actual runtime soak.

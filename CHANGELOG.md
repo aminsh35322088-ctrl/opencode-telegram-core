@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Route MCP stdio through Core-owned workspace process groups with SDK framing, joined cleanup and retained admission; remove SDK launcher lease and best-effort descendant cleanup.
+
 - Governed LSP service shutdown joins isolated process-group cleanup and retains admission until terminal closure and confirmed death; failed cleanup keeps accounting.
 
 - Attach governed manual/model shell process groups to captured execution ownership and phase for OS pause/resume and abort-after-pause. Join terminal close and confirmed group cleanup before releasing admission; retire signal authority before PID reuse.
