@@ -57,3 +57,12 @@ admission; uncertain cleanup retains it. This owner is not an arbitrary model ru
 This focused process-boundary fix does not close LSP workspace startup/teardown
 races, MCP SDK spawning/cleanup, PTY group cleanup or detached browser lifecycle.
 Full verification and review for the candidate are in progress. No RC/stable claim.
+
+Expanded compatibility verification exposed an unrelated timing assertion in the
+paused shell-readiness regression: it raced readiness against 100 ms of scheduler
+and SQLite latency. The test now asserts readiness is already open when cancellation
+returns. Removing the production readiness finalizer makes this causal assertion
+fail deterministically; restoring it passed 20 focused repetitions. No production
+cancellation ordering, cleanup deadline or timeout was changed. The expanded full
+gate is being verified before merge. Initial candidate Railway smoke was cancelled
+by restoring main before its health probe; it is not accepted as passing evidence.
