@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fence closing LSP workspaces, own processes before initialization completes, and join pending acquisitions so teardown cannot publish or leak a late client.
+
 - Enable process admission at standalone Telegram-headless server startup before loading runtime modules; inherited disabled flags cannot bypass the production governor.
 
 - Route MCP stdio through Core-owned workspace process groups with SDK framing, joined cleanup and retained admission; remove SDK launcher lease and best-effort descendant cleanup.

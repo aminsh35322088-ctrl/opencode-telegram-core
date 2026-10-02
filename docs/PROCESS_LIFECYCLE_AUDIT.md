@@ -9,7 +9,7 @@ remaining Core gates, not a stable release claim.
 | Manual/model shell via CrossSpawnSpawner | Captured runtime execution and phase, when governed as shell | New physical Linux regressions cover parent pause/resume, abort while stopped, normal leader exit with descendants and retired identity. Merged PR #20: upstream 168 pass/2 expected skip, native 298 pass, Python 24 pass, 100 further Linux owned-shell stress passes; candidate and main CI/native Railway smoke green. |
 | Custom-tool execFile | Captured invocation/run/session/canonical workspace | Existing group accounting, cancellation, pause/time limits, output bounds and invocation cleanup tests must stay green. No daemon-launcher lifetime assumption. |
 | MCP stdio transport | Workspace instance's cached client/transport and finalizer | PR #22 merged: SDK framing/client protocol retained; Core service/group cleanup joins confirmed retirement, including failed acquisitions registered before handshake. 312 upstream pass/2 expected skip, 220 Linux stress passes, CI and exact candidate native Railway smoke green. Workspace startup/teardown race remains open. |
-| LSP | Workspace instance's client and shutdown | PR #21 merged: Process.spawn/stop owns isolated service groups, joins cleanup and retains uncertain admission. 241 upstream pass/2 expected skip, 100 Linux daemon stress passes, CI and exact candidate native Railway smoke green. Workspace startup/teardown race remains open. |
+| LSP | Workspace instance's client, pending acquisition and shutdown | PR #21 group cleanup merged. Workspace candidate marks closing, owns initialization processes, joins pending acquisitions and retires late handles/clients before publication. Three causal real-process regressions cover initialization, late publication and bounded stalled acquisition; full/stress verification pending. |
 | PTY | Core workspace PTY service/session | **Open gate:** high-level core Pty service already acquires PTY admission, but releases on leader exit; teardown sends kill without joining group cleanup. Low-level adapters are behind that existing governed boundary. Retain service lifetime through confirmed cleanup. |
 
 ## Shell invariants under verification
@@ -83,7 +83,16 @@ flag itself; Bot historically supplied it. A new entrypoint regression reproduce
 admission of three utility processes with both unset and inherited disabled flags.
 Candidate now enables admission before dynamic server import, enforces the two-process
 utility limit with real subprocesses and verifies returned accounting after exit.
-Actual binary/runtime resource and Railway soak verification remains required.
+PR23 merged as `640becc950605790b1fff368557885833886704a`; candidate d0bbbe20 had
+upstream314 pass/2 expected skips, five original cancellation repeats, toolchain24
+pass, headless20 repetitions, clean review and CI37012834718 green. Compiled binary
+124,344,448 bytes identifies exact d0bbbe20 source. Direct API probe with inherited0
+passed two real shells, third rejection before command execution, physical parent/child
+pause, same PID resume, abort while paused with confirmed death and reuse of capacity.
+The existing API returns a generic HTTP500 on budget rejection; probe response assumptions
+were corrected without changing production behavior. Candidate native Railway smoke
+`4db9fb42-9e7b-4e0b-8b33-dd7315d44995` SUCCESS/native298 pass/0 fail/health succeeded.
+Actual runtime resource and Railway soak verification remains required.
 
 Initial MCP candidate full gate passed308 tests/2 expected skips, original five
 cancellation repeats and CI37007067132, but review found a cleanup-failure notification
@@ -111,3 +120,43 @@ review found no further actionable issues. CI37009589230 green; Railway native s
 `730f77d8-6c0b-459b-af0a-7384f890fbd1` exact candidate SUCCESS, native298 pass/0 fail,
 health succeeded. PR22 merged as `adb98f639c52fcb8c9c45a5c0f6f9f435f355bcb`.
 These results do not close workspace startup/teardown or actual runtime soak gates.
+
+## LSP workspace acquisition candidate
+
+Disposal previously returned with a server still initializing; a second causal
+regression published a delayed client after teardown began. Candidate owns the
+process before initialize, marks closing before shutdown, snapshots pending tasks
+before awaiting cleanup and joins them. Late handles and initialized clients join
+retirement rather than entering the client list. Confirmed process retirement drops
+the process reference; failed cleanup preserves it. Task completion handlers observe
+both outcomes without creating an unhandled rejected finally promise.
+Focused LSP59 pass and both red/green regressions passed; repeated Linux and full
+verification/review are in progress. MCP workspace races and PTY lifecycle remain gates.
+
+Review found the first candidate's pending-acquisition join could wait forever.
+A stalled-spawn regression reproduced that hang and a process hidden before handle
+return. Startup now captures workspace cancellation and registers every Process
+launch immediately, including installer groups. It holds existing helper admission
+until underlying startup settles. Disposal aborts startup/downloads, joins group
+cleanup and bounds acquisition settlement at the existing five-second cleanup limit;
+uncertain startup retains admission and blocks replacement. Late launches through
+the captured cancelled owner are rejected.
+
+Real npm registry cancellation still remained pending after its signal reached the
+fetch layer. Narrow diagnostics confirmed signal delivery; `make-fetch-happen` then
+treated abort as retry and kept backoff. Patch0007 uses upstream's existing Bun patch
+mechanism to stop the public retry operation on abort. Actual stalled-registry and
+already-scheduled backoff regressions fail before the patch and pass after it.
+Ordinary HTTP503-to-success retry behavior stays green. Direct download cancellation
+also closes the actual socket. A first HTTP-polyfill close-event fixture assertion
+was replaced with a raw TCP fixture to observe the connection itself.
+Expanded verification now includes existing Core npm/config compatibility tests.
+Full gate and renewed review are pending; this candidate is not merged or release ready.
+
+The fresh full gate passed Core npm/config10 and upstream320 tests/2 expected skips,
+but one npm fixture asserted server-side socket closure before its close event.
+Cancellation had already rejected promptly. The fixture now joins actual TCP close
+within the same five-second bound; no production timing changed. Focused seven
+LSP/download/npm tests pass, including direct observation that abort clears the real
+60-second backoff timer. Ordinary retry still passes. Renewed review found no further
+actionable defects; full gate and Linux repetition remain pending.

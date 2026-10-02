@@ -1112,28 +1112,34 @@ index 1e4423e..a9cd836 100644
            const exit = yield* Effect.raceAll([
              handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
 diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
-index 173210f..170e829 100644
+index 173210f..8157934 100644
 --- a/packages/opencode/src/util/process.ts
 +++ b/packages/opencode/src/util/process.ts
-@@ -3,6 +3,8 @@ import type { Stream } from "node:stream"
+@@ -3,6 +3,9 @@ import type { Stream } from "node:stream"
  import launch from "cross-spawn"
  import { buffer } from "node:stream/consumers"
  import { errorMessage } from "./error"
 +import { ownServiceProcess } from "@opencode-ai/core/telegram-service-process"
++import { currentServiceProcessOwner } from "@opencode-ai/core/telegram-service-acquisition"
 +import { acquireTelegramProcessBudget, classifyTelegramProcess } from "@opencode-ai/core/telegram-process-budget"
- 
+
  export type Stdio = "inherit" | "pipe" | "ignore" | number | Stream
  export type Shell = boolean | string
-@@ -56,22 +58,46 @@ export class RunFailedError extends Error {
- 
+@@ -56,22 +59,51 @@ export class RunFailedError extends Error {
+
  export type Child = ChildProcess & { exited: Promise<number> }
- 
+
 +const services = new WeakMap<ChildProcess, ReturnType<typeof ownServiceProcess>>()
 +
  export function spawn(cmd: string[], opts: Options = {}): Child {
    if (cmd.length === 0) throw new Error("Command is required")
++  const serviceOwner = currentServiceProcessOwner()
++  if (serviceOwner) {
++    serviceOwner.signal.throwIfAborted()
++    opts = { ...opts, abort: opts.abort ? AbortSignal.any([serviceOwner.signal, opts.abort]) : serviceOwner.signal }
++  }
    opts.abort?.throwIfAborted()
- 
+
 -  const proc = launch(cmd[0], cmd.slice(1), {
 -    cwd: opts.cwd,
 -    shell: opts.shell,
@@ -1146,7 +1152,7 @@ index 173210f..170e829 100644
 +  const kind = classifyTelegramProcess(cmd[0], env, undefined, Boolean(opts.shell))
 +  // Admission may be disabled in generic upstream tests, but service cleanup
 +  // still owns the POSIX group rather than returning an unbounded leader wait.
-+  const service = (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
++  const service = Boolean(serviceOwner) || (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
 +    lease?.kind === "lsp" || lease?.kind === "mcp"
 +  if (service && process.platform === "win32") {
 +    lease?.release()
@@ -1169,29 +1175,29 @@ index 173210f..170e829 100644
 +  const owned = service && proc.pid ? ownServiceProcess(proc, lease) : undefined
 +  if (owned) services.set(proc, owned)
 +  else lease?.bindPid(proc.pid)
- 
+
    let closed = false
    let timer: ReturnType<typeof setTimeout> | undefined
- 
+
    const abort = () => {
 +    if (owned) { void owned.cleanup().catch(() => undefined); return }
      if (closed) return
      if (proc.exitCode !== null || proc.signalCode !== null) return
      closed = true
-@@ -87,16 +113,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+@@ -87,16 +119,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
      const done = () => {
        opts.abort?.removeEventListener("abort", abort)
        if (timer) clearTimeout(timer)
 +      if (!owned) lease?.release()
      }
- 
+
      proc.once("exit", (code, signal) => {
        done()
 -      resolve(code ?? (signal ? 1 : 0))
 +      if (owned) owned.cleanup().then(() => resolve(code ?? (signal ? 1 : 0)), reject)
 +      else resolve(code ?? (signal ? 1 : 0))
      })
- 
+
      proc.once("error", (error) => {
        done()
 -      reject(error)
@@ -1200,14 +1206,22 @@ index 173210f..170e829 100644
      })
    })
    void exited.catch(() => undefined)
-@@ -147,6 +176,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
+@@ -108,6 +143,7 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+
+   const child = proc as Child
+   child.exited = exited
++  serviceOwner?.register(child)
+   return child
+ }
+
+@@ -147,6 +183,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
  // Duplicated in `packages/sdk/js/src/process.ts` because the SDK cannot import
  // `opencode` without creating a cycle. Keep both copies in sync.
  export async function stop(proc: ChildProcess) {
 +  const owned = services.get(proc)
 +  if (owned) { await owned.cleanup(); return }
    if (proc.exitCode !== null || proc.signalCode !== null) return
- 
+
    if (process.platform !== "win32" || !proc.pid) {
 diff --git a/packages/opencode/test/mcp/lifecycle.test.ts b/packages/opencode/test/mcp/lifecycle.test.ts
 index 80c8fd2..988c4df 100644
@@ -1277,3 +1291,189 @@ index 80c8fd2..988c4df 100644
    }),
  )
  
+diff --git a/packages/core/src/npm.ts b/packages/core/src/npm.ts
+index 94e573d..37005bf 100644
+--- a/packages/core/src/npm.ts
++++ b/packages/core/src/npm.ts
+@@ -14,6 +14,7 @@ import { filesystem } from "./effect/app-node-platform"
+ import { LayerNode } from "./effect/layer-node"
+ import { makeRuntime } from "./effect/runtime"
+ import { NpmConfig } from "./npm-config"
++import { currentServiceProcessOwner } from "./telegram-service-acquisition"
+
+ export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedError>()("NpmInstallFailedError", {
+   add: Schema.Array(Schema.String).pipe(Schema.optional),
+@@ -91,8 +92,11 @@ const layer = Layer.effect(
+         const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
+         const add = input.add ?? []
+         const npmOptions = yield* NpmConfig.load(input.dir)
++        const serviceOwner = currentServiceProcessOwner()
++        serviceOwner?.signal.throwIfAborted()
+         const arborist = new Arborist({
+           ...npmOptions,
++          signal: serviceOwner?.signal,
+           path: input.dir,
+           binLinks: true,
+           progress: false,
+diff --git a/packages/opencode/src/lsp/lsp.ts b/packages/opencode/src/lsp/lsp.ts
+index 1ab3a0b..b209819 100644
+--- a/packages/opencode/src/lsp/lsp.ts
++++ b/packages/opencode/src/lsp/lsp.ts
+@@ -7,6 +7,8 @@ import { pathToFileURL, fileURLToPath } from "url"
+ import * as LSPServer from "./server"
+ import { Config } from "@/config/config"
+ import { Process } from "@/util/process"
++import { acquireService, type ServiceProcessOwner } from "@opencode-ai/core/telegram-service-acquisition"
++import { withTimeout } from "@/util/timeout"
+ import { spawn as lspspawn } from "./launch"
+ import { Effect, Layer, Context, Schema } from "effect"
+ import { InstanceState } from "@/effect/instance-state"
+@@ -110,6 +112,10 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
+ type LocInput = { file: string; line: number; character: number }
+
+ interface State {
++  closing: boolean
++  controller: AbortController
++  owner: ServiceProcessOwner
++  processes: Set<Process.Child>
+   clients: LSPClient.Info[]
+   servers: Record<string, LSPServer.Info>
+   broken: Set<string>
+@@ -188,7 +194,16 @@ const layer = Layer.effect(
+           })
+         }
+
++        const controller = new AbortController()
++        const processes = new Set<Process.Child>()
+         const s: State = {
++          closing: false,
++          controller,
++          processes,
++          owner: { signal: controller.signal, register: (process) => {
++            processes.add(process)
++            void process.exited.then(() => processes.delete(process), () => undefined)
++          } },
+           clients: [],
+           servers,
+           broken: new Set(),
+@@ -197,7 +212,22 @@ const layer = Layer.effect(
+
+         yield* Effect.addFinalizer(() =>
+           Effect.promise(async () => {
+-            await Promise.all(s.clients.map((client) => client.shutdown()))
++            s.closing = true
++            const acquisitions = [...s.spawning.values()]
++            s.controller.abort(new Error("LSP workspace closing"))
++            const settling = withTimeout(Promise.allSettled(acquisitions), 5000, "LSP acquisition cleanup uncertain")
++            void settling.catch(() => undefined)
++            const cleanup = await Promise.allSettled([
++              ...s.clients.map((client) => client.shutdown()),
++              ...Array.from(s.processes, (process) => Process.stop(process)),
++            ])
++            // Acquisition owns its process before initialize completes. A late
++            // spawn observes closing and joins retirement before settling here.
++            const pending = await settling
++            const failed = [...cleanup, ...pending].find((result) => result.status === "rejected")
++            if (failed?.status === "rejected") throw failed.reason
++            s.clients.length = 0
++            s.processes.clear()
+           }),
+         )
+
+@@ -210,13 +240,14 @@ const layer = Layer.effect(
+       if (!containsPath(file, ctx)) return [] as LSPClient.Info[]
+       const s = yield* InstanceState.get(state)
+       const clients = yield* Effect.promise(async () => {
++        if (s.closing) return { result: [] as LSPClient.Info[], updated: 0 }
+         const extension = path.parse(file).ext || file
+         const result: LSPClient.Info[] = []
+         let updated = 0
+
+         async function schedule(server: LSPServer.Info, root: string, key: string) {
+-          const handle = await server
+-            .spawn(root, ctx, flags)
++          if (s.closing) return undefined
++          const handle = await acquireService(s.owner, () => server.spawn(root, ctx, flags))
+             .then((value) => {
+               if (!value) s.broken.add(key)
+               return value
+@@ -227,6 +258,13 @@ const layer = Layer.effect(
+             })
+
+           if (!handle) return undefined
++          s.processes.add(handle.process)
++          void handle.process.exited.then(() => s.processes.delete(handle.process), () => undefined)
++          if (s.closing) {
++            await Process.stop(handle.process)
++            s.processes.delete(handle.process)
++            return undefined
++          }
+           const client = await LSPClient.create({
+             serverID: server.id,
+             server: handle,
+@@ -236,14 +274,21 @@ const layer = Layer.effect(
+           }).catch(async () => {
+             s.broken.add(key)
+             await Process.stop(handle.process)
++            s.processes.delete(handle.process)
+             return undefined
+           })
+
+           if (!client) return undefined
++          if (s.closing) {
++            await client.shutdown()
++            s.processes.delete(handle.process)
++            return undefined
++          }
+
+           const existing = s.clients.find((x) => x.root === root && x.serverID === server.id)
+           if (existing) {
+             await Process.stop(handle.process)
++            s.processes.delete(handle.process)
+             return existing
+           }
+
+@@ -255,6 +300,7 @@ const layer = Layer.effect(
+           if (server.extensions.length && !server.extensions.includes(extension)) continue
+
+           const root = await server.root(file, ctx)
++          if (s.closing) break
+           if (!root) continue
+           if (s.broken.has(root + server.id)) continue
+
+@@ -275,11 +321,12 @@ const layer = Layer.effect(
+           const task = schedule(server, root, root + server.id)
+           s.spawning.set(root + server.id, task)
+
+-          task.finally(() => {
++          const settled = () => {
+             if (s.spawning.get(root + server.id) === task) {
+               s.spawning.delete(root + server.id)
+             }
+-          })
++          }
++          void task.then(settled, settled)
+
+           const client = await task
+           if (!client) continue
+diff --git a/packages/opencode/src/lsp/server.ts b/packages/opencode/src/lsp/server.ts
+index 2be68aa..3c422b1 100644
+--- a/packages/opencode/src/lsp/server.ts
++++ b/packages/opencode/src/lsp/server.ts
+@@ -8,6 +8,7 @@ import { Filesystem } from "@/util/filesystem"
+ import type { InstanceContext } from "../project/instance-context"
+ import { Archive } from "@/util/archive"
+ import { Process } from "@/util/process"
++import { serviceFetch as fetch } from "@opencode-ai/core/telegram-service-acquisition"
+ import { which } from "@opencode-ai/core/util/which"
+ import { Module } from "@opencode-ai/core/util/module"
+ import { spawn } from "./launch"
+@@ -23,7 +24,7 @@ const run = (cmd: string[], opts: Process.RunOptions = {}) => Process.run(cmd, {
+ const output = (cmd: string[], opts: Process.RunOptions = {}) => Process.text(cmd, { ...opts, nothrow: true })
+
+ export interface Handle {
+-  process: ChildProcessWithoutNullStreams
++  process: Process.Child & ChildProcessWithoutNullStreams
+   initialization?: Record<string, any>
+ }
+
