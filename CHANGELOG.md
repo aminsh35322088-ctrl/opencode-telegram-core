@@ -6,7 +6,7 @@
 
 - Attach governed manual/model shell process groups to captured execution ownership and phase for OS pause/resume and abort-after-pause. Join terminal close and confirmed group cleanup before releasing admission; retire signal authority before PID reuse.
 
-- Make the actual ShellTool timeout consume active execution time, preserving parent/child continuation while paused. OS shell suspension remains a separate integration gate.
+- Make the actual ShellTool timeout consume active execution time, preserving parent/child continuation while paused.
 
 ## v1.18.33-bot.13-pre.8 (2026-10-02)
 
