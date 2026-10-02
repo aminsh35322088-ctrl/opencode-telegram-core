@@ -108,3 +108,22 @@ test.skipIf(process.platform !== "linux")("completed service ownership cannot si
     expect(releases).toBe(1)
   } finally { signals.mockRestore() }
 })
+
+test.skipIf(process.platform !== "linux")("workspace service cleanup remains bounded when admission is disabled", async () => {
+  process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "0"
+  const proc = launchLsp("/bin/bash", ["-c", "trap '' TERM; sleep 60 & echo $!; wait"])
+  const [chunk] = await once(proc.stdout, "data")
+  const descendant = Number(chunk.toString().trim())
+  try {
+    await Process.stop(proc)
+    expect(await exists(proc.pid!)).toBe(false)
+    expect(await exists(descendant)).toBe(false)
+  } finally {
+    for (const pid of [proc.pid!, descendant]) {
+      try { process.kill(pid, "SIGKILL") } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
+      }
+    }
+    await proc.exited
+  }
+})
