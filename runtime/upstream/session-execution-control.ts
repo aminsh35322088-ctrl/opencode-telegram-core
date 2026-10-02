@@ -230,7 +230,14 @@ export class SessionExecutionLease {
     this.#assertLive();
     this.#resources.add(resource);
     if (this.paused) {
-      try { resource.pause(); } catch (error) { this.#failure = error; this.#wake(); throw error; }
+      try { resource.pause(); } catch (error) {
+        // Attachment never returned its remover. The caller retains cleanup
+        // responsibility; do not keep a second signal/termination authority.
+        this.#resources.delete(resource);
+        this.#failure = error;
+        this.#wake();
+        throw error;
+      }
     }
     return () => { this.#resources.delete(resource); };
   }

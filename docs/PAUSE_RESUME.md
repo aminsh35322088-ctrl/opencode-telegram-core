@@ -113,10 +113,15 @@ artifacts passed compatibility/identity verification and are published from
 The actual ShellTool timeout now uses Core’s active-time deadline. A real-tool
 regression with a controlled process handle proves that parent pause does not
 kill the child on its timeout and resume uses the remaining active budget.
-OS suspension for intended manual/model-shell processes remains an integration gate. Native
-delivery/deadline/liveness and producer-run provenance require Bot adoption and
-aligned artifact verification. Persistent custom-tool daemon ownership, Bot tool
-migration and the Bot's Telegram controls still require integration.
+Governed manual/model-shell groups now attach to their original execution lease
+and phase. Parent pause sends SIGSTOP to the group; resume sends SIGCONT to the
+same group; retirement sends SIGKILL even while stopped. Ordinary leader exit
+also cleans remaining descendants. Admission remains reserved until terminal
+close and group death are confirmed; failure fences the execution and retains
+accounting. Completed identity loses signal authority before a later control can
+reach a reused PID/group. Unisolated/unsupported owned shell groups fail closed.
+Persistent-daemon ownership, full Linux stress and release artifact verification
+remain Core gates. Bot delivery/control/tool adoption is deferred until Core stable.
 Runtime, generated SDK, and native artifacts must
 ship from one verified prerelease before the Bot removes its old pause behavior.
 Full Linux CI, artifact identity checks, ownership audit, Railway validation and
