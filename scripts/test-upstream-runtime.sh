@@ -16,7 +16,7 @@ rm -f "$tree/packages/sdk/js/tsconfig.tsbuildinfo"
 "$BUN" "$CORE_ROOT/scripts/verify-bot-sdk-surface.ts" "$tree/packages/sdk/js/dist"
 (
   cd "$tree/packages/opencode"
-  "$BUN" test test/telegram test/effect/runner.test.ts test/tool/task.test.ts test/session/prompt.test.ts test/server/session-actions.test.ts --timeout 30000
+  "$BUN" test test/telegram test/effect/runner.test.ts test/tool/task.test.ts test/session/prompt.test.ts test/server/session-actions.test.ts test/lsp test/util/process.test.ts --timeout 30000
   # Exercise the two shell admission/cancellation races observed in Linux CI.
   # A single passing run cannot establish that the intermittent stall is fixed.
   for attempt in {1..5}; do

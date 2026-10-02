@@ -62,13 +62,11 @@ it.instance("cancel settles shell readiness when a paused admission never enters
       while ((yield* status.get(session.id)).type !== "busy") yield* Effect.sleep("1 millis")
     }).pipe(Effect.timeout("1 second"))
     const cancelling = yield* state.cancel(session.id).pipe(Effect.forkChild)
-    const settled = yield* Effect.raceFirst(
-      ready.await.pipe(Effect.as(true)),
-      Effect.sleep("100 millis").pipe(Effect.as(false)),
-    )
-    // Let a broken implementation unwind too, so its failure cannot hang the suite.
-    yield* ready.open
     yield* Fiber.await(cancelling)
+    // Check readiness at the causal cancellation boundary, rather than racing
+    // scheduler/SQLite latency against an arbitrary 100 ms wall-clock budget.
+    // open returns false only if production already opened the latch.
+    const settled = !(yield* ready.open)
     yield* Fiber.await(shell)
     yield* state.releaseTask(frame)
     expect(settled).toBe(true)

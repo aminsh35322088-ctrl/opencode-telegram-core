@@ -1,3 +1,48 @@
+## Latest checkpoint: governed LSP process cleanup merged
+
+Core main is now `46401de2be2140360b72e8e92d3e542090d66ca5` (PR #21).
+Bot remains frozen; PR #189 open/unmerged and pre.7 production unchanged.
+Core pre.8 remains latest published release; no RC/stable published.
+
+PR #21 candidate `1874c989ee2c5956fb0af6390640f021c951f3f2` isolates governed LSP
+workspace service groups, retains admission through terminal/group cleanup, joins
+stop, and fences retired identities. Physical TERM-resistant stop and normal-leader-exit
+regressions failed before the fix. New service helper is
+`runtime/upstream/telegram-service-process.ts`; Process.spawn/stop wiring is patch 0003.
+Workspace service ownership is independent of an arbitrary model run.
+
+Verification: focused process/LSP 73 pass; expanded upstream runtime gate 241 pass,
+2 expected skip, 0 fail, typecheck/SDK surface plus five original cancellation repeats
+passed. Existing LSP/process tests are now in that CI gate. Linux daemon stress
+20 repetitions × 5 tests = 100 pass; readiness stress 20 pass. CI 37005239835 green.
+Exact candidate Railway native smoke `fe78be54-66a0-4370-bb05-9348724a1018` SUCCESS,
+298 native tests/0 fail and health succeeded. Smoke source independently verified
+restored to main with no pin or staged changes. This is NOT actual runtime soak.
+Post-merge CI 37005753938 was in progress when recorded.
+
+Expanded test gate exposed the prior paused-readiness test's arbitrary100ms scheduler
+race. It now asserts readiness already open when cancellation completes. Removing
+production readiness ensuring deterministically fails this causal assertion; restored
+code passed20 repeats/full gate. No production timeout/cleanup ordering was weakened.
+One earlier local command failed at EOF because the script was edited while Bash read
+it; subsequent unchanged script passed. Earlier Railway candidate d43ba9e8 was cancelled
+by restoring main before candidate health; excluded from passing evidence. The later
+candidate was held through confirmed SUCCESS before restoration. Agent MCP504 did not
+mean deployment failed; independent deployment API/check/logs verified success.
+
+Next worktree branch: `/workspace/opencode-core-cancellation`,
+`fix/mcp-workspace-process-ownership`, clean from46401de. Next scope is MCP adapter using
+existing SDK framing and governed Process.spawn/service lifetime, without SDK private-field
+patching or raw spawn fallback. Current MCP wrapper releases lease in close finally,
+binds only leader, and best-effort pgrep cleanup is not sufficient. PTY high-level service
+already has admission but leader-exit/teardown cleanup remains open. LSP workspace
+startup/teardown race remains open. No claim these gates are closed by PR21.
+
+Use these notes and docs/PROCESS_LIFECYCLE_AUDIT.md as the index; do not bulk-read old
+archived diagnostics. Current bounded diagnostic names are `/workspace/scratch/daemon-*.log`:
+physical red, focused73green, causal readiness mutation red, causal20stress, full241green,
+Linux100stress. All meaningful implementation is pushed and merged; no VM-only source.
+
 ## Current recovery checkpoint — Core-only continuation
 
 This section supersedes historical handoff status below. User froze Bot migration:
