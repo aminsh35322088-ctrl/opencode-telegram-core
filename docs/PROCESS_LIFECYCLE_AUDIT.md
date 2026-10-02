@@ -1,5 +1,7 @@
 # Core process lifecycle audit (in progress, 2026-10-02)
 
+> Current production scope: [Minimum Telegram release report](MINIMUM_TELEGRAM_RELEASE.md). Historical full-upstream gates below are superseded by the scoped correction at the end of this document.
+
 Core completes independently before Bot migration. Bot PR #189 stays unmerged;
 Bot source, pins and production are frozen until Core stable. This audit records
 remaining Core gates, not a stable release claim.

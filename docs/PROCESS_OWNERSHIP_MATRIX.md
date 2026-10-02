@@ -1,5 +1,7 @@
 # Core stabilization process ownership contract
 
+> Current production scope: [Minimum Telegram release report](MINIMUM_TELEGRAM_RELEASE.md). Historical full-upstream gates below are superseded by the scoped correction at the end of this document.
+
 Core main is frozen at `640becc950605790b1fff368557885833886704a`.
 All remaining lifecycle work belongs on `stabilize/core-process-lifecycle` as one
 cumulative, dependency-ordered stabilization phase. Bot source, pins, PR189 and
