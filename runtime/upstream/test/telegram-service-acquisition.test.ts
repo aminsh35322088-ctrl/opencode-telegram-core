@@ -54,14 +54,14 @@ test("npm cancellation stops an already scheduled retry backoff", async () => {
   const timers = new Set<ReturnType<typeof setTimeout>>()
   const originalSetTimeout = globalThis.setTimeout
   const originalClearTimeout = globalThis.clearTimeout
-  const allocate = spyOn(globalThis, "setTimeout").mockImplementation((...args: Parameters<typeof setTimeout>) => {
-    const timer = originalSetTimeout(...args)
+  const allocate = spyOn(globalThis, "setTimeout").mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+    const timer = Reflect.apply(originalSetTimeout, globalThis, args) as ReturnType<typeof setTimeout>
     if (args[1] === 60000) timers.add(timer)
     return timer
-  })
+  }) as typeof setTimeout)
   const retire = spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
     timers.delete(timer as ReturnType<typeof setTimeout>)
-    originalClearTimeout(timer)
+    Reflect.apply(originalClearTimeout, globalThis, [timer])
   })
   let retried!: () => void
   const retrying = new Promise<void>((resolve) => { retried = resolve })
