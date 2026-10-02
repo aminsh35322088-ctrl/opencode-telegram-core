@@ -15,6 +15,10 @@ rm -f "$tree/packages/sdk/js/tsconfig.tsbuildinfo"
 "$BUN" run --cwd "$tree/packages/sdk/js" script/build.ts
 "$BUN" "$CORE_ROOT/scripts/verify-bot-sdk-surface.ts" "$tree/packages/sdk/js/dist"
 (
+  cd "$tree/packages/core"
+  "$BUN" test test/npm.test.ts test/npm-config.test.ts --timeout 30000
+)
+(
   cd "$tree/packages/opencode"
   "$BUN" test test/telegram test/effect/runner.test.ts test/tool/task.test.ts test/session/prompt.test.ts test/server/session-actions.test.ts test/lsp test/util/process.test.ts test/mcp --timeout 30000
   # Exercise the two shell admission/cancellation races observed in Linux CI.

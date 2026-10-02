@@ -773,7 +773,7 @@ index 4f687b1..3184708 100644
      stdout: "pipe",
      stderr: "pipe",
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
-index 05f12fa..f1d104a 100644
+index 05f12fa..8410d91 100644
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
 @@ -6,7 +6,7 @@ import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -790,7 +790,7 @@ index 05f12fa..f1d104a 100644
  import { EventV2Bridge } from "@/event-v2-bridge"
  import { TuiEvent } from "@/server/tui-event"
 -import { Cause, Effect, Exit, Layer, Context, Schema, Stream } from "effect"
-+import { Cause, Effect, Exit, Layer, Context, Schema } from "effect"
++import { Cause, Effect, Exit, Layer, Context, Schema, Semaphore } from "effect"
  import { EffectBridge } from "@/effect/bridge"
  import { InstanceState } from "@/effect/instance-state"
 -import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -798,7 +798,13 @@ index 05f12fa..f1d104a 100644
  import { McpCatalog } from "./catalog"
  import { McpEvent } from "@opencode-ai/schema/mcp-event"
  import { McpBrowser } from "./browser"
-@@ -143,6 +141,7 @@ interface State {
+@@ -140,9 +138,13 @@ interface AuthResult {
+ // --- Effect Service ---
+
+ interface State {
++  closing: boolean
++  guards: Map<string, Semaphore.Semaphore>
++  pending: Set<Promise<void>>
    config: Record<string, ConfigMCPV1.Info>
    status: Record<string, Status>
    clients: Record<string, MCPClient>
@@ -806,7 +812,7 @@ index 05f12fa..f1d104a 100644
    defs: Record<string, MCPToolDef[]>
    instructions: Record<string, string>
  }
-@@ -204,7 +203,6 @@ export const use = serviceUse(Service)
+@@ -204,7 +206,6 @@ export const use = serviceUse(Service)
  const layer = Layer.effect(
    Service,
    Effect.gen(function* () {
@@ -814,7 +820,7 @@ index 05f12fa..f1d104a 100644
      const auth = yield* McpAuth.Service
      const events = yield* EventV2Bridge.Service
      const browser = yield* McpBrowser.Service
-@@ -340,37 +338,47 @@ const layer = Layer.effect(
+@@ -340,37 +341,47 @@ const layer = Layer.effect(
      const connectLocal = Effect.fn("MCP.connectLocal")(function* (
        key: string,
        mcp: ConfigMCPV1.Info & { type: "local" },
@@ -847,7 +853,7 @@ index 05f12fa..f1d104a 100644
        })
 +      // Workspace authority exists before SDK initialization can fail.
 +      owners.set(key, transport)
- 
+
        const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
        return yield* connectTransport(transport, connectTimeout).pipe(
 -        Effect.map((client): { client: MCPClient | undefined; status: Status } => ({
@@ -872,26 +878,26 @@ index 05f12fa..f1d104a 100644
 +        ),
        )
      })
- 
+
      const create = Effect.fn("MCP.create")(
 -      function* (key: string, mcp: ConfigMCPV1.Info) {
 +      function* (key: string, mcp: ConfigMCPV1.Info, owners: Map<string, StdioClientTransport>) {
          if (mcp.enabled === false) {
            return DISABLED_RESULT
          }
-@@ -378,7 +386,7 @@ const layer = Layer.effect(
+@@ -378,7 +389,7 @@ const layer = Layer.effect(
          const { client: mcpClient, status } =
            mcp.type === "remote"
              ? yield* connectRemote(key, mcp as ConfigMCPV1.Info & { type: "remote" })
 -            : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" })
 +            : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" }, owners)
- 
+
          if (!mcpClient) {
            if (status.status !== "connected" && status.status !== "disabled") {
-@@ -415,31 +423,16 @@ const layer = Layer.effect(
+@@ -415,33 +426,18 @@ const layer = Layer.effect(
      )
      const cfgSvc = yield* Config.Service
- 
+
 -    const descendants = Effect.fnUntraced(
 -      function* (pid: number) {
 -        if (process.platform === "win32") return [] as number[]
@@ -918,7 +924,7 @@ index 05f12fa..f1d104a 100644
 -
      function watch(s: State, name: string, client: MCPClient, bridge: EffectBridge.Shape, timeout?: number) {
 +      client.onerror = () => {
-+        if (s.clients[name] !== client) return
++        if (s.closing || s.clients[name] !== client) return
 +        // Transport failure does not prove process death. Retain its original
 +        // service owner, withdraw tools and require explicit joined cleanup.
 +        s.status[name] = { status: "failed", error: "MCP transport failed" }
@@ -927,9 +933,30 @@ index 05f12fa..f1d104a 100644
 +        bridge.fork(events.publish(ToolsChanged, { server: name }).pipe(Effect.ignore))
 +      }
        client.onclose = () => {
-         if (s.clients[name] !== client) return
+-        if (s.clients[name] !== client) return
++        if (s.closing || s.clients[name] !== client) return
          delete s.clients[name]
-@@ -498,10 +491,24 @@ const layer = Layer.effect(
+         delete s.defs[name]
+         delete s.instructions[name]
+@@ -460,11 +456,11 @@ const layer = Layer.effect(
+
+       if (!client.getServerCapabilities()?.tools) return
+       client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+-        if (s.clients[name] !== client || s.status[name]?.status !== "connected") return
++        if (s.closing || s.clients[name] !== client || s.status[name]?.status !== "connected") return
+
+         const listed = await bridge.promise(McpCatalog.defs(client, timeout))
+         if (!listed) return
+-        if (s.clients[name] !== client || s.status[name]?.status !== "connected") return
++        if (s.closing || s.clients[name] !== client || s.status[name]?.status !== "connected") return
+
+         s.defs[name] = listed
+         await bridge.promise(events.publish(ToolsChanged, { server: name }).pipe(Effect.ignore))
+@@ -495,17 +491,36 @@ const layer = Layer.effect(
+         const bridge = yield* EffectBridge.make()
+         const config = cfg.mcp ?? {}
+         const s: State = {
++          closing: false, guards: new Map(), pending: new Set(),
            config: {},
            status: {},
            clients: {},
@@ -937,15 +964,19 @@ index 05f12fa..f1d104a 100644
            defs: {},
            instructions: {},
          }
- 
+
 +        yield* Effect.addFinalizer(() =>
 +          Effect.gen(function* () {
++            s.closing = true
++            const pending = withTimeout(Promise.all([...s.pending]), 5000, "MCP workspace acquisitions did not settle")
++            void pending.catch(() => undefined)
 +            const exits = yield* Effect.forEach(
 +              new Set([...Object.keys(s.clients), ...s.localTransports.keys()]),
 +              (name) => closeClient(s, name).pipe(Effect.exit),
 +              { concurrency: "unbounded" },
 +            )
-+            const failed = exits.find(Exit.isFailure)
++            const acquired = yield* Effect.tryPromise(() => pending).pipe(Effect.exit)
++            const failed = [...exits, acquired].find(Exit.isFailure)
 +            if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause)
 +            pendingOAuthTransports.clear()
 +          }),
@@ -954,19 +985,33 @@ index 05f12fa..f1d104a 100644
          yield* Effect.forEach(
            Object.entries(config),
            ([key, mcp]) =>
-@@ -516,7 +523,7 @@ const layer = Layer.effect(
+-            Effect.gen(function* () {
++            withOperation(s, key, Effect.gen(function* () {
+               if (!isMcpConfigured(mcp)) {
+                 yield* Effect.logError("Ignoring MCP config entry without type", { key })
+                 return
+@@ -516,7 +531,11 @@ const layer = Layer.effect(
                  return
                }
- 
+
 -              const result = yield* create(key, mcp)
 +              const result = yield* create(key, mcp, s.localTransports)
++              if (s.closing) {
++                if (result.mcpClient) yield* Effect.tryPromise(() => result.mcpClient!.close()).pipe(Effect.orDie)
++                return
++              }
                s.status[key] = result.status
                if (result.mcpClient) {
                  s.clients[key] = result.mcpClient
-@@ -528,32 +535,7 @@ const layer = Layer.effect(
+@@ -524,48 +543,52 @@ const layer = Layer.effect(
+                 if (result.instructions) s.instructions[key] = result.instructions
+                 watch(s, key, result.mcpClient, bridge, mcp.timeout)
+               }
+-            }),
++            })),
            { concurrency: "unbounded" },
          )
- 
+
 -        yield* Effect.addFinalizer(() =>
 -          Effect.gen(function* () {
 -            const clients = Object.values(s.clients)
@@ -994,11 +1039,25 @@ index 05f12fa..f1d104a 100644
 -          }),
 -        )
 +
- 
+
          return s
        }),
-@@ -561,11 +543,26 @@ const layer = Layer.effect(
- 
+     )
+
++    function withOperation<A, E, R>(s: State, name: string, action: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
++      return Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
++        if (s.closing) return yield* Effect.die(new Error("MCP workspace is closing"))
++        let guard = s.guards.get(name)
++        if (!guard) { guard = Semaphore.makeUnsafe(1); s.guards.set(name, guard) }
++        let settle!: () => void
++        const pending = new Promise<void>((resolve) => { settle = resolve })
++        s.pending.add(pending)
++        return yield* restore(guard.withPermit(Effect.suspend(() =>
++          s.closing ? Effect.die(new Error("MCP workspace is closing")) : action,
++        ))).pipe(Effect.ensuring(Effect.sync(() => { s.pending.delete(pending); settle() })))
++      }))
++    }
++
      function closeClient(s: State, name: string) {
        const client = s.clients[name]
 -      delete s.clients[name]
@@ -1027,11 +1086,16 @@ index 05f12fa..f1d104a 100644
 +        }).pipe(Effect.andThen(Effect.die(error)))),
 +      )
      }
- 
+
      const storeClient = Effect.fnUntraced(function* (
-@@ -577,14 +574,13 @@ const layer = Layer.effect(
+@@ -576,15 +599,18 @@ const layer = Layer.effect(
+       instructions: string | undefined,
        timeout?: number,
      ) {
++      if (s.closing) {
++        yield* Effect.tryPromise(() => client.close()).pipe(Effect.orDie)
++        return { status: "failed", error: "MCP workspace is closing" } satisfies Status
++      }
        const bridge = yield* EffectBridge.make()
 -      const previous = s.clients[name]
 +      if (s.clients[name] && s.clients[name] !== client) yield* closeClient(s, name)
@@ -1044,26 +1108,81 @@ index 05f12fa..f1d104a 100644
 -      if (previous) yield* Effect.tryPromise(() => previous.close()).pipe(Effect.ignore)
        return s.status[name]
      })
- 
-@@ -626,7 +622,9 @@ const layer = Layer.effect(
- 
-     const createAndStore = Effect.fn("MCP.createAndStore")(function* (name: string, mcp: ConfigMCPV1.Info) {
-       const s = yield* InstanceState.get(state)
+
+@@ -624,38 +650,43 @@ const layer = Layer.effect(
+         }))
+     })
+
+-    const createAndStore = Effect.fn("MCP.createAndStore")(function* (name: string, mcp: ConfigMCPV1.Info) {
+-      const s = yield* InstanceState.get(state)
 -      const result = yield* create(name, mcp)
+-
++    const createAndStore = (s: State, name: string, mcp: ConfigMCPV1.Info) => withOperation(s, name, Effect.gen(function* () {
 +      // A persistent service must retire before replacement admission.
 +      yield* closeClient(s, name)
 +      const result = yield* create(name, mcp, s.localTransports)
- 
++      if (s.closing) {
++        if (result.mcpClient) yield* Effect.tryPromise(() => result.mcpClient!.close()).pipe(Effect.orDie)
++        return { status: "failed", error: "MCP workspace is closing" } satisfies Status
++      }
        s.status[name] = result.status
        if (!result.mcpClient) {
-@@ -998,7 +996,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
+         yield* closeClient(s, name)
+         delete s.clients[name]
+         return result.status
+       }
+-
+       return yield* storeClient(s, name, result.mcpClient, result.defs!, result.instructions, mcp.timeout)
+-    })
++    }))
+
+     const add = Effect.fn("MCP.add")(function* (name: string, mcp: ConfigMCPV1.Info) {
+       const s = yield* InstanceState.get(state)
+       s.config[name] = mcp
+-      yield* createAndStore(name, mcp)
++      yield* createAndStore(s, name, mcp)
+       return { status: s.status }
+     })
+
+     const connect = Effect.fn("MCP.connect")(function* (name: string) {
++      const s = yield* InstanceState.get(state)
+       const mcp = yield* requireMcpConfig(name)
+-      yield* createAndStore(name, { ...mcp, enabled: true })
++      yield* createAndStore(s, name, { ...mcp, enabled: true })
+     })
+
+     const disconnect = Effect.fn("MCP.disconnect")(function* (name: string) {
+-      yield* requireMcpConfig(name)
+       const s = yield* InstanceState.get(state)
+-      yield* closeClient(s, name)
+-      delete s.clients[name]
+-      s.status[name] = { status: "disabled" }
++      yield* requireMcpConfig(name)
++      yield* withOperation(s, name, Effect.suspend(() => closeClient(s, name).pipe(Effect.andThen(Effect.sync(() => {
++        delete s.clients[name]
++        s.status[name] = { status: "disabled" }
++      })))))
+     })
+
+     function requestTimeout(s: State, name: string, configured: McpEntry | undefined, fallback?: number) {
+@@ -938,7 +969,8 @@ const layer = Layer.effect(
+
+       const mcpConfig = yield* requireMcpConfig(mcpName)
+
+-      return yield* createAndStore(mcpName, { ...mcpConfig, enabled: true })
++      const s = yield* InstanceState.get(state)
++      return yield* createAndStore(s, mcpName, { ...mcpConfig, enabled: true })
+     })
+
+     const removeAuth = Effect.fn("MCP.removeAuth")(function* (mcpName: string) {
+@@ -998,7 +1030,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
  export const node = LayerNode.make({
    service: Service,
    layer: layer,
 -  deps: [CrossSpawnSpawner.node, McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
 +  deps: [ McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
  })
- 
+
  export * as MCP from "."
 diff --git a/packages/opencode/src/tool/shell.ts b/packages/opencode/src/tool/shell.ts
 index 1e4423e..a9cd836 100644
@@ -1112,28 +1231,34 @@ index 1e4423e..a9cd836 100644
            const exit = yield* Effect.raceAll([
              handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
 diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
-index 173210f..170e829 100644
+index 173210f..8157934 100644
 --- a/packages/opencode/src/util/process.ts
 +++ b/packages/opencode/src/util/process.ts
-@@ -3,6 +3,8 @@ import type { Stream } from "node:stream"
+@@ -3,6 +3,9 @@ import type { Stream } from "node:stream"
  import launch from "cross-spawn"
  import { buffer } from "node:stream/consumers"
  import { errorMessage } from "./error"
 +import { ownServiceProcess } from "@opencode-ai/core/telegram-service-process"
++import { currentServiceProcessOwner } from "@opencode-ai/core/telegram-service-acquisition"
 +import { acquireTelegramProcessBudget, classifyTelegramProcess } from "@opencode-ai/core/telegram-process-budget"
- 
+
  export type Stdio = "inherit" | "pipe" | "ignore" | number | Stream
  export type Shell = boolean | string
-@@ -56,22 +58,46 @@ export class RunFailedError extends Error {
- 
+@@ -56,22 +59,51 @@ export class RunFailedError extends Error {
+
  export type Child = ChildProcess & { exited: Promise<number> }
- 
+
 +const services = new WeakMap<ChildProcess, ReturnType<typeof ownServiceProcess>>()
 +
  export function spawn(cmd: string[], opts: Options = {}): Child {
    if (cmd.length === 0) throw new Error("Command is required")
++  const serviceOwner = currentServiceProcessOwner()
++  if (serviceOwner) {
++    serviceOwner.signal.throwIfAborted()
++    opts = { ...opts, abort: opts.abort ? AbortSignal.any([serviceOwner.signal, opts.abort]) : serviceOwner.signal }
++  }
    opts.abort?.throwIfAborted()
- 
+
 -  const proc = launch(cmd[0], cmd.slice(1), {
 -    cwd: opts.cwd,
 -    shell: opts.shell,
@@ -1146,7 +1271,7 @@ index 173210f..170e829 100644
 +  const kind = classifyTelegramProcess(cmd[0], env, undefined, Boolean(opts.shell))
 +  // Admission may be disabled in generic upstream tests, but service cleanup
 +  // still owns the POSIX group rather than returning an unbounded leader wait.
-+  const service = (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
++  const service = Boolean(serviceOwner) || (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
 +    lease?.kind === "lsp" || lease?.kind === "mcp"
 +  if (service && process.platform === "win32") {
 +    lease?.release()
@@ -1169,29 +1294,29 @@ index 173210f..170e829 100644
 +  const owned = service && proc.pid ? ownServiceProcess(proc, lease) : undefined
 +  if (owned) services.set(proc, owned)
 +  else lease?.bindPid(proc.pid)
- 
+
    let closed = false
    let timer: ReturnType<typeof setTimeout> | undefined
- 
+
    const abort = () => {
 +    if (owned) { void owned.cleanup().catch(() => undefined); return }
      if (closed) return
      if (proc.exitCode !== null || proc.signalCode !== null) return
      closed = true
-@@ -87,16 +113,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+@@ -87,16 +119,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
      const done = () => {
        opts.abort?.removeEventListener("abort", abort)
        if (timer) clearTimeout(timer)
 +      if (!owned) lease?.release()
      }
- 
+
      proc.once("exit", (code, signal) => {
        done()
 -      resolve(code ?? (signal ? 1 : 0))
 +      if (owned) owned.cleanup().then(() => resolve(code ?? (signal ? 1 : 0)), reject)
 +      else resolve(code ?? (signal ? 1 : 0))
      })
- 
+
      proc.once("error", (error) => {
        done()
 -      reject(error)
@@ -1200,14 +1325,22 @@ index 173210f..170e829 100644
      })
    })
    void exited.catch(() => undefined)
-@@ -147,6 +176,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
+@@ -108,6 +143,7 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+
+   const child = proc as Child
+   child.exited = exited
++  serviceOwner?.register(child)
+   return child
+ }
+
+@@ -147,6 +183,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
  // Duplicated in `packages/sdk/js/src/process.ts` because the SDK cannot import
  // `opencode` without creating a cycle. Keep both copies in sync.
  export async function stop(proc: ChildProcess) {
 +  const owned = services.get(proc)
 +  if (owned) { await owned.cleanup(); return }
    if (proc.exitCode !== null || proc.signalCode !== null) return
- 
+
    if (process.platform !== "win32" || !proc.pid) {
 diff --git a/packages/opencode/test/mcp/lifecycle.test.ts b/packages/opencode/test/mcp/lifecycle.test.ts
 index 80c8fd2..988c4df 100644
@@ -1277,3 +1410,189 @@ index 80c8fd2..988c4df 100644
    }),
  )
  
+diff --git a/packages/core/src/npm.ts b/packages/core/src/npm.ts
+index 94e573d..37005bf 100644
+--- a/packages/core/src/npm.ts
++++ b/packages/core/src/npm.ts
+@@ -14,6 +14,7 @@ import { filesystem } from "./effect/app-node-platform"
+ import { LayerNode } from "./effect/layer-node"
+ import { makeRuntime } from "./effect/runtime"
+ import { NpmConfig } from "./npm-config"
++import { currentServiceProcessOwner } from "./telegram-service-acquisition"
+
+ export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedError>()("NpmInstallFailedError", {
+   add: Schema.Array(Schema.String).pipe(Schema.optional),
+@@ -91,8 +92,11 @@ const layer = Layer.effect(
+         const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
+         const add = input.add ?? []
+         const npmOptions = yield* NpmConfig.load(input.dir)
++        const serviceOwner = currentServiceProcessOwner()
++        serviceOwner?.signal.throwIfAborted()
+         const arborist = new Arborist({
+           ...npmOptions,
++          signal: serviceOwner?.signal,
+           path: input.dir,
+           binLinks: true,
+           progress: false,
+diff --git a/packages/opencode/src/lsp/lsp.ts b/packages/opencode/src/lsp/lsp.ts
+index 1ab3a0b..b209819 100644
+--- a/packages/opencode/src/lsp/lsp.ts
++++ b/packages/opencode/src/lsp/lsp.ts
+@@ -7,6 +7,8 @@ import { pathToFileURL, fileURLToPath } from "url"
+ import * as LSPServer from "./server"
+ import { Config } from "@/config/config"
+ import { Process } from "@/util/process"
++import { acquireService, type ServiceProcessOwner } from "@opencode-ai/core/telegram-service-acquisition"
++import { withTimeout } from "@/util/timeout"
+ import { spawn as lspspawn } from "./launch"
+ import { Effect, Layer, Context, Schema } from "effect"
+ import { InstanceState } from "@/effect/instance-state"
+@@ -110,6 +112,10 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
+ type LocInput = { file: string; line: number; character: number }
+
+ interface State {
++  closing: boolean
++  controller: AbortController
++  owner: ServiceProcessOwner
++  processes: Set<Process.Child>
+   clients: LSPClient.Info[]
+   servers: Record<string, LSPServer.Info>
+   broken: Set<string>
+@@ -188,7 +194,16 @@ const layer = Layer.effect(
+           })
+         }
+
++        const controller = new AbortController()
++        const processes = new Set<Process.Child>()
+         const s: State = {
++          closing: false,
++          controller,
++          processes,
++          owner: { signal: controller.signal, register: (process) => {
++            processes.add(process)
++            void process.exited.then(() => processes.delete(process), () => undefined)
++          } },
+           clients: [],
+           servers,
+           broken: new Set(),
+@@ -197,7 +212,22 @@ const layer = Layer.effect(
+
+         yield* Effect.addFinalizer(() =>
+           Effect.promise(async () => {
+-            await Promise.all(s.clients.map((client) => client.shutdown()))
++            s.closing = true
++            const acquisitions = [...s.spawning.values()]
++            s.controller.abort(new Error("LSP workspace closing"))
++            const settling = withTimeout(Promise.allSettled(acquisitions), 5000, "LSP acquisition cleanup uncertain")
++            void settling.catch(() => undefined)
++            const cleanup = await Promise.allSettled([
++              ...s.clients.map((client) => client.shutdown()),
++              ...Array.from(s.processes, (process) => Process.stop(process)),
++            ])
++            // Acquisition owns its process before initialize completes. A late
++            // spawn observes closing and joins retirement before settling here.
++            const pending = await settling
++            const failed = [...cleanup, ...pending].find((result) => result.status === "rejected")
++            if (failed?.status === "rejected") throw failed.reason
++            s.clients.length = 0
++            s.processes.clear()
+           }),
+         )
+
+@@ -210,13 +240,14 @@ const layer = Layer.effect(
+       if (!containsPath(file, ctx)) return [] as LSPClient.Info[]
+       const s = yield* InstanceState.get(state)
+       const clients = yield* Effect.promise(async () => {
++        if (s.closing) return { result: [] as LSPClient.Info[], updated: 0 }
+         const extension = path.parse(file).ext || file
+         const result: LSPClient.Info[] = []
+         let updated = 0
+
+         async function schedule(server: LSPServer.Info, root: string, key: string) {
+-          const handle = await server
+-            .spawn(root, ctx, flags)
++          if (s.closing) return undefined
++          const handle = await acquireService(s.owner, () => server.spawn(root, ctx, flags))
+             .then((value) => {
+               if (!value) s.broken.add(key)
+               return value
+@@ -227,6 +258,13 @@ const layer = Layer.effect(
+             })
+
+           if (!handle) return undefined
++          s.processes.add(handle.process)
++          void handle.process.exited.then(() => s.processes.delete(handle.process), () => undefined)
++          if (s.closing) {
++            await Process.stop(handle.process)
++            s.processes.delete(handle.process)
++            return undefined
++          }
+           const client = await LSPClient.create({
+             serverID: server.id,
+             server: handle,
+@@ -236,14 +274,21 @@ const layer = Layer.effect(
+           }).catch(async () => {
+             s.broken.add(key)
+             await Process.stop(handle.process)
++            s.processes.delete(handle.process)
+             return undefined
+           })
+
+           if (!client) return undefined
++          if (s.closing) {
++            await client.shutdown()
++            s.processes.delete(handle.process)
++            return undefined
++          }
+
+           const existing = s.clients.find((x) => x.root === root && x.serverID === server.id)
+           if (existing) {
+             await Process.stop(handle.process)
++            s.processes.delete(handle.process)
+             return existing
+           }
+
+@@ -255,6 +300,7 @@ const layer = Layer.effect(
+           if (server.extensions.length && !server.extensions.includes(extension)) continue
+
+           const root = await server.root(file, ctx)
++          if (s.closing) break
+           if (!root) continue
+           if (s.broken.has(root + server.id)) continue
+
+@@ -275,11 +321,12 @@ const layer = Layer.effect(
+           const task = schedule(server, root, root + server.id)
+           s.spawning.set(root + server.id, task)
+
+-          task.finally(() => {
++          const settled = () => {
+             if (s.spawning.get(root + server.id) === task) {
+               s.spawning.delete(root + server.id)
+             }
+-          })
++          }
++          void task.then(settled, settled)
+
+           const client = await task
+           if (!client) continue
+diff --git a/packages/opencode/src/lsp/server.ts b/packages/opencode/src/lsp/server.ts
+index 2be68aa..3c422b1 100644
+--- a/packages/opencode/src/lsp/server.ts
++++ b/packages/opencode/src/lsp/server.ts
+@@ -8,6 +8,7 @@ import { Filesystem } from "@/util/filesystem"
+ import type { InstanceContext } from "../project/instance-context"
+ import { Archive } from "@/util/archive"
+ import { Process } from "@/util/process"
++import { serviceFetch as fetch } from "@opencode-ai/core/telegram-service-acquisition"
+ import { which } from "@opencode-ai/core/util/which"
+ import { Module } from "@opencode-ai/core/util/module"
+ import { spawn } from "./launch"
+@@ -23,7 +24,7 @@ const run = (cmd: string[], opts: Process.RunOptions = {}) => Process.run(cmd, {
+ const output = (cmd: string[], opts: Process.RunOptions = {}) => Process.text(cmd, { ...opts, nothrow: true })
+
+ export interface Handle {
+-  process: ChildProcessWithoutNullStreams
++  process: Process.Child & ChildProcessWithoutNullStreams
+   initialization?: Record<string, any>
+ }
+

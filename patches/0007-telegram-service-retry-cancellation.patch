@@ -1,0 +1,93 @@
+diff --git a/bun.lock b/bun.lock
+index b415e68..69f5d81 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -1063,6 +1063,7 @@
+     "@ai-sdk/xai@3.0.102": "patches/@ai-sdk%2Fxai@3.0.102.patch",
+     "@modelcontextprotocol/sdk@1.29.0": "patches/@modelcontextprotocol%2Fsdk@1.29.0.patch",
+     "gcp-metadata@8.1.2": "patches/gcp-metadata@8.1.2.patch",
++    "make-fetch-happen@15.0.6": "patches/make-fetch-happen@15.0.6.patch",
+     "@ai-sdk/openai@3.0.88": "patches/@ai-sdk%2Fopenai@3.0.88.patch",
+     "@standard-community/standard-openapi@0.2.9": "patches/@standard-community%2Fstandard-openapi@0.2.9.patch",
+     "effect@4.0.0-beta.83": "patches/effect@4.0.0-beta.83.patch",
+diff --git a/package.json b/package.json
+index 59bf050..74262a9 100644
+--- a/package.json
++++ b/package.json
+@@ -164,6 +164,7 @@
+     "@ai-sdk/groq@3.0.31": "patches/@ai-sdk%2Fgroq@3.0.31.patch",
+     "@ai-sdk/anthropic@3.0.111": "patches/@ai-sdk%2Fanthropic@3.0.111.patch",
+     "@ai-sdk/amazon-bedrock@4.0.166": "patches/@ai-sdk%2Famazon-bedrock@4.0.166.patch",
+-    "@ai-sdk/openai@3.0.88": "patches/@ai-sdk%2Fopenai@3.0.88.patch"
++    "@ai-sdk/openai@3.0.88": "patches/@ai-sdk%2Fopenai@3.0.88.patch",
++    "make-fetch-happen@15.0.6": "patches/make-fetch-happen@15.0.6.patch"
+   }
+ }
+diff --git a/patches/make-fetch-happen@15.0.6.patch b/patches/make-fetch-happen@15.0.6.patch
+new file mode 100644
+index 0000000..3c35905
+--- /dev/null
++++ b/patches/make-fetch-happen@15.0.6.patch
+@@ -0,0 +1,62 @@
++diff --git a/lib/remote.js b/lib/remote.js
++index 061759638f05cb2f72e30a04fba23a54c091f953..46bab288bd36e240bf6449e94713ee6544b82797 100644
++--- a/lib/remote.js
+++++ b/lib/remote.js
++@@ -11,6 +11,39 @@ const pkg = require('../package.json')
++
++ const USER_AGENT = `${pkg.name}/${pkg.version} (+https://npm.im/${pkg.name})`
++
+++// Cancellation must stop backoff as well as the active HTTP request. Otherwise
+++// an aborted npm install retains retry timers and its workspace acquisition.
+++const retryWithSignal = (fn, options, signal) => {
+++  if (!signal) {
+++    return promiseRetry(fn, options)
+++  }
+++  return new Promise((resolve, reject) => {
+++    let operation
+++    const reason = () => signal.reason || Object.assign(new Error('Request aborted'), { name: 'AbortError' })
+++    const cleanup = () => signal.removeEventListener('abort', abort)
+++    const abort = () => {
+++      operation?.stop()
+++      cleanup()
+++      reject(reason())
+++    }
+++    if (signal.aborted) {
+++      abort()
+++      return
+++    }
+++    signal.addEventListener('abort', abort, { once: true })
+++    promiseRetry((retry, attempt, current) => {
+++      operation = current
+++      if (signal.aborted) {
+++        throw reason()
+++      }
+++      return fn(retry, attempt, current)
+++    }, options).then(
+++      value => { cleanup(); resolve(value) },
+++      error => { cleanup(); reject(error) },
+++    )
+++  })
+++}
+++
++ const RETRY_ERRORS = [
++   'ECONNRESET', // remote socket closed on us
++   'ECONNREFUSED', // remote host refused to open connection
++@@ -54,7 +87,7 @@ const remoteFetch = (request, options) => {
++     redirect: 'manual',
++   }
++
++-  return promiseRetry(async (retryHandler, attemptNum) => {
+++  return retryWithSignal(async (retryHandler, attemptNum) => {
++     const req = new fetch.Request(request, _opts)
++     const url = cleanUrl(req.url)
++     try {
++@@ -121,7 +154,7 @@ const remoteFetch = (request, options) => {
++       log.http('fetch', `${req.method} ${url} attempt ${attemptNum} failed with ${err.code}`)
++       return retryHandler(err)
++     }
++-  }, options.retry).catch((err) => {
+++  }, options.retry, options.signal).catch((err) => {
++     // don't reject for http errors, just return them
++     if (err.status >= 400 && err.type !== 'system') {
++       return err
