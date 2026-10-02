@@ -6,5 +6,5 @@ python3 "$ROOT/tests/compatibility/production_execution.py" --binary "$ROOT/dist
 # Historical v2 invariants belong to the independent compatibility artifact.
 if [[ -x "$ROOT/dist/compat/opencode" ]]; then
   python3 "$ROOT/tests/compatibility/session_contract.py" --binary "$ROOT/dist/compat/opencode"
-  python3 "$ROOT/tests/compatibility/production_execution.py" --binary "$ROOT/dist/compat/opencode" --debug-controls
+  python3 "$ROOT/tests/compatibility/production_execution.py" --binary "$ROOT/dist/compat/opencode"
 fi

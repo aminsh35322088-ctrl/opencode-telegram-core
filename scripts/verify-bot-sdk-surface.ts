@@ -8,6 +8,7 @@ const sdkClientPath = path.join(sdkDirectory, "v2/client.js")
 
 const manifest = await Bun.file(manifestPath).json() as {
   required: string[]
+  targetRequired: string[]
 }
 const module = await import(pathToFileURL(sdkClientPath).href)
 const createOpencodeClient = module.createOpencodeClient as (config: unknown) => Record<string, unknown>
@@ -25,7 +26,7 @@ const client = createOpencodeClient({
 })
 
 const missing: string[] = []
-for (const member of manifest.required) {
+for (const member of [...manifest.required, ...manifest.targetRequired]) {
   let value: unknown = client
   for (const segment of member.split(".")) {
     if ((typeof value !== "object" && typeof value !== "function") || value === null) {
@@ -40,9 +41,16 @@ for (const member of manifest.required) {
 if (missing.length > 0) {
   throw new Error("OpenCode SDK no longer satisfies Telegram bot contract: " + missing.join(", "))
 }
-console.log(`bot SDK surface verified: ${manifest.required.length} members`)
+console.log(`bot SDK surface verified: ${manifest.required.length} current members + ${manifest.targetRequired.length} target control members`)
 
 const session = client.session as Record<string, (input: Record<string, string>) => Promise<unknown>>
+await session.execution({ sessionID: "sdk-contract", directory: "/topics/one" })
+const inspected = requests.at(-1)!
+if (inspected.method !== "GET" || new URL(inspected.url).pathname !== "/session/sdk-contract/execution" ||
+  new URL(inspected.url).searchParams.get("directory") !== "/topics/one") {
+  throw new Error("generated SDK lost directory-bound execution inspection")
+}
+
 for (const operation of ["pause", "resume", "abort"]) {
   await session[operation]({ sessionID: "sdk-contract", directory: "/topics/one", runId: "opaque-owner" })
   const request = requests.at(-1)!

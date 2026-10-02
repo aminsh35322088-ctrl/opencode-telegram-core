@@ -19,7 +19,6 @@ import unittest
 from session_contract import Server, Client
 
 BINARY = None
-DEBUG_CONTROLS = False
 class Model(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     def log_message(self, *args): pass
@@ -139,29 +138,25 @@ class ProductionExecution(unittest.TestCase):
                 while not pid_file.exists() and time.monotonic() < deadline: time.sleep(.05)
                 self.assertTrue(pid_file.exists(), 'actual agent shell never started')
                 pid = int(pid_file.read_text().strip())
-                if DEBUG_CONTROLS:
-                    control = c.request('GET', f'/session/{sid}/execution')
-                    owner = {'runId': control['runId']}
-                    paused = c.request('POST', f'/session/{sid}/pause', owner)
-                    self.assertTrue(paused['paused']); self.assertEqual(paused['continuation'], 'live')
-                    # SIGSTOP delivery is asynchronous to the HTTP acknowledgment.
-                    # Observe the same physical PID within the existing Linux test bound.
-                    stopped_by = time.monotonic() + 1
-                    while Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1][0] != 'T':
-                        self.assertLess(time.monotonic(), stopped_by, 'owned shell did not physically stop')
-                        time.sleep(.005)
-                    resumed = c.request('POST', f'/session/{sid}/resume', owner)
-                    self.assertFalse(resumed['paused']); self.assertEqual(resumed['runId'], owner['runId'])
-                    c.request('POST', f'/session/{sid}/pause', owner)
-                    self.assertTrue(c.request('POST', f'/session/{sid}/abort', owner, timeout=15))
-                else:
-                    self.assertTrue(c.request('POST', f'/session/{sid}/abort', timeout=15))
+                control = c.request('GET', f'/session/{sid}/execution')
+                owner = {'runId': control['runId']}
+                paused = c.request('POST', f'/session/{sid}/pause', owner)
+                self.assertTrue(paused['paused']); self.assertEqual(paused['continuation'], 'live')
+                # SIGSTOP delivery is asynchronous to the HTTP acknowledgment.
+                # Observe the same physical PID within the existing Linux test bound.
+                stopped_by = time.monotonic() + 1
+                while Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1][0] != 'T':
+                    self.assertLess(time.monotonic(), stopped_by, 'owned shell did not physically stop')
+                    time.sleep(.005)
+                resumed = c.request('POST', f'/session/{sid}/resume', owner)
+                self.assertFalse(resumed['paused']); self.assertEqual(resumed['runId'], owner['runId'])
+                c.request('POST', f'/session/{sid}/pause', owner)
+                self.assertTrue(c.request('POST', f'/session/{sid}/abort', owner, timeout=15))
                 self.assertFalse(Path(f'/proc/{pid}').exists(), 'cancel returned with owned shell alive')
-                if DEBUG_CONTROLS:
-                    self.assertIsNone(c.request('GET', f'/session/{sid}/execution'))
-                    with self.assertRaises(Exception) as caught:
-                        c.request('POST', f'/session/{sid}/resume', owner)
-                    self.assertIn('409', str(caught.exception))
+                self.assertIsNone(c.request('GET', f'/session/{sid}/execution'))
+                with self.assertRaises(Exception) as caught:
+                    c.request('POST', f'/session/{sid}/resume', owner)
+                self.assertIn('409', str(caught.exception))
         finally:
             provider.shutdown(); provider.server_close(); thread.join(3)
 
@@ -217,6 +212,5 @@ class ProductionExecution(unittest.TestCase):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(); parser.add_argument('--binary', required=True)
-    parser.add_argument('--debug-controls', action='store_true')
-    args, rest = parser.parse_known_args(); BINARY = args.binary; DEBUG_CONTROLS = args.debug_controls
+    args, rest = parser.parse_known_args(); BINARY = args.binary
     unittest.main(argv=[__file__, *rest])

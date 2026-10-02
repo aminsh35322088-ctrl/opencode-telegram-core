@@ -353,5 +353,18 @@
   },
   "localMeasurementLimits": "Six sequential model/shell/dispose cycles; RSS/threads from proc status. Short allocator/GC sample, not a leak-free or stable claim; source revision/compiled checksum for final artifacts are in the PR and release manifest.",
   "localResourceSampleCandidateBytes": 113883264,
-  "localResourceSampleNote": "Six-cycle provisional slim candidate, before the final persisted-Console fail-closed check; final exact-commit resource evidence is attached to the PR from Railway."
+  "localResourceSampleNote": "Six-cycle provisional slim candidate, before the final persisted-Console fail-closed check; final exact-commit resource evidence is attached to the PR from Railway.",
+  "executionControlDecision": {
+    "productionSupported": true,
+    "currentBotCalls": 41,
+    "targetMigrationMembers": 3,
+    "withoutControlsBytes": 113887360,
+    "withControlsBytes": 113887360,
+    "binaryDeltaBytes": 0,
+    "inputModulesAdded": 0,
+    "dependenciesAdded": 0,
+    "processClassesAdded": 0,
+    "emittedBytesAdded": 998,
+    "sourceBytesAdded": 2092
+  }
 }

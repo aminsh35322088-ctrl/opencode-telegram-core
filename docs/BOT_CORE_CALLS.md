@@ -46,4 +46,12 @@ Read-only Bot commit `471f644aefe44950f07c2e11effced4ffca7d525`. This complement
 | `session.unrevert` | `src/bot/callbacks/message-history-callback-handler.ts:272`, `src/app/services/session-autonomy-service.ts:59` |
 | `session.update` | `src/bot/callbacks/rename-callback-handler.ts:25` |
 
-The earlier contract incorrectly listed `session.execution/pause/resume`. No current Bot call-site exists. `src/bot/commands/pause-command.ts` aborts; resume dispatches a continuation prompt. Those live-control endpoints are compatibility/debug-only, with their previously closed invariants still tested there.
+The earlier contract mixed three target APIs with current call-sites. No current Bot caller invokes `session.execution/pause/resume`; `src/bot/commands/pause-command.ts` aborts and resume prompts. They nevertheless remain production-required by the target True Pause/Resume architecture, separately from this 41-member inventory.
+
+| Target API | Exact intended consumer / dependency path |
+| --- | --- |
+| `session.execution` | Future Bot execution-control adapter → `TelegramNativeCore.inspectExecution` → `OpenCodeExecutionClient` → `OpenCodeExecutionControlPort.execution` |
+| `session.pause` | Future Bot execution-control adapter → `TelegramNativeCore.pauseRun` → serialized port pause request → authoritative Bun `SessionRunState.pause` |
+| `session.resume` | Future Bot execution-control adapter → `TelegramNativeCore.resumeRun` → serialized port resume request → same Bun continuation |
+
+The adapter must carry the captured directory/session/run identity and forward the same `telegramRunId` at prompt admission. It is planned, not implemented in the current Bot. See [process-boundary/ownership/release-sequencing decision](TELEGRAM_EXECUTION_CONTROL.md).

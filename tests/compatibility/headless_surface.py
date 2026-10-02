@@ -49,6 +49,21 @@ class TelegramSurface(unittest.TestCase):
             self.assertEqual(caught.exception.code, 400)
             self.assertIn('Console organization integration is unavailable', caught.exception.read().decode())
 
+    def test_target_execution_control_routes_remain_supported(self):
+        session = self.client.request('POST', '/session', {'title': 'Target true pause control'})
+        sid = session['id']
+        try:
+            self.assertIsNone(self.client.request('GET', f'/session/{sid}/execution'))
+            for action in ['pause', 'resume']:
+                for payload, expected in [({}, 400), ({'runId': 'stale-owner'}, 409)]:
+                    request = urllib.request.Request(self.server.base + f'/session/{sid}/{action}',
+                        data=json.dumps(payload).encode(), headers={'content-type': 'application/json'})
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        urllib.request.urlopen(request, timeout=10)
+                    self.assertEqual(caught.exception.code, expected)
+        finally:
+            self.client.request('DELETE', '/session/' + sid)
+
     def test_unused_process_and_server_surfaces_fail_closed(self):
         for method, path, body in [
             ('GET', '/pty', None), ('POST', '/pty', {}),
@@ -59,8 +74,6 @@ class TelegramSurface(unittest.TestCase):
             ('GET', '/provider', None), ('POST', '/global/upgrade', {}),
             ('GET', '/doc', None), ('GET', '/', None), ('GET', '/lsp', None),
             ('POST', '/mcp/nonexistent/auth/authenticate', {}),
-            ('GET', '/session/unused/execution', None), ('POST', '/session/unused/pause', {'runId': 'unused'}),
-            ('POST', '/session/unused/resume', {'runId': 'unused'}),
         ]:
             with self.subTest(method=method, path=path):
                 data = None if body is None else json.dumps(body).encode()

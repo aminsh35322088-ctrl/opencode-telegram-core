@@ -5,7 +5,7 @@ const output = process.env.OPENCODE_HEADLESS_OUTPUT
 if (!packageDir) throw new Error("OPENCODE_PACKAGE_DIR is required")
 if (!output) throw new Error("OPENCODE_HEADLESS_OUTPUT is required")
 
-// A checked-in snapshot makes the verified candidate reproducible across local/CI/Railway builds.
+// A checked-in snapshot fixes the catalog input across local/CI/Railway builds.
 process.env.MODELS_DEV_API_JSON = path.resolve(import.meta.dir, "../runtime/models-dev.json")
 process.chdir(packageDir)
 const generated = await import(path.join(packageDir, "script/generate.ts"))

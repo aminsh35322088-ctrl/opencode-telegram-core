@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test"
-import { EventEmitter } from "node:events"
+import { EventEmitter, once } from "node:events"
 import nodeChildProcess from "node:child_process"
 import type { ChildProcess as NodeChildProcess } from "node:child_process"
 import { ownShellProcess } from "@opencode-ai/core/telegram-owned-process"
-import { readFile } from "node:fs/promises"
+import { readFile, open } from "node:fs/promises"
 import { Effect, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -20,9 +20,9 @@ afterEach(() => {
   else process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = budgetFlag
 })
 
-async function state(pid: number): Promise<string | null> {
-  try { return (await readFile(`/proc/${pid}/stat`, "utf8")).split(") ")[1]!.split(" ")[0]! }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error }
+async function state(pid: number, read = () => readFile(`/proc/${pid}/stat`, "utf8")): Promise<string | null> {
+  try { return (await read()).split(") ")[1]!.split(" ")[0]! }
+  catch (error) { if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return null; throw error }
 }
 async function until(check: () => Promise<boolean>) {
   const end = Date.now() + 1000
@@ -31,6 +31,22 @@ async function until(check: () => Promise<boolean>) {
     await Bun.sleep(5)
   }
 }
+
+linux("a proc stat descriptor whose process exits during probing is gone", async () => {
+  const proc = nodeChildProcess.spawn("/bin/sleep", ["60"])
+  await once(proc, "spawn")
+  const file = await open(`/proc/${proc.pid}/stat`, "r")
+  try {
+    const exit = once(proc, "exit")
+    proc.kill("SIGKILL")
+    await exit
+    // Linux returns ESRCH if an already-open proc inode loses its process.
+    expect(await state(proc.pid!, () => file.readFile("utf8"))).toBeNull()
+  } finally {
+    await file.close()
+    if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL")
+  }
+})
 
 linux("parent pause stops the shell group; resume retains its PID; abort after pause joins cleanup", async () => {
   const count = telegramProcessBudgetSnapshot().activeCount

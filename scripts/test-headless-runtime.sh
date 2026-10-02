@@ -11,13 +11,13 @@ bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree" --tests
 (
   cd "$tree/packages/opencode"
   "$BUN" x tsc -p tsconfig.telegram.json --noEmit
-  # These eleven assertions concern retired production APIs/schema export or the
+  # These nine assertions concern retired production APIs/schema export or the
   # OS browser opener. They still run in the full upstream compatibility suite;
   # compiled negative-route and graph checks enforce their production exclusion.
   "$BUN" test test/telegram test/effect/runner.test.ts test/tool/task.test.ts \
     test/session/prompt.test.ts test/server/session-actions.test.ts test/lsp \
     test/util/process.test.ts test/mcp --timeout 30000 \
-    --test-name-pattern '^(?!.*(?:runtime API pauses|recovered pause reports|experimental background route|authenticate\(\)|BrowserOpenFailed|browser launch|generated SDK event schemas)).*'
+    --test-name-pattern '^(?!.*(?:experimental background route|authenticate\(\)|BrowserOpenFailed|browser launch|generated SDK event schemas)).*'
   for attempt in {1..5}; do
     "$BUN" test test/session/prompt.test.ts --timeout 30000 \
       --test-name-pattern 'cancel interrupts loop queued behind shell|shell rejects when another shell is already running'

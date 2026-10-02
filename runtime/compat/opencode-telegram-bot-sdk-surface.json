@@ -1,6 +1,6 @@
 {
   "sourceRepo": "aminsh35322088-ctrl/opencode-telegram-bot",
-  "contract": "SDK member expressions reachable from the current Telegram Bot, including aliased event/path calls; future migration endpoints are debug-only",
+  "contract": "41 current Bot SDK member expressions, separately from 3 required target True Pause/Resume migration APIs",
   "required": [
     "app.agents",
     "app.skills",
@@ -44,9 +44,10 @@
     "session.unrevert",
     "session.update"
   ],
-  "debugOnly": [
+  "targetRequired": [
     "session.execution",
     "session.pause",
     "session.resume"
-  ]
+  ],
+  "targetConsumer": "TelegramNativeCore executionControl.port -> OpenCodeExecutionClient -> SDK session.execution/pause/resume across Node/Bun boundary; docs/TELEGRAM_EXECUTION_CONTROL.md"
 }

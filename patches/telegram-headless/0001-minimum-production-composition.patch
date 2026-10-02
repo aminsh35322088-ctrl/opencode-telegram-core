@@ -1147,37 +1147,10 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session
          HttpApiEndpoint.post("create", SessionPaths.create, {
            query: WorkspaceRoutingQuery,
            payload: [HttpApiSchema.NoContent, Session.CreateInput],
-@@ -270,70 +256,6 @@
-             identifier: "session.abort",
-             summary: "Abort session",
-             description: "Abort an active session and stop any ongoing AI processing or command execution.",
--          }),
--        ),
--        HttpApiEndpoint.get("execution", SessionPaths.execution, {
--          params: { sessionID: SessionID },
--          query: WorkspaceRoutingQuery,
--          success: Schema.NullOr(ExecutionInfo),
--          error: [HttpApiError.BadRequest, ApiNotFoundError],
--        }).annotateMerge(
--          OpenApi.annotations({ identifier: "session.execution", summary: "Get live execution ownership" }),
--        ),
--        HttpApiEndpoint.post("pause", SessionPaths.pause, {
--          params: { sessionID: SessionID },
--          query: WorkspaceRoutingQuery,
--          payload: ExecutionControlPayload,
--          success: ExecutionInfo,
--          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError],
--        }).annotateMerge(
--          OpenApi.annotations({ identifier: "session.pause", summary: "Pause the existing execution tree" }),
--        ),
--        HttpApiEndpoint.post("resume", SessionPaths.resume, {
--          params: { sessionID: SessionID },
--          query: WorkspaceRoutingQuery,
--          payload: ExecutionControlPayload,
--          success: ExecutionInfo,
--          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError],
--        }).annotateMerge(
--          OpenApi.annotations({ identifier: "session.resume", summary: "Resume the existing execution tree" }),
+@@ -297,44 +283,6 @@
+           error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError],
+         }).annotateMerge(
+           OpenApi.annotations({ identifier: "session.resume", summary: "Resume the existing execution tree" }),
 -        ),
 -        HttpApiEndpoint.post("init", SessionPaths.init, {
 -          params: { sessionID: SessionID },
@@ -1215,10 +1188,11 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session
 -            identifier: "session.unshare",
 -            summary: "Unshare session",
 -            description: "Remove the shareable link for a session, making it private again.",
-           }),
+-          }),
          ),
          HttpApiEndpoint.post("summarize", SessionPaths.summarize, {
-@@ -389,19 +311,6 @@
+           params: { sessionID: SessionID },
+@@ -389,19 +337,6 @@
              description: "Send a new command to a session for execution by the AI assistant.",
            }),
          ),
@@ -1238,7 +1212,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session
          HttpApiEndpoint.post("revert", SessionPaths.revert, {
            params: { sessionID: SessionID },
            query: WorkspaceRoutingQuery,
-@@ -428,20 +337,6 @@
+@@ -428,20 +363,6 @@
              description: "Restore all previously reverted messages in a session.",
            }),
          ),
@@ -1259,7 +1233,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session
          HttpApiEndpoint.delete("deleteMessage", SessionPaths.deleteMessage, {
            params: { sessionID: SessionID, messageID: MessageID },
            query: WorkspaceRoutingQuery,
-@@ -453,29 +348,6 @@
+@@ -453,29 +374,6 @@
              summary: "Delete message",
              description:
                "Permanently delete a specific message and all of its parts from a session without reverting file changes.",
@@ -2128,22 +2102,9 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
        request: HttpServerRequest.HttpServerRequest
      }) {
        const body = yield* Effect.orDie(ctx.request.text)
-@@ -264,65 +280,20 @@
-               : Effect.failCause(cause),
-         ),
-       )
--    const execution = Effect.fn("SessionHttpApi.execution")(function* (ctx: { params: { sessionID: SessionID } }) {
--      yield* requireExecutionSession(ctx.params.sessionID)
--      return yield* runState.execution(ctx.params.sessionID)
--    })
--    const changeExecution = (paused: boolean) =>
--      Effect.fn("SessionHttpApi.changeExecution")(function* (ctx: {
--        params: { sessionID: SessionID }
--        payload: typeof ExecutionControlPayload.Type
--      }) {
--        yield* requireExecutionSession(ctx.params.sessionID)
--        return yield* controlError((paused ? runState.pause : runState.resume)(ctx.params.sessionID, ctx.payload.runId))
--      })
+@@ -277,52 +293,19 @@
+         return yield* controlError((paused ? runState.pause : runState.resume)(ctx.params.sessionID, ctx.payload.runId))
+       })
      const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: {
 -      params: { sessionID: SessionID }
 +      params: {
@@ -2200,7 +2161,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
        payload: typeof SummarizePayload.Type
      }) {
        yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
-@@ -344,7 +315,9 @@
+@@ -344,7 +327,9 @@
      })
  
      const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
@@ -2211,7 +2172,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
        payload: typeof PromptPayload.Type
      }) {
        yield* requireSession(ctx.params.sessionID)
-@@ -360,7 +333,9 @@
+@@ -360,7 +345,9 @@
      })
  
      const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
@@ -2222,7 +2183,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
        payload: typeof PromptPayload.Type
      }) {
        yield* requireSession(ctx.params.sessionID)
-@@ -380,7 +355,9 @@
+@@ -380,7 +367,9 @@
      })
  
      const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
@@ -2233,7 +2194,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
        payload: typeof CommandPayload.Type
      }) {
        yield* requireSession(ctx.params.sessionID)
-@@ -388,77 +365,33 @@
+@@ -388,77 +377,33 @@
          .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
          .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
      })
@@ -2323,7 +2284,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
      })
  
      return handlers
-@@ -469,28 +402,17 @@
+@@ -469,7 +414,6 @@
        .handle("todo", todo)
        .handle("diff", diff)
        .handle("messages", messages)
@@ -2331,11 +2292,10 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/sessi
        .handleRaw("create", createRaw)
        .handle("remove", remove)
        .handle("update", update)
-       .handleRaw("fork", forkRaw)
-       .handle("abort", abort)
--      .handle("execution", execution)
--      .handle("pause", changeExecution(true))
--      .handle("resume", changeExecution(false))
+@@ -478,19 +422,12 @@
+       .handle("execution", execution)
+       .handle("pause", changeExecution(true))
+       .handle("resume", changeExecution(false))
 -      .handle("init", init)
 -      .handle("share", share)
 -      .handle("unshare", unshare)

@@ -194,8 +194,10 @@ bundle and fail closed. Their lifecycle work is removed from production release
 requirements. No shared-service SIGSTOP behavior was introduced.
 
 The current Bot's pause workflow aborts and resumes via a continuation prompt.
-Future live execution/pause/resume HTTP endpoints are debug/compatibility-only;
-their previously closed invariants remain in the full compatibility gate.
+Live execution/pause/resume HTTP endpoints remain production-supported for the
+target native-control migration across the Node/Bun boundary; their previously
+closed invariants run in both production and compatibility gates. See
+[the architectural decision](TELEGRAM_EXECUTION_CONTROL.md).
 Shell/custom-process authority, MCP stdio and LSP service retirement remain required.
 Persistent Playwright sessions are a real Bot custom-tool feature, distinct from
 OAuth browser opening. Current raw custom tools have not adopted Core's process

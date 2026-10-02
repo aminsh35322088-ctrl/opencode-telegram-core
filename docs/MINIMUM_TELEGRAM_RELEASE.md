@@ -7,7 +7,7 @@ The single PR includes the cumulative stabilization checkpoint `183597576af6ed6c
 
 ## Actual production contract
 
-The [41 SDK member call-sites](BOT_CORE_CALLS.md) and [complete subsystem audit](superpowers/specs/2026-10-02-minimum-telegram-core.md)
+The [41 current SDK member call-sites plus three target APIs](BOT_CORE_CALLS.md) and [complete subsystem audit](superpowers/specs/2026-10-02-minimum-telegram-core.md)
 define the scope: legacy sessions/history/status/prompts/commands/abort/fork/revert,
 model catalogs/inference, agent file/shell/custom tools, directory SSE and provenance,
 permission/question interaction, agent/skill/plugin discovery, local/remote MCP and
@@ -22,11 +22,16 @@ sessions and is required. Removing MCP's OS browser opener does not remove or
 stabilize those browser sessions.
 
 The Bot currently implements pause by aborting; resume sends a continuation prompt.
-It does not invoke Core's live `execution/pause/resume` HTTP endpoints. The old
-44-member SDK contract mixed those future migration APIs with current consumption.
-The production contract is corrected to 41. Internal captured execution control,
-phase fencing and previously closed pause invariants are preserved; debug APIs and
-the full compatibility suite still exercise live control. No Bot behavior changes.
+It does not yet invoke live `execution/pause/resume` HTTP endpoints. The production
+contract separately includes **41 current SDK members and three target True
+Pause/Resume members**. The production native package already exposes
+`pauseRun/resumeRun/inspectExecution` through an execution-control port to the
+separate Bun execution authority. Removing the transport would block that migration
+and leave requested controls held as uncertain. These three thin legacy wrappers
+remain production-supported; native bindings, exact run ownership, retained child
+frames, shell-group STOP/CONT, recovery and acknowledgment semantics are preserved.
+See [the architectural decision](TELEGRAM_EXECUTION_CONTROL.md). Bot adoption follows
+Core stable in a separately authorized phase; no Bot behavior changes occur here.
 
 ## Removed from production
 
@@ -48,7 +53,7 @@ the full compatibility suite still exercise live control. No Bot behavior change
 - Native v2 session client/event pump production exports and emitted Node modules.
   They remain in the independent debug entrypoint. Unused native JSON-line transport, run reconciliation adapter and conformance helper also move there; the internally used worker outbound gate remains.
 
-The legacy composed endpoint count falls from 130 to 41; the separate v2 server is
+The legacy composed endpoint count falls from 130 to 44; the separate v2 server is
 also excluded entirely. This count excludes duplicate public schema-only aliases.
 Unsupported production routes return non-success responses. Enable flags for
 removed behavior fail explicitly; persisted Console organization selection returns
@@ -71,7 +76,9 @@ The engine alone accounts for about 83% of the remaining standalone executable.
 The catalog remains necessary because Telegram supports generic provider/model
 selection and custom pinned providers. A frozen 5,310,394-byte models.dev input is
 checked in (SHA256 `81f8b4433bbcd07c4a2912b2d1abc32b48e0c20ec1db4aedaa33b03fcf098c06`).
-Builds no longer fetch a varying catalog. The production budget is tightened from
+Builds no longer fetch a varying catalog. Independent compilers/build locations may
+still produce different executable digests; final artifact and Railway digests are
+recorded separately and each must have the exact verified source identity. The production budget is tightened from
 140,000,000 to 120,000,000 bytes; graph exclusion is enforced independently of size.
 
 Ranked removed contributors:
@@ -140,16 +147,17 @@ The exact final commit, CI run, Railway deployment, checksums and artifact sizes
 attached to the single PR and prerelease manifest after final verification.
 
 Current local gates: native typecheck/299 tests; full shared upstream typecheck/SDK
-surface/324 tests + 2 expected skips; ten npm/config tests; all five original shell
-cancellation repeats. The production composition separately exercises 313 supported
+surface/325 tests + 2 expected skips; ten npm/config tests; all five original shell
+cancellation repeats. The production composition separately exercises 316 supported
 upstream tests, two expected skips, the same cancellation repeats, ripgrep/filesystem
-and npm/config tests. Eleven compatibility-only assertions (browser helper, future
-live-control APIs, experimental route and sync schema export) run against the full
+and npm/config tests. Nine compatibility-only assertions (browser helper,
+experimental route and sync schema export) run against the full
 shared composition, not the production tree. Required compiled regressions cover
 positive/negative routes, authentication, model+shell/history, real SSE provenance,
 abort/group cleanup, actual MCP stdio descendants, captured custom-tool execution with offline dependency preparation, and workspace disposal.
+Production compiled tests exercise physical live pause/resume/abort/stale fencing.
 Independent compiled compatibility tests retain v2 durable history/cursors/SSE and
-physical live pause/resume/abort/stale fencing under explicit Telegram admission.
+repeat live control under explicit Telegram admission.
 
 Initial local service cleanup tests failed because this workspace's PID 1 is `tail`
 and did not reap killed orphan children. They passed with a child-reaping subreaper;
@@ -157,7 +165,10 @@ production group-death assertions and five-second cleanup were unchanged. The
 Railway validation image uses tini. The new debug physical pause fixture initially
 omitted the governor flag (the full CLI does not force Telegram admission); the
 corrected fixture explicitly enables that policy and observes SIGSTOP within the
-existing Linux test bound. No production change or rerun-until-green workaround. The custom-tool fixture initially blocked on direct external registry access in the isolated Cloud environment; a local deterministic registry now exercises real dependency preparation without that external dependency.
+existing Linux test bound. No production invariant or cleanup deadline was weakened. A later cumulative run
+exposed a Linux proc-descriptor probe race: ESRCH after reaped exit. A deterministic
+open-proc-fd/exit/read regression proves that state is gone; the test probe now
+recognizes ESRCH alongside ENOENT while retaining all death/state/time assertions. The custom-tool fixture initially blocked on direct external registry access in the isolated Cloud environment; a local deterministic registry now exercises real dependency preparation without that external dependency.
 
 Local six-cycle model/shell/dispose measurements: idle RSS 270,932→242,456 KiB;
 observed peak RSS 775,768→689,596 KiB; startup 1.320→1.321 seconds. Final thread
