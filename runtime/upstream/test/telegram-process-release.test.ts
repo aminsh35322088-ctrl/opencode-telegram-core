@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream"
 import { Cause, Effect, Exit, Fiber, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Shell } from "@opencode-ai/core/shell"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { telegramProcessBudgetSnapshot } from "@opencode-ai/core/telegram-process-budget"
 
@@ -136,3 +137,71 @@ test("failed TERM delivery still escalates and joins the close notification", as
     queueMicrotask(() => proc.emit("close", null, "SIGKILL"))
   })
 }, 10000)
+
+test("interruption while acquiring an output reader removes listeners and closes the pipe", async () => {
+  await withProcess(async (proc) => {
+    const stdout = new PassThrough()
+    Object.assign(proc, { stdout, stdio: [null, stdout, null] })
+    const once = stdout.once
+    let interrupted = false
+    const attaching = spyOn(stdout, "once").mockImplementation(function (this: PassThrough, event, listener) {
+      const result = once.call(this, event, listener)
+      if (event === "end" && !interrupted) {
+        interrupted = true
+        Fiber.getCurrent()!.interruptUnsafe()
+      }
+      return result
+    })
+    try {
+      const exit = await Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const handle = yield* spawner.spawn(ChildProcess.make("synthetic-process", [], { stdin: "ignore" }))
+        yield* Stream.runDrain(handle.stdout)
+      }).pipe(Effect.scoped, Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.runPromiseExit)
+      expect(interrupted).toBe(true)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      expect(stdout.listenerCount("readable")).toBe(0)
+      expect(stdout.listenerCount("end")).toBe(0)
+      expect(stdout.destroyed).toBe(true)
+    } finally {
+      attaching.mockRestore()
+      stdout.destroy()
+    }
+  }, proc => { queueMicrotask(() => proc.emit("close", null, "SIGTERM")) })
+}, 10000)
+
+
+test.skipIf(process.platform !== "linux")("Linux shell cancellation during merged output admission joins close", async () => {
+  const original = nodeChildProcess.spawn
+  let spawned: () => void = () => {}
+  let closed = false
+  const spawning = spyOn(nodeChildProcess, "spawn").mockImplementation(((...args: Parameters<typeof nodeChildProcess.spawn>) => {
+    const proc = Reflect.apply(original, nodeChildProcess, args) as childProcess.ChildProcess
+    proc.once("spawn", () => spawned())
+    proc.once("close", () => { closed = true })
+    return proc
+  }) as typeof nodeChildProcess.spawn)
+  try {
+    for (let round = 0; round < 50; round++) {
+      closed = false
+      const ready = new Promise<void>(resolve => { spawned = resolve })
+      const shell = Shell.preferred()
+      const exit = await Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          const handle = yield* spawner.spawn(ChildProcess.make(shell, Shell.args(shell, "sleep 30", process.cwd()), {
+            stdin: "ignore", forceKillAfter: "10 millis",
+          }))
+          yield* Stream.runDrain(handle.all)
+        }).pipe(Effect.scoped, Effect.forkChild)
+        yield* Effect.promise(() => ready)
+        yield* Fiber.interrupt(run)
+        return yield* Fiber.await(run)
+      }).pipe(Effect.scoped, Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.runPromise)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      expect(closed).toBe(true)
+    }
+  } finally {
+    spawning.mockRestore()
+  }
+}, 30000)
