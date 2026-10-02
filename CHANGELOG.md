@@ -7,7 +7,7 @@ These entries describe prerelease development, not final v1 release notes.
 - Capture original root/producer run provenance at Core event publication, preserve it through live SSE/global delivery and SDK schemas, and require it for native execution routing. Completion/cancellation snapshots retain retired ownership; ordinary completion honors pause even without pending tools. Bot adoption remains gated on a verified aligned prerelease.
 
 - Settle Runner cancellation when shell work finishes without opening readiness; cancel queued work without retaining a dead wait.
-- Share bounded process termination between scope cleanup and explicit kill, retain governor admission through uncertain cleanup and post-spawn errors, and preserve output completion at `close`. Linux shell notification stalls remain under investigation.
+- Share bounded process termination between scope cleanup and explicit kill, retain governor admission through uncertain cleanup and post-spawn errors, and preserve output completion at `close`. Make output-reader listener attachment and cleanup registration atomic with cancellation, preventing a leaked reader from suppressing Linux/Bun terminal close. Candidate CI and Railway verification remain required.
 
 - Add Core-owned result polling with immutable run identity, cancellation, finite deadlines/attempts and stale-result rejection.
 - Expose polling through the owned Topic task context, without allowing the application to replace its run fence.

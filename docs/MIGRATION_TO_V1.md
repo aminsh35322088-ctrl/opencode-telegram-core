@@ -47,22 +47,21 @@ racing a rich mutation. Full Linux CI and aligned artifact checks precede Bot us
 ## Audit and stability matrix
 
 Current stability gate: Linux validation reproduced intermittent stalls inside
-`SessionPrompt.cancel` for a shell with a queued model turn and for an exclusive
-shell. The complete suite can pass immediately before the focused repeat fails.
-Five repetitions of those two cases now run after the upstream suite; test-only
-watchdogs report the blocked caller stage and Linux child process state. A passing
-rerun does not close this gate. A separate deterministic Runner regression now
-covers cancellation when shell work ends without opening its readiness latch;
-Core waits for readiness or shell completion before interrupting. This fix is not
-yet evidence for the intermittent Linux stall. Later traced runs locate that stall
-in `CrossSpawnSpawner.release`, while awaiting terminal notification after signal
-delivery. Core now bounds the post-KILL wait, propagates uncertain cleanup failure,
-and retains its budget reservation. Scope release and explicit kill share this
-termination path. Four deterministic process fixtures cover missing notification,
-signal-error escalation, explicit kill and trailing output. Linux validation must
-still establish successful cancellation; bounded failure alone does not close this
-gate. Identify and fix the notification/cleanup cause before
-claiming the runtime stable or deploying the pause migration to the Bot.
+`SessionPrompt.cancel` for queued and exclusive shells. The terminal-notification
+cause is now reproduced deterministically: the Effect Node stream adapter attaches
+output listeners before registering their scope finalizer; interruption in that
+gap leaves a `readable` listener that prevents Bun's exit-time resume from draining
+the pipe. The process exits but never emits `close`, so bounded cleanup fails.
+Core now makes output-reader acquisition (stdout, stderr and extra output FDs)
+uninterruptible through finalizer registration. Output reads remain interruptible;
+signal escalation, close deadlines and uncertain governor admission are unchanged.
+A deterministic regression interrupts exactly after listener attachment and checks
+listener removal and pipe destruction. A Linux regression cancels 50 actual shells
+during merged-output admission and requires terminal close without cleanup defects.
+Existing fixtures still cover missing close, failed TERM delivery, explicit kill
+and trailing output. Local stress and full verification are recorded in the
+handoff continuation; GitHub CI and Railway smoke on the actual candidate remain
+required before closing this release gate. A passing rerun alone is insufficient.
 
 After all three tasks, audit both repositories for duplicated Core responsibilities, unjustified shims, bypass routes, ambiguous identity, General/ALL execution, stale/late delivery, lifecycle ownership and artifact identity.
 
