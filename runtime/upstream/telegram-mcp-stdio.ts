@@ -19,7 +19,7 @@ export class StdioClientTransport implements Transport {
   private cleanup?: Promise<void>
   private failure?: Error
 
-  constructor(private readonly params: StdioServerParameters) {
+  constructor(private readonly params: StdioServerParameters, private readonly onRetired?: () => void) {
     if (params.stderr !== undefined && params.stderr !== "pipe" && params.stderr !== "inherit" && params.stderr !== "ignore") {
       throw new Error("unsupported MCP stderr mode")
     }
@@ -72,6 +72,7 @@ export class StdioClientTransport implements Transport {
     this.stderrStream?.end()
     if (this.notified) return
     this.notified = true
+    this.onRetired?.()
     this.onclose?.()
   }
   close(): Promise<void> {

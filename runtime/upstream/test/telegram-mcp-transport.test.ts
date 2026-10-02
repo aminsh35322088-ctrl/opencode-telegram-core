@@ -9,7 +9,7 @@ test("failed service cleanup rejects transport work without announcing confirmed
   const exited = new Promise<number>((_resolve, reject) => { fail = reject })
   const child = Object.assign(new EventEmitter(), {
     pid: 2147483003, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exited,
-  }) as Process.Child
+  }) as unknown as Process.Child
   const error = new Error("service group cleanup uncertain")
   const spawn = spyOn(Process, "spawn").mockReturnValue(child)
   const stop = spyOn(Process, "stop").mockRejectedValue(error)

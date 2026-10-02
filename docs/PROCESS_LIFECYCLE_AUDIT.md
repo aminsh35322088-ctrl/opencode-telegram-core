@@ -91,3 +91,13 @@ Candidate now preserves failed identity/admission, withdraws tools, propagates c
 failure, joins all workspace service closes and retires a service before replacement
 admission.25 focused MCP lifecycle/transport tests pass after these fixes; full/review
 verification is running. Initial green CI alone did not close the gate.
+
+Further review found failed acquisition could lose its transport before SDK client
+registration. Regression reproduced a second actual spawn while original cleanup
+was uncertain (admission deliberately disabled), and now passes with one retained
+workspace transport. Owner registration precedes handshake; its exact identity is
+removed only on confirmed cleanup, replacements must join it, and workspace finalizer
+is registered before initial acquisitions and covers unregistered transports too.
+26 MCP lifecycle/transport focused tests pass; full gate/review are running. CI37008090498
+failed only at a synthetic test ChildProcess cast; corrected explicit unknown cast
+preserves the intentional partial fixture and does not change runtime cleanup.

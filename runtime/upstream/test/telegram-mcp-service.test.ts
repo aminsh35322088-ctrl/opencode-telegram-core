@@ -5,6 +5,8 @@ import { Effect, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { telegramProcessBudgetSnapshot } from "@opencode-ai/core/telegram-process-budget"
 import { StdioClientTransport } from "../../src/mcp/telegram-stdio"
+import { disposeInstance } from "../../src/effect/instance-registry"
+import { Process } from "../../src/util/process"
 import { MCP } from "../../src/mcp/index"
 import { testEffect } from "../lib/effect"
 import { TestInstance } from "../fixture/fixture"
@@ -88,4 +90,46 @@ it.instance("failed MCP transport quarantines tools while retaining its service 
   expect((yield* mcp.status())["failed-transport"]?.status).toBe("failed")
   expect(Object.keys(yield* mcp.tools())).not.toContain("failed-transport_probe")
   yield* mcp.disconnect("failed-transport")
+}))
+
+it.instance("failed MCP handshake retains uncertain acquisition and blocks replacement", () => Effect.gen(function* () {
+  if (process.platform !== "linux") return
+  yield* Effect.sync(() => { process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "0" })
+  const dir = (yield* TestInstance).directory
+  const mcp = yield* MCP.Service
+  const original = StdioClientTransport.prototype.close
+  const held = new Set<StdioClientTransport>()
+  const observer = spyOn(StdioClientTransport.prototype, "close").mockImplementation(function(this: StdioClientTransport) {
+    held.add(this)
+    return Promise.reject(new Error("acquisition cleanup uncertain"))
+  })
+  const launch = Process.spawn
+  let launches = 0
+  const spawn = spyOn(Process, "spawn").mockImplementation((cmd, opts) => {
+    if (opts?.env?.OPENCODE_TELEGRAM_PROCESS_KIND === "mcp") launches++
+    return launch(cmd, opts)
+  })
+  yield* Effect.gen(function* () {
+    const failed = yield* mcp.add("failed-handshake", {
+      type: "local", command: [process.execPath, path.join(import.meta.dir, "telegram-mcp-service.fixture.ts"), "--hang"],
+      environment: { MCP_TEST_CHILD_PID: path.join(dir, "handshake.pid") }, timeout: 100,
+    }).pipe(Effect.exit)
+    expect(Exit.isFailure(failed)).toBe(true)
+    expect((yield* mcp.status())["failed-handshake"]?.status).toBe("failed")
+    expect(launches).toBe(1)
+    yield* mcp.connect("failed-handshake").pipe(Effect.exit)
+    expect(launches).toBe(1)
+    expect(held.size).toBe(1)
+    const pid = [...held][0]!.pid!
+    observer.mockRestore()
+    yield* Effect.promise(() => disposeInstance(dir))
+    const alive = yield* Effect.sync(() => {
+      try { process.kill(pid, 0); return true }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error }
+    })
+    expect(alive).toBe(false)
+  }).pipe(Effect.ensuring(Effect.promise(async () => {
+    observer.mockRestore(); spawn.mockRestore()
+    await Promise.all([...held].map((transport) => original.call(transport)))
+  })))
 }))

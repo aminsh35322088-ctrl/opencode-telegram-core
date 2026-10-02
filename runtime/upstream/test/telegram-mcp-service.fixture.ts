@@ -6,6 +6,7 @@ import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 const child = spawn("/bin/bash", ["-c", "trap '' TERM; exec sleep 60"], { stdio: "ignore" })
 await Bun.write(process.env.MCP_TEST_CHILD_PID!, String(child.pid))
 process.on("SIGTERM", () => {})
+if (process.argv.includes("--hang")) await new Promise(() => {})
 const server = new Server({ name: "owned-service", version: "1.0.0" }, { capabilities: { tools: {} } })
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "probe", inputSchema: { type: "object" } }] }))
 await server.connect(new StdioServerTransport())
