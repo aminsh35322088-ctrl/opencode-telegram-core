@@ -8,8 +8,8 @@ remaining Core gates, not a stable release claim.
 | --- | --- | --- |
 | Manual/model shell via CrossSpawnSpawner | Captured runtime execution and phase, when governed as shell | New physical Linux regressions cover parent pause/resume, abort while stopped, normal leader exit with descendants and retired identity. Merged PR #20: upstream 168 pass/2 expected skip, native 298 pass, Python 24 pass, 100 further Linux owned-shell stress passes; candidate and main CI/native Railway smoke green. |
 | Custom-tool execFile | Captured invocation/run/session/canonical workspace | Existing group accounting, cancellation, pause/time limits, output bounds and invocation cleanup tests must stay green. No daemon-launcher lifetime assumption. |
-| MCP stdio transport | Workspace instance's cached client and finalizer | **Candidate:** SDK framing/client protocol retained; Core stdio adapter uses existing Process service/group ownership and joins cleanup. SDK-owned spawn, close-finally release and best-effort pgrep cleanup removed. Focused physical descendant/compatibility checks passed; full/review pending. Workspace startup/teardown race remains open. |
-| LSP | Workspace instance's client and shutdown | **Open gate:** Process.spawn binds only leader; exit releases admission, and Process.stop sends leader TERM without joining confirmed group death. Must retain lifetime through group cleanup. |
+| MCP stdio transport | Workspace instance's cached client/transport and finalizer | PR #22 merged: SDK framing/client protocol retained; Core service/group cleanup joins confirmed retirement, including failed acquisitions registered before handshake. 312 upstream pass/2 expected skip, 220 Linux stress passes, CI and exact candidate native Railway smoke green. Workspace startup/teardown race remains open. |
+| LSP | Workspace instance's client and shutdown | PR #21 merged: Process.spawn/stop owns isolated service groups, joins cleanup and retains uncertain admission. 241 upstream pass/2 expected skip, 100 Linux daemon stress passes, CI and exact candidate native Railway smoke green. Workspace startup/teardown race remains open. |
 | PTY | Core workspace PTY service/session | **Open gate:** high-level core Pty service already acquires PTY admission, but releases on leader exit; teardown sends kill without joining group cleanup. Low-level adapters are behind that existing governed boundary. Retain service lifetime through confirmed cleanup. |
 
 ## Shell invariants under verification
@@ -78,10 +78,12 @@ when failure returns. A separate disabled-admission regression reproduced unjoin
 service cleanup; POSIX service group lifetime now remains independent of optional
 admission accounting. Windows MCP service launch fails closed.
 
-Further gate found during this boundary audit: standalone Telegram headless serve
-currently does not activate the process-budget environment flag itself. Bot historically
-supplied it. Core stable must activate/verify governors independently at the headless
-entrypoint; this candidate does not claim that activation or actual runtime soak.
+Standalone Telegram headless serve previously did not activate the process-budget
+flag itself; Bot historically supplied it. A new entrypoint regression reproduced
+admission of three utility processes with both unset and inherited disabled flags.
+Candidate now enables admission before dynamic server import, enforces the two-process
+utility limit with real subprocesses and verifies returned accounting after exit.
+Actual binary/runtime resource and Railway soak verification remains required.
 
 Initial MCP candidate full gate passed308 tests/2 expected skips, original five
 cancellation repeats and CI37007067132, but review found a cleanup-failure notification
@@ -101,3 +103,11 @@ is registered before initial acquisitions and covers unregistered transports too
 26 MCP lifecycle/transport focused tests pass; full gate/review are running. CI37008090498
 failed only at a synthetic test ChildProcess cast; corrected explicit unknown cast
 preserves the intentional partial fixture and does not change runtime cleanup.
+
+Final MCP candidate `3f807822c3e421a6c4ec888452169bbcc1cf5a25`: full upstream312 pass,
+2 expected skips, zero failures, typecheck/SDK build/surface and all five original
+cancellation repeats passed. Additional Linux MCP/service stress220 pass. Focused
+review found no further actionable issues. CI37009589230 green; Railway native smoke
+`730f77d8-6c0b-459b-af0a-7384f890fbd1` exact candidate SUCCESS, native298 pass/0 fail,
+health succeeded. PR22 merged as `adb98f639c52fcb8c9c45a5c0f6f9f435f355bcb`.
+These results do not close workspace startup/teardown or actual runtime soak gates.
