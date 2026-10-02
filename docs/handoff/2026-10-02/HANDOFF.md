@@ -1,3 +1,42 @@
+## Latest checkpoint: MCP service ownership merged; Bot frozen
+
+Core main `adb98f639c52fcb8c9c45a5c0f6f9f435f355bcb` includes PR #22.
+Bot PR #189 remains open/unmerged; Bot source/pins/production unchanged (pre.7).
+Core latest published release remains pre.8; no RC/stable.
+
+PR #22 exact candidate `3f807822c3e421a6c4ec888452169bbcc1cf5a25`: SDK framing/client
+protocol retained with Core stdio service/group ownership. Cleanup joins group death
+and terminal close even when admission is disabled. Failed close propagates, keeps
+owner/accounting, quarantines tools and blocks replacement. Local transport ownership
+is registered before handshake; finalizer covers failed acquisitions as well as clients.
+Physical disconnect, disabled-admission cleanup and review failure-path regressions
+reproduced red before correction. Full upstream312 pass/2 expected skip/0 fail,
+typecheck/SDK surface plus five original cancellation repeats; Linux MCP/service
+stress220 pass; CI37009589230 green; focused review clean. Exact Railway native smoke
+`730f77d8-6c0b-459b-af0a-7384f890fbd1` SUCCESS, native298 pass/0 fail, health succeeded.
+Source independently restored main, no pin or staged config. This is NOT actual runtime soak.
+
+Active worktree `/workspace/opencode-core-cancellation` now branch
+`fix/headless-process-governor` from adb98f6. Standalone headless serve lacked governor
+activation; real subprocess entrypoint regression reproduced three utility admissions
+with flag unset or inherited0. Minimal activation before Server import now passes both
+and20 repetitions. Focused review clean; full gate pending/running. Working source
+is not yet pushed; do not discard it. Tests plus fixture are in runtime/upstream/test,
+overlay installation copies headless entrypoint for the existing upstream CI gate.
+
+Remaining gates: workspace MCP/LSP startup/teardown and concurrency, PTY joined group
+cleanup, persistent custom daemon ownership, actual headless governor/binary verification,
+measured resources, repeated Linux stress, aligned artifacts and actual Railway runtime
+soak before RC/stable. Do not modify Bot until Core stable.
+
+Current diagnostics: /workspace/scratch/mcp-service-acquisition-full-upstream.log
+(312 pass); mcp-service-linux-stress.log (220 pass); headless-governor-red.log
+(real admission bypass), headless-governor-stress.log (20 pass),
+headless-governor-full-upstream.log (check current completion). Use indexed individual
+logs only; do not bulk-read historical captures. Cloud subreaper test launcher remains
+necessary because VM PID1 does not reap. No production change hides that concern;
+actual Railway PID1/group reaping still requires evidence.
+
 ## Latest checkpoint: governed LSP process cleanup merged
 
 Core main is now `46401de2be2140360b72e8e92d3e542090d66ca5` (PR #21).

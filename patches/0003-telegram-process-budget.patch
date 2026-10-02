@@ -773,22 +773,65 @@ index 4f687b1..3184708 100644
      stdout: "pipe",
      stderr: "pipe",
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
-index 05f12fa..3376921 100644
+index 05f12fa..f1d104a 100644
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
-@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url"
- import { LayerNode } from "@opencode-ai/core/effect/layer-node"
- import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
- import { serviceUse } from "@opencode-ai/core/effect/service-use"
-+import { acquireTelegramProcessBudget } from "@opencode-ai/core/telegram-process-budget"
+@@ -6,7 +6,7 @@ import { serviceUse } from "@opencode-ai/core/effect/service-use"
  import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js"
  import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
  import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
-@@ -344,28 +345,51 @@ const layer = Layer.effect(
+-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
++import { StdioClientTransport } from "./telegram-stdio"
+ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
+ import {
+   ListRootsRequestSchema,
+@@ -26,11 +26,9 @@ import { McpOAuthCallback } from "./oauth-callback"
+ import { McpAuth } from "./auth"
+ import { EventV2Bridge } from "@/event-v2-bridge"
+ import { TuiEvent } from "@/server/tui-event"
+-import { Cause, Effect, Exit, Layer, Context, Schema, Stream } from "effect"
++import { Cause, Effect, Exit, Layer, Context, Schema } from "effect"
+ import { EffectBridge } from "@/effect/bridge"
+ import { InstanceState } from "@/effect/instance-state"
+-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+ import { McpCatalog } from "./catalog"
+ import { McpEvent } from "@opencode-ai/schema/mcp-event"
+ import { McpBrowser } from "./browser"
+@@ -143,6 +141,7 @@ interface State {
+   config: Record<string, ConfigMCPV1.Info>
+   status: Record<string, Status>
+   clients: Record<string, MCPClient>
++  localTransports: Map<string, StdioClientTransport>
+   defs: Record<string, MCPToolDef[]>
+   instructions: Record<string, string>
+ }
+@@ -204,7 +203,6 @@ export const use = serviceUse(Service)
+ const layer = Layer.effect(
+   Service,
+   Effect.gen(function* () {
+-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+     const auth = yield* McpAuth.Service
+     const events = yield* EventV2Bridge.Service
+     const browser = yield* McpBrowser.Service
+@@ -340,37 +338,47 @@ const layer = Layer.effect(
+     const connectLocal = Effect.fn("MCP.connectLocal")(function* (
+       key: string,
+       mcp: ConfigMCPV1.Info & { type: "local" },
++      owners: Map<string, StdioClientTransport>,
+     ) {
++      const previous = owners.get(key)
++      if (previous) yield* Effect.tryPromise(() => previous.close()).pipe(Effect.orDie)
        const [cmd, ...args] = mcp.command
        const baseDir = yield* InstanceState.directory
        const cwd = mcp.cwd ? path.resolve(baseDir, mcp.cwd) : baseDir
--      const transport = new StdioClientTransport({
++      const transportEnv = {
++        ...process.env,
++        ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
++        ...mcp.environment,
++        OPENCODE_TELEGRAM_PROCESS_KIND: "mcp",
++      }
+       const transport = new StdioClientTransport({
 -        stderr: "pipe",
 -        command: cmd,
 -        args,
@@ -798,35 +841,12 @@ index 05f12fa..3376921 100644
 -          ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
 -          ...mcp.environment,
 -        },
--      })
-+      const transportEnv = {
-+        ...process.env,
-+        ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
-+        ...mcp.environment,
-+        OPENCODE_TELEGRAM_PROCESS_KIND: "mcp",
-+      }
-+      const lease = acquireTelegramProcessBudget(cmd, transportEnv, "mcp")
-+      let transport: StdioClientTransport
-+      try {
-+        transport = new StdioClientTransport({
-+          stderr: "pipe",
-+          command: cmd,
-+          args,
-+          cwd,
-+          env: transportEnv,
-+        })
-+      } catch (error) {
-+        lease?.release()
-+        throw error
-+      }
-+      const close = transport.close.bind(transport)
-+      transport.close = async () => {
-+        try {
-+          await close()
-+        } finally {
-+          lease?.release()
-+        }
-+      }
++        stderr: "pipe", command: cmd, args, cwd, env: transportEnv,
++      }, () => {
++        if (owners.get(key) === transport) owners.delete(key)
+       })
++      // Workspace authority exists before SDK initialization can fail.
++      owners.set(key, transport)
  
        const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
        return yield* connectTransport(transport, connectTimeout).pipe(
@@ -838,7 +858,6 @@ index 05f12fa..3376921 100644
 -          const msg = error instanceof Error ? error.message : String(error)
 -          return Effect.succeed({ client: undefined, status: { status: "failed", error: msg } })
 +        Effect.map((client): { client: MCPClient | undefined; status: Status } => {
-+          lease?.bindPid(transport.pid)
 +          return {
 +            client,
 +            status: { status: "connected" },
@@ -854,6 +873,198 @@ index 05f12fa..3376921 100644
        )
      })
  
+     const create = Effect.fn("MCP.create")(
+-      function* (key: string, mcp: ConfigMCPV1.Info) {
++      function* (key: string, mcp: ConfigMCPV1.Info, owners: Map<string, StdioClientTransport>) {
+         if (mcp.enabled === false) {
+           return DISABLED_RESULT
+         }
+@@ -378,7 +386,7 @@ const layer = Layer.effect(
+         const { client: mcpClient, status } =
+           mcp.type === "remote"
+             ? yield* connectRemote(key, mcp as ConfigMCPV1.Info & { type: "remote" })
+-            : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" })
++            : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" }, owners)
+ 
+         if (!mcpClient) {
+           if (status.status !== "connected" && status.status !== "disabled") {
+@@ -415,31 +423,16 @@ const layer = Layer.effect(
+     )
+     const cfgSvc = yield* Config.Service
+ 
+-    const descendants = Effect.fnUntraced(
+-      function* (pid: number) {
+-        if (process.platform === "win32") return [] as number[]
+-        const pids: number[] = []
+-        const queue = [pid]
+-        for (let index = 0; index < queue.length; index++) {
+-          const current = queue[index]
+-          const handle = yield* spawner.spawn(ChildProcess.make("pgrep", ["-P", String(current)], { stdin: "ignore" }))
+-          const text = yield* Stream.mkString(Stream.decodeText(handle.stdout))
+-          yield* handle.exitCode
+-          for (const tok of text.split("\n")) {
+-            const cpid = parseInt(tok, 10)
+-            if (!isNaN(cpid) && !pids.includes(cpid)) {
+-              pids.push(cpid)
+-              queue.push(cpid)
+-            }
+-          }
+-        }
+-        return pids
+-      },
+-      Effect.scoped,
+-      Effect.catch(() => Effect.succeed([] as number[])),
+-    )
+-
+     function watch(s: State, name: string, client: MCPClient, bridge: EffectBridge.Shape, timeout?: number) {
++      client.onerror = () => {
++        if (s.clients[name] !== client) return
++        // Transport failure does not prove process death. Retain its original
++        // service owner, withdraw tools and require explicit joined cleanup.
++        s.status[name] = { status: "failed", error: "MCP transport failed" }
++        delete s.defs[name]
++        delete s.instructions[name]
++        bridge.fork(events.publish(ToolsChanged, { server: name }).pipe(Effect.ignore))
++      }
+       client.onclose = () => {
+         if (s.clients[name] !== client) return
+         delete s.clients[name]
+@@ -498,10 +491,24 @@ const layer = Layer.effect(
+           config: {},
+           status: {},
+           clients: {},
++          localTransports: new Map(),
+           defs: {},
+           instructions: {},
+         }
+ 
++        yield* Effect.addFinalizer(() =>
++          Effect.gen(function* () {
++            const exits = yield* Effect.forEach(
++              new Set([...Object.keys(s.clients), ...s.localTransports.keys()]),
++              (name) => closeClient(s, name).pipe(Effect.exit),
++              { concurrency: "unbounded" },
++            )
++            const failed = exits.find(Exit.isFailure)
++            if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause)
++            pendingOAuthTransports.clear()
++          }),
++        )
++
+         yield* Effect.forEach(
+           Object.entries(config),
+           ([key, mcp]) =>
+@@ -516,7 +523,7 @@ const layer = Layer.effect(
+                 return
+               }
+ 
+-              const result = yield* create(key, mcp)
++              const result = yield* create(key, mcp, s.localTransports)
+               s.status[key] = result.status
+               if (result.mcpClient) {
+                 s.clients[key] = result.mcpClient
+@@ -528,32 +535,7 @@ const layer = Layer.effect(
+           { concurrency: "unbounded" },
+         )
+ 
+-        yield* Effect.addFinalizer(() =>
+-          Effect.gen(function* () {
+-            const clients = Object.values(s.clients)
+-            s.clients = {}
+-            s.defs = {}
+-            s.instructions = {}
+-            yield* Effect.forEach(
+-              clients,
+-              (client) =>
+-                Effect.gen(function* () {
+-                  const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : null
+-                  if (typeof pid === "number") {
+-                    const pids = yield* descendants(pid)
+-                    for (const dpid of pids) {
+-                      try {
+-                        process.kill(dpid, "SIGTERM")
+-                      } catch {}
+-                    }
+-                  }
+-                  yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+-                }),
+-              { concurrency: "unbounded" },
+-            )
+-            pendingOAuthTransports.clear()
+-          }),
+-        )
++
+ 
+         return s
+       }),
+@@ -561,11 +543,26 @@ const layer = Layer.effect(
+ 
+     function closeClient(s: State, name: string) {
+       const client = s.clients[name]
+-      delete s.clients[name]
+-      delete s.defs[name]
+-      delete s.instructions[name]
+-      if (!client) return Effect.void
+-      return Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
++      const transport = s.localTransports.get(name)
++      if (!client && !transport) return Effect.void
++      return Effect.tryPromise(async () => {
++        if (client) await client.close()
++        if (transport) await transport.close()
++      }).pipe(
++        Effect.tap(() => Effect.sync(() => {
++          if (s.clients[name] !== client) return
++          delete s.clients[name]
++          delete s.defs[name]
++          delete s.instructions[name]
++        })),
++        Effect.catch((error) => Effect.sync(() => {
++          if (s.clients[name] === client) {
++            s.status[name] = { status: "failed", error: "MCP service cleanup failed" }
++            delete s.defs[name]
++            delete s.instructions[name]
++          }
++        }).pipe(Effect.andThen(Effect.die(error)))),
++      )
+     }
+ 
+     const storeClient = Effect.fnUntraced(function* (
+@@ -577,14 +574,13 @@ const layer = Layer.effect(
+       timeout?: number,
+     ) {
+       const bridge = yield* EffectBridge.make()
+-      const previous = s.clients[name]
++      if (s.clients[name] && s.clients[name] !== client) yield* closeClient(s, name)
+       s.status[name] = { status: "connected" }
+       s.clients[name] = client
+       s.defs[name] = listed
+       if (instructions) s.instructions[name] = instructions
+       else delete s.instructions[name]
+       watch(s, name, client, bridge, timeout)
+-      if (previous) yield* Effect.tryPromise(() => previous.close()).pipe(Effect.ignore)
+       return s.status[name]
+     })
+ 
+@@ -626,7 +622,9 @@ const layer = Layer.effect(
+ 
+     const createAndStore = Effect.fn("MCP.createAndStore")(function* (name: string, mcp: ConfigMCPV1.Info) {
+       const s = yield* InstanceState.get(state)
+-      const result = yield* create(name, mcp)
++      // A persistent service must retire before replacement admission.
++      yield* closeClient(s, name)
++      const result = yield* create(name, mcp, s.localTransports)
+ 
+       s.status[name] = result.status
+       if (!result.mcpClient) {
+@@ -998,7 +996,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
+ export const node = LayerNode.make({
+   service: Service,
+   layer: layer,
+-  deps: [CrossSpawnSpawner.node, McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
++  deps: [ McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
+ })
+ 
+ export * as MCP from "."
 diff --git a/packages/opencode/src/tool/shell.ts b/packages/opencode/src/tool/shell.ts
 index 1e4423e..a9cd836 100644
 --- a/packages/opencode/src/tool/shell.ts
@@ -901,7 +1112,7 @@ index 1e4423e..a9cd836 100644
            const exit = yield* Effect.raceAll([
              handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
 diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
-index 173210f..feb4a87 100644
+index 173210f..170e829 100644
 --- a/packages/opencode/src/util/process.ts
 +++ b/packages/opencode/src/util/process.ts
 @@ -3,6 +3,8 @@ import type { Stream } from "node:stream"
@@ -909,11 +1120,11 @@ index 173210f..feb4a87 100644
  import { buffer } from "node:stream/consumers"
  import { errorMessage } from "./error"
 +import { ownServiceProcess } from "@opencode-ai/core/telegram-service-process"
-+import { acquireTelegramProcessBudget } from "@opencode-ai/core/telegram-process-budget"
++import { acquireTelegramProcessBudget, classifyTelegramProcess } from "@opencode-ai/core/telegram-process-budget"
  
  export type Stdio = "inherit" | "pipe" | "ignore" | number | Stream
  export type Shell = boolean | string
-@@ -56,22 +58,42 @@ export class RunFailedError extends Error {
+@@ -56,22 +58,46 @@ export class RunFailedError extends Error {
  
  export type Child = ChildProcess & { exited: Promise<number> }
  
@@ -932,9 +1143,13 @@ index 173210f..feb4a87 100644
 -  })
 +  const env = opts.env === null ? {} : opts.env ? { ...process.env, ...opts.env } : undefined
 +  const lease = acquireTelegramProcessBudget(cmd[0], env, undefined, Boolean(opts.shell))
-+  const service = lease?.kind === "lsp" || lease?.kind === "mcp"
++  const kind = classifyTelegramProcess(cmd[0], env, undefined, Boolean(opts.shell))
++  // Admission may be disabled in generic upstream tests, but service cleanup
++  // still owns the POSIX group rather than returning an unbounded leader wait.
++  const service = (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
++    lease?.kind === "lsp" || lease?.kind === "mcp"
 +  if (service && process.platform === "win32") {
-+    lease.release()
++    lease?.release()
 +    throw new Error("governed workspace services require POSIX process groups")
 +  }
 +  let proc: ReturnType<typeof launch>
@@ -951,7 +1166,7 @@ index 173210f..feb4a87 100644
 +    lease?.release()
 +    throw error
 +  }
-+  const owned = service && proc.pid ? ownServiceProcess(proc, lease!) : undefined
++  const owned = service && proc.pid ? ownServiceProcess(proc, lease) : undefined
 +  if (owned) services.set(proc, owned)
 +  else lease?.bindPid(proc.pid)
  
@@ -963,7 +1178,7 @@ index 173210f..feb4a87 100644
      if (closed) return
      if (proc.exitCode !== null || proc.signalCode !== null) return
      closed = true
-@@ -87,16 +109,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+@@ -87,16 +113,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
      const done = () => {
        opts.abort?.removeEventListener("abort", abort)
        if (timer) clearTimeout(timer)
@@ -985,7 +1200,7 @@ index 173210f..feb4a87 100644
      })
    })
    void exited.catch(() => undefined)
-@@ -147,6 +172,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
+@@ -147,6 +176,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
  // Duplicated in `packages/sdk/js/src/process.ts` because the SDK cannot import
  // `opencode` without creating a cycle. Keep both copies in sync.
  export async function stop(proc: ChildProcess) {
@@ -994,3 +1209,71 @@ index 173210f..feb4a87 100644
    if (proc.exitCode !== null || proc.signalCode !== null) return
  
    if (process.platform !== "win32" || !proc.pid) {
+diff --git a/packages/opencode/test/mcp/lifecycle.test.ts b/packages/opencode/test/mcp/lifecycle.test.ts
+index 80c8fd2..988c4df 100644
+--- a/packages/opencode/test/mcp/lifecycle.test.ts
++++ b/packages/opencode/test/mcp/lifecycle.test.ts
+@@ -1,6 +1,7 @@
+ import path from "node:path"
+ import { pathToFileURL } from "node:url"
+-import { expect } from "bun:test"
++import { expect, spyOn } from "bun:test"
++import { Process } from "../../src/util/process"
+ import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
+ import {
+@@ -499,32 +500,29 @@ it.instance("local stdio timeout terminates the real server process", () =>
+     const test = yield* TestInstance
+     const pidFile = path.join(test.directory, "mcp.pid")
+     const mcp = yield* MCP.Service
+-    const result = yield* mcp.add("hanging-stdio", {
+-      type: "local",
+-      command: [process.execPath, stdioFixture, "--hang"],
+-      environment: { MCP_LIFECYCLE_PID_FILE: pidFile },
+-      timeout: 100,
++    let child: Process.Child | undefined
++    const spawn = Process.spawn
++    const observer = spyOn(Process, "spawn").mockImplementation((cmd, opts) => {
++      const proc = spawn(cmd, opts)
++      if (opts?.env?.OPENCODE_TELEGRAM_PROCESS_KIND === "mcp") child = proc
++      return proc
+     })
+-
+-    expect(statusName(result.status, "hanging-stdio")).toBe("failed")
+-    const pid = yield* pollWithTimeout(
+-      Effect.promise(async () => {
+-        const file = Bun.file(pidFile)
+-        return (await file.exists()) ? Number(await file.text()) : undefined
+-      }),
+-      "stdio fixture did not publish its pid",
+-    )
+-    yield* pollWithTimeout(
+-      Effect.sync(() => {
+-        try {
+-          process.kill(pid, 0)
+-          return undefined
+-        } catch {
+-          return true
+-        }
+-      }),
+-      "stdio fixture process was not terminated",
+-    )
++    yield* Effect.gen(function* () {
++      const result = yield* mcp.add("hanging-stdio", {
++        type: "local", command: [process.execPath, stdioFixture, "--hang"],
++        environment: { MCP_LIFECYCLE_PID_FILE: pidFile }, timeout: 100,
++      })
++      expect(statusName(result.status, "hanging-stdio")).toBe("failed")
++      // Capture the OS identity at launch: immediate correct cleanup may occur
++      // before the child boots and writes a fixture PID file.
++      expect(child?.pid).toBeGreaterThan(0)
++      const pid = child!.pid!
++      const alive = yield* Effect.sync(() => {
++        try { process.kill(pid, 0); return true }
++        catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error }
++      })
++      expect(alive).toBe(false)
++    }).pipe(Effect.ensuring(Effect.sync(() => observer.mockRestore())))
+   }),
+ )
+ 
