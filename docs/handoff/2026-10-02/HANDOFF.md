@@ -1,3 +1,41 @@
+## Latest checkpoint: headless governor merged; LSP workspace candidate preserved
+
+Core main `640becc950605790b1fff368557885833886704a` includes PR #23.
+Bot remains frozen at main471f644a/pre.7; PR189 open/unmerged. Latest Core release
+pre.8; no RC/stable. Do not resume Bot until Core stable.
+
+PR23 candidate d0bbbe20: full upstream314 pass/2 expected skips, original cancellation
+repetitions, headless20 stress, compiled124344448-byte binary actual API probe (two
+shells/third rejected, physical pause, same-PID resume, abort-paused cleanup/capacity).
+CI37012834718 green; exact Railway native smoke4db9fb42 SUCCESS/native298/health.
+Main CI37013827781 and37014223822 green. Railway restored main/no pin/staged config;
+main deploymentd7aad224 sleeping normally. Existing smoke is native conformance,
+NOT actual OpenCode runtime resource/soak proof.
+
+Active worktree `/workspace/opencode-core-cancellation`, branch
+`fix/lsp-workspace-lifecycle`, pushed candidate `70676cdd32a7054ceeee69172f2449e569f7dd82`,
+draft PR24. Captured workspace owner registers initialization/installer processes
+before handle return; closing fences publication, aborts downloads/npm, joins bounded
+cleanup. Stalled startup retains helper admission until raw task settles; no late
+launch through cancelled owner. Three physical causal regressions reproduced defects.
+Patch0007 uses existing Bun vendor patch mechanism to stop make-fetch-happen retry
+operation on cancellation; real registry/download and scheduled-backoff tests passed,
+ordinary retries preserved. Exact dependency is @gar/promise-retry, which exposes
+its public RetryOperation as third callback argument; generic promise-retry review
+hypothesis was withdrawn after actual import-chain inspection.
+
+Initial full gate Core npm10/upstream320 pass/2 skip/1 fixture failure: immediate
+server socket-count assertion preceded TCP close event despite prompt cancellation.
+Corrected fixture joins actual close with unchanged5s bound. New timer spy confirms
+real60s backoff cleared; test overload typing corrected at70676c. Fresh full gate is
+running; no merge claim. Diagnostic index: scratch/lsp-workspace-full-upstream.log
+(initial), lsp-workspace-full-upstream-final.log (current), lsp focused/red files only
+when needed. Do not bulk-read historical diagnostic captures.
+
+Remaining Core gates: MCP startup/teardown/concurrency, PTY joined cleanup, explicit
+persistent custom-daemon ownership, measured resource baselines, repeated Linux
+stress, actual Railway runtime soak, artifact alignment/full audit before RC/stable.
+
 ## Latest checkpoint: MCP service ownership merged; Bot frozen
 
 Core main `adb98f639c52fcb8c9c45a5c0f6f9f435f355bcb` includes PR #22.

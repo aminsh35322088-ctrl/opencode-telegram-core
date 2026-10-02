@@ -87,6 +87,9 @@ async function main(): Promise<void> {
   process.env.OPENCODE = "1"
   process.env.OPENCODE_PID = String(process.pid)
   process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI = "true"
+  // This production profile owns admission independently of its Telegram client.
+  // Set before loading Server/runtime modules; inherited opt-out is not allowed.
+  process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
 
   const portText = optionValue("--port", process.env.PORT ?? "0")!
   const port = Number(portText)

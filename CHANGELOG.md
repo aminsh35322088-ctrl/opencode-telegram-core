@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enable process admission at standalone Telegram-headless server startup before loading runtime modules; inherited disabled flags cannot bypass the production governor.
+
 - Route MCP stdio through Core-owned workspace process groups with SDK framing, joined cleanup and retained admission; remove SDK launcher lease and best-effort descendant cleanup.
 
 - Governed LSP service shutdown joins isolated process-group cleanup and retains admission until terminal closure and confirmed death; failed cleanup keeps accounting.
