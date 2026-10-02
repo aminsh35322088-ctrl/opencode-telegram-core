@@ -1,0 +1,15 @@
+bun test v1.3.14 (0d9b296a)
+
+test\telegram\telegram-shell-tool.test.ts:
+(pass) the shell timeout counts active time while its parent is paused [1084.17ms]
+
+test\telegram\telegram-execution.test.ts:
+(pass) the live runner retains its fiber and result across a pause [15.77ms]
+(pass) runner cancellation interrupts a paused checkpoint [17.90ms]
+(pass) the subagent active deadline preserves paused work and resumes its existing fiber [66.49ms]
+(pass) an expired deadline interrupts work before running an asynchronous timeout handler [111.86ms]
+
+ 5 pass
+ 0 fail
+ 14 expect() calls
+Ran 5 tests across 2 files. [3.81s]

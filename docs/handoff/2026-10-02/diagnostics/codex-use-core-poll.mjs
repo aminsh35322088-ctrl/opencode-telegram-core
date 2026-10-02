@@ -1,0 +1,34 @@
+import fs from 'node:fs';
+const p='src/app/services/scheduled-task-executor-service.ts';
+let s=fs.readFileSync(p,'utf8').replaceAll('\r\n','\n');
+s='import { DeadlineExceededError } from "@opencode-telegram/native-runtime";\n'+s;
+s=s.replace('function sleep(ms: number): Promise<void> {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\n','');
+for(const name of ['loadPendingInteractiveRequest','rejectInteractiveRequest','failIfInteractiveRequest','loadAssistantResult']){
+ const start=s.indexOf('async function '+name+'(');const end=s.indexOf('): Promise',start);
+ s=s.slice(0,end)+s.slice(end).replace('): Promise','  signal: AbortSignal,\n): Promise');
+}
+s=s.replace('question.list({ directory })','question.list({ directory }, { signal })').replace('permission.list({ directory })','permission.list({ directory }, { signal })');
+s=s.replace('loadPendingInteractiveRequest(sessionId, directory)','loadPendingInteractiveRequest(sessionId, directory, signal)');
+s=s.replace('rejectInteractiveRequest(interactiveRequest, directory)','rejectInteractiveRequest(interactiveRequest, directory, signal)');
+s=s.replace('        directory,\n      });','        directory,\n      }, { signal });');
+s=s.replace('      message: INTERACTIVE_PERMISSION_REJECT_MESSAGE,\n    });','      message: INTERACTIVE_PERMISSION_REJECT_MESSAGE,\n    }, { signal });');
+s=s.replace('    sessionID: sessionId,\n    directory,\n  });','    sessionID: sessionId,\n    directory,\n  }, { signal });');
+const a=s.indexOf('async function waitForScheduledTaskResult('),b=s.indexOf('async function executeScheduledTaskWithinCore(',a);
+let section=s.slice(a,b);
+section=section.replace('  signal: AbortSignal,','  context: CoreOwnedTaskContext,').replace('  const startedAtMs = Date.now();\n','');
+section=section.replace('  while (true) {\n    signal.throwIfAborted();\n    if (Date.now() - startedAtMs >= executionTimeoutMs) {\n      throw new Error(createExecutionTimeoutMessage());\n    }\n','  return context.poll<string>(async (signal) => {');
+section=section.replaceAll('failIfInteractiveRequest(taskId, sessionId, directory)','failIfInteractiveRequest(taskId, sessionId, directory, signal)').replaceAll('loadAssistantResult(sessionId, directory)','loadAssistantResult(sessionId, directory, signal)');
+section=section.replace('return assistantResult.resultText;','return { status: "complete", value: assistantResult.resultText };').replace('return confirmedAssistantResult.resultText;','return { status: "complete", value: confirmedAssistantResult.resultText };');
+section=section.replaceAll('await sleep(COMPLETED_EMPTY_RESULT_RECHECK_INTERVAL_MS);\n      continue;','return { status: "pending", retryAfterMs: COMPLETED_EMPTY_RESULT_RECHECK_INTERVAL_MS };').replaceAll('await sleep(COMPLETED_EMPTY_RESULT_RECHECK_INTERVAL_MS);\n        continue;','return { status: "pending", retryAfterMs: COMPLETED_EMPTY_RESULT_RECHECK_INTERVAL_MS };');
+section=section.replace('      directory,\n    });','      directory,\n    }, { signal });');
+section=section.replace('    await sleep(EXECUTION_POLL_INTERVAL_MS);\n  }','    return { status: "pending" };\n  }, {\n    timeoutMs: executionTimeoutMs,\n    intervalMs: EXECUTION_POLL_INTERVAL_MS,\n    maxAttempts: Math.ceil(executionTimeoutMs / COMPLETED_EMPTY_RESULT_RECHECK_INTERVAL_MS) + 1,\n  }).catch((error: unknown) => {\n    if (error instanceof DeadlineExceededError) throw new Error(createExecutionTimeoutMessage());\n    throw error;\n  });');
+s=s.slice(0,a)+section+s.slice(b);
+s=s.replace('            session.directory,\n            signal,','            session.directory,\n            context,');
+fs.writeFileSync(p,s);
+const t='.github/ci-tests/tests/app/services/scheduled-task-executor-service.test.ts';
+let test=fs.readFileSync(t,'utf8').replaceAll('\r\n','\n');
+test=test.replace('import type { OpenCodeTaskContext }','import { pollRunResult, type RunIdentity, type OpenCodeTaskContext }');
+test=test.replace('_run: unknown,','run: RunIdentity,').replace('            setAbortTarget: mocked.setAbortTargetMock,','            setAbortTarget: mocked.setAbortTargetMock,\n            poll: (read, options) => pollRunResult(run, read, { ...options, signal: new AbortController().signal, isCurrent: () => true }),');
+test=test.replace('      requestID: "question-1",\n      directory: path.resolve("/workspace/scheduled-task"),\n    });','      requestID: "question-1",\n      directory: path.resolve("/workspace/scheduled-task"),\n    }, expect.objectContaining({ signal: expect.any(AbortSignal) }));');
+test=test.replace('      message: "Scheduled task cannot continue because it requires interactive permission.",\n    });','      message: "Scheduled task cannot continue because it requires interactive permission.",\n    }, expect.objectContaining({ signal: expect.any(AbortSignal) }));');
+fs.writeFileSync(t,test);
