@@ -93,6 +93,16 @@ describe("inline rich text tree", () => {
     }
   });
 
+  test("unsafe programmatic URLs degrade to visible text", () => {
+    const document: AgentDocument = {
+      blocks: [{
+        type: "paragraph",
+        text: { type: "url", text: "profile", url: "tg://user?id=42" },
+      }],
+    };
+    expect(richTextOf(renderTelegramRichDocument(document, { draft: false }))).toBe("profile");
+  });
+
   test("url, email and phone carry their payload field", () => {
     const cases: Array<[AgentInline, Record<string, unknown>]> = [
       [{ type: "url", text: "site", url: "https://example.com" }, { type: "url", text: "site", url: "https://example.com" }],

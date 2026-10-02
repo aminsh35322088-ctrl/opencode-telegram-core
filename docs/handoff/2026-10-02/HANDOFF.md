@@ -233,3 +233,37 @@ needs isolated latest-main CI and Railway smoke before integration/release. Main
 was still `ef655249`; PR #15 was `c36cc274` with two green checks. Production Bot
 remains on its existing deployment and pre.7 pin. Renderer refresh, aligned release,
 Bot adoption, resource measurements and RC/soak gates remain pending.
+
+
+## Verified integration milestone (2026-10-02)
+
+- Cancellation PR #16 merged at `da4f28ab9c86b1bc9949f0635426caf85a6dac22`.
+  PR CI run `36975712031` and main CI `36976156363` both passed validate and
+  upstream-runtime. Railway main smoke `93c6d6cb-707f-49ee-bc28-a53bad4ca57b`
+  reached SUCCESS with 238 runtime tests and healthcheck success.
+- Twenty additional repetitions of each original focused shell case all passed;
+  none reported a process-release watchdog stall. Two watchdog snapshots instead
+  showed setup waiting in FileSystem.readJson with no child under concurrent build
+  load. These remain separate latency observations, not optimization evidence.
+- Renderer PR #15 was refreshed at `fcef14bb7097335891be4a4d01a8619179f8a575`
+  against `da4f28ab`, retaining current cancellation patches unchanged. Native
+  typecheck/298 tests, upstream typecheck/SDK surface/160 tests (2 expected skips)
+  plus five focused repeats, and 24 toolchain contracts passed locally. GitHub
+  run `36976562712` passed both required jobs. Narrow independent integration
+  review found no issues and confirmed unchanged renderer source/guards.
+- Exact-candidate Railway smoke `3d2eae5e-61e1-4b8b-967b-d47654f4f438` reached
+  SUCCESS with metadata SHA `fcef14bb` and healthcheck success. Bounded candidate
+  build logs contained image export/health records, without a new test-count
+  summary; the 298 test result is local/CI evidence. Source config was restored
+  exactly to repo/main/checkSuites=false with no temporary commitSha pin or staged
+  changes. Restoration itself triggered a smoke-only main deployment. No Bot
+  deployment/config was changed.
+- PR #15 merged at current main `983bbcfb8bb3b088faa08e92e664001d48e6cc5b`.
+  Post-merge main CI/smoke still need observation. The handoff checkpoint carries
+  this main forward without dropping its existing ShellTool active-time timeout
+  WIP or diagnostics. That WIP is still separate from verified/released main.
+- Published Core remains `v1.18.33-bot.13-pre.7`. Bot main remains `471f644a`,
+  version 0.26.2, pre.7 pin, unchanged production. Next prerelease needs the
+  existing compatibility/artifact verification workflow. Bot adoption, OS pause
+  integration for intended processes, persistent-daemon ownership, measured
+  resource pass, ownership/stability audit and RC production soak remain gates.

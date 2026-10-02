@@ -4,11 +4,17 @@
 
 These entries describe prerelease development, not final v1 release notes.
 
+- Enforce combined block/inline nesting and actual quote/container block costs, preserve credits within text budgets, account for cumulative table spans/rowspans and safely flatten oversized spanning tables.
+- Port PR #15 onto current pause/process/provenance architecture without its superseded shell cancellation patch. Reject non-finite, fractional, non-positive and oversized renderer budgets; verify pause between final chunks retains the same owned draft.
+
 - Capture original root/producer run provenance at Core event publication, preserve it through live SSE/global delivery and SDK schemas, and require it for native execution routing. Completion/cancellation snapshots retain retired ownership; ordinary completion honors pause even without pending tools. Bot adoption remains gated on a verified aligned prerelease.
 
 - Settle Runner cancellation when shell work finishes without opening readiness; cancel queued work without retaining a dead wait.
 - Share bounded process termination between scope cleanup and explicit kill, retain governor admission through uncertain cleanup and post-spawn errors, and preserve output completion at `close`. Make output-reader listener attachment and cleanup registration atomic with cancellation, preventing a leaked reader from suppressing Linux/Bun terminal close. Candidate CI and Railway verification remain required.
 
+- Add a Core-owned Telegram-native document renderer: parse GFM plus Telegram Rich Markdown/HTML into semantic `AgentDocument` blocks, including math, custom emoji/time, references/anchors, media/figures, rich tables/lists, expandable quotes, details, collage/slideshow, maps and trusted interactive buttons; sanitize unsafe/untrusted links and actions, normalize Telegram Rich Message limits, and chunk final responses without breaking code, tables, lists, captions, credits, or grapheme clusters.
+- Add Persian/RTL BiDi normalization for mixed-script output: auto-detect document direction, isolate LTR/RTL inline runs with Unicode LRI/RLI/PDI controls, align table cells by content direction, preserve code bytes, strip untrusted BiDi controls from prose, and mark streamed Persian Rich Markdown drafts as RTL.
+- Persist finalized Markdown as explicit Telegram Rich Blocks while retaining native Rich Markdown for incremental draft streaming and exact-run Stop fencing.
 - Add Core-owned result polling with immutable run identity, cancellation, finite deadlines/attempts and stale-result rejection.
 - Expose polling through the owned Topic task context, without allowing the application to replace its run fence.
 - Fix deadline handling so pre-aborted parents cannot start work and cancellation rejects uncooperative requests promptly.

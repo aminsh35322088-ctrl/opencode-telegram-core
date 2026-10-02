@@ -1,17 +1,12 @@
-import type { User } from "grammy/types";
+import type { RichMessageButton, User } from "grammy/types";
 
-/**
- * Inline rich text, mirroring the Bot API `RichText` tree.
- *
- * Telegram models inline formatting as a recursive value: a bare string, a
- * concatenation of values, or one of the typed nodes below, each of which
- * nests further values. A plain `string` is always valid, so a caller that
- * only needs unformatted text keeps working unchanged.
- *
- * The node set is the subset a bot may *send*; the remaining `RichText*`
- * variants Telegram only produces (references, bank cards, date times,
- * hashtags, cashtags, bot commands, buttons and anchors) are not authorable.
- */
+export type AgentDateTimeFormat =
+  | "r" | "" | "w" | "d" | "D" | "t" | "T"
+  | "wd" | "wD" | "wt" | "wT"
+  | "dt" | "dT" | "Dt" | "DT"
+  | "wdt" | "wdT" | "wDt" | "wDT";
+
+/** Semantic inline rich text mirroring Telegram Bot API RichText. */
 export type AgentInline =
   | string
   | readonly AgentInline[]
@@ -24,14 +19,22 @@ export type AgentInline =
   | { readonly type: "superscript"; readonly text: AgentInline }
   | { readonly type: "marked"; readonly text: AgentInline }
   | { readonly type: "code"; readonly text: AgentInline }
+  | { readonly type: "directional_isolate"; readonly direction: "ltr" | "rtl" | "auto"; readonly text: AgentInline }
   | { readonly type: "math"; readonly expression: string }
+  | { readonly type: "date_time"; readonly text: AgentInline; readonly unixTime: number; readonly format: AgentDateTimeFormat }
   | { readonly type: "url"; readonly text: AgentInline; readonly url: string }
+  | { readonly type: "telegram_user_link"; readonly text: AgentInline; readonly userId: string }
   | { readonly type: "email"; readonly text: AgentInline; readonly email: string }
   | { readonly type: "phone"; readonly text: AgentInline; readonly phone: string }
+  | { readonly type: "bank_card"; readonly text: AgentInline; readonly bankCard: string }
   | { readonly type: "mention"; readonly text: AgentInline; readonly username: string }
   | { readonly type: "text_mention"; readonly text: AgentInline; readonly user: User }
-  | {
-      readonly type: "custom_emoji";
-      readonly customEmojiId: string;
-      readonly alternativeText: string;
-    };
+  | { readonly type: "hashtag"; readonly text: AgentInline; readonly hashtag: string }
+  | { readonly type: "cashtag"; readonly text: AgentInline; readonly cashtag: string }
+  | { readonly type: "bot_command"; readonly text: AgentInline; readonly botCommand: string }
+  | { readonly type: "anchor"; readonly name: string }
+  | { readonly type: "anchor_link"; readonly text: AgentInline; readonly anchorName: string }
+  | { readonly type: "reference"; readonly text: AgentInline; readonly name: string }
+  | { readonly type: "reference_link"; readonly text: AgentInline; readonly referenceName: string }
+  | { readonly type: "button"; readonly button: RichMessageButton }
+  | { readonly type: "custom_emoji"; readonly customEmojiId: string; readonly alternativeText: string };

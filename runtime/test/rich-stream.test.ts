@@ -75,7 +75,51 @@ describe("Telegram-native rich rendering", () => {
     expect(draftId).not.toBeNull();
     expect(port.drafts[0]?.message.markdown).toBe(markdown);
     expect(await controller.finalizeMarkdown(run, route, draftId!, markdown)).toBe(true);
-    expect(port.finals[0]?.message.markdown).toBe(markdown);
+    const blocks = port.finals[0]?.message.blocks ?? [];
+    expect(blocks.map((block) => block.type)).toEqual(["heading", "table", "pre"]);
+    expect((blocks[2] as { language?: string }).language).toBe("ts");
+  });
+
+  test("final Markdown larger than one Rich Message persists as fenced native chunks", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    const run = runs.start(b, 1, "large-final");
+    const port = new FakePort();
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
+    const route = { chatId: 100, messageThreadId: 11 };
+    const markdown = "word ".repeat(9000);
+
+    const draftId = await controller.startMarkdown(run, route, "working");
+    expect(draftId).not.toBeNull();
+    expect(await controller.finalizeMarkdown(run, route, draftId!, markdown)).toBe(true);
+    expect(port.finals.length).toBeGreaterThan(1);
+    expect(port.finals.every((item) => item.message.blocks !== undefined)).toBe(true);
+  });
+
+  test("multi-message finalization stops before a late chunk after the binding is fenced", async () => {
+    const bindings = new BindingRegistry();
+    const b = binding();
+    bindings.register(b);
+    const runs = new RunRegistry();
+    const run = runs.start(b, 1, "fenced-final");
+    const route = { chatId: 100, messageThreadId: 11 };
+    let finals = 0;
+    const port: RichMessagePort = {
+      async sendDraft() {},
+      async sendFinal() {
+        finals += 1;
+        if (finals === 1) bindings.fence(b.bindingId);
+      },
+    };
+    const controller = new TelegramRichStreamController(bindings, runs, port, async () => undefined);
+
+    const draftId = await controller.startMarkdown(run, route, "working");
+    expect(draftId).not.toBeNull();
+    const result = await controller.finalizeMarkdown(run, route, draftId!, "word ".repeat(9000));
+    expect(result).toBe(false);
+    expect(finals).toBe(1);
   });
 
   test("native streaming revalidates durable binding before every pushed chunk", async () => {
@@ -216,7 +260,9 @@ describe("streamed draft lease lifetime", () => {
     const persisted = await controller.finalizeMarkdown(run, route, draftId, "hello world");
     expect(persisted).toBe(true);
     expect(port.finals).toHaveLength(1);
-    expect(port.finals[0]?.message.markdown).toBe("hello world");
+    expect(port.finals[0]?.message.blocks).toEqual([
+      { type: "paragraph", text: "hello world" },
+    ]);
   });
 
   test("a fenced stream leaves no lease and no final message", async () => {
