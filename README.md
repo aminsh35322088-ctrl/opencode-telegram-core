@@ -20,7 +20,7 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 - Release: `v1.18.33`
 - Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.33-bot.13-pre.7`
+- Telegram Core version: `1.18.33-bot.13-pre.8`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -32,7 +32,7 @@ The machine-readable upstream/release source of truth is `upstream/lock.json`. M
 
 The migration remains on prereleases. See [migration and release gates](docs/MIGRATION_TO_V1.md) and [owned result polling](docs/RESULT_POLLING.md). Stable publication requires the complete ownership audit and a healthy production RC soak.
 
-Unreleased source also contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, fail-closed recovery, and a native acknowledgment adapter that holds tasks and Telegram delivery. Core publisher provenance preserves original root/producer identity through live events; `SessionEventRouter.resolveExecution` requires that metadata and returns a complete run fence for execution delivery. A [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md) has passed Linux process-group regressions. Aligned artifact verification, Bot pause/tool/event migration and persistent-daemon ownership remain release blockers.
+The pre.8 prerelease contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, fail-closed recovery, and a native acknowledgment adapter that holds tasks and Telegram delivery. Core publisher provenance preserves original root/producer identity through live events; `SessionEventRouter.resolveExecution` requires that metadata and returns a complete run fence for execution delivery. A [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md) has passed Linux process-group regressions. The aligned runtime/SDK/native artifacts were verified and published from `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`; the headless runtime is 124,340,352 bytes within its 140,000,000-byte budget. Bot pause/tool/event migration, intended shell-process suspension and persistent-daemon ownership remain release gates.
 
 The native runtime is under `runtime/`. Its main contracts include:
 

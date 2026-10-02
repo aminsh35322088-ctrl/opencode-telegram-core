@@ -12,7 +12,7 @@ All runtime implementations below belong in this repository. Bot changes are lim
 
 Use focused changes and red/green regression tests per task. Keep SDK, native library and Linux runtime aligned in each immutable prerelease. Document API changes and migration notes in README/CHANGELOG; final public release notes remain deferred.
 
-The unreleased [custom-tool process contract](CUSTOM_TOOL_PROCESSES.md) now reaches
+The pre.8 prerelease [custom-tool process contract](CUSTOM_TOOL_PROCESSES.md) now reaches
 the existing plugin registry using captured runtime context and the authoritative
 governor. Portable and Linux process-group regressions cover ownership, pause,
 cancellation and admission races. Persistent-daemon ownership remains a blocker
@@ -20,7 +20,7 @@ before complete Bot tool migration and release.
 
 ### Pause integration boundaries
 
-The Bot currently uses the upstream legacy `SessionPrompt`/`SessionRunState` execution path. Live gates now integrate there in unreleased source, with the runtime control API, model phase fencing, and retained background task ownership covered by Core tests. See [the pause contract and remaining gates](PAUSE_RESUME.md). The shared execution authority runs in the upstream runtime; native clients consume its API. The published Bot pin remains pre.7 while native/process/delivery integration is incomplete.
+The Bot currently uses the upstream legacy `SessionPrompt`/`SessionRunState` execution path. Live gates now integrate there in the pre.8 prerelease, with the runtime control API, model phase fencing, and retained background task ownership covered by Core tests. See [the pause contract and remaining gates](PAUSE_RESUME.md). The shared execution authority runs in the upstream runtime; native clients consume its API. The published Bot pin remains pre.7 while native/process/delivery integration is incomplete.
 
 The native source now serializes control requests against existing exact worker
 targets and mirrors only valid runtime acknowledgments. Pending/uncertain requests
@@ -64,7 +64,14 @@ run 36975712031 passed both required jobs; Railway deployment
 `93c6d6cb-707f-49ee-bc28-a53bad4ca57b` on `da4f28ab` passed 238 tests and health.
 An additional 20 repeats of both focused cases had no process-release stalls;
 two setup/readJson delays were observed under concurrent build load. The refreshed
-renderer still needs its own full CI and actual-candidate Railway smoke. The first local upstream run also failed two custom-process tests because
+renderer passed GitHub run 36976562712 and exact-candidate Railway smoke
+`3d2eae5e-61e1-4b8b-967b-d47654f4f438` with health success, then merged at
+`983bbcfb8bb3b088faa08e92e664001d48e6cc5b`. Main CI 36977388377 and main smoke
+`39a759b3-2110-4204-b035-0752112a9970` passed. The pre.8 compatibility unit is verified and published from
+`f110bd25419b6bedc40db36e9ae929bc4e52b9ac` by release workflow `36979098365`.
+Independent download checksum and runtime/SDK/native identity checks passed;
+Bot pin/adoption work can now proceed. The first local
+upstream run also failed two custom-process tests because
 this cloud container PID 1 retained dead descendants as zombies. A test-only Linux
 subreaper restored all 14 applicable custom-process tests; production cleanup code
 was not weakened. Full local verification under that reaper is separate evidence.
@@ -113,9 +120,9 @@ during merged-output admission and requires terminal close without cleanup defec
 Existing fixtures still cover missing close, failed TERM delivery, explicit kill
 and trailing output. The deterministic regression, Linux stress, full verification,
 GitHub CI and actual-main Railway smoke cited above resolve this specific fault.
-The refreshed renderer candidate still requires its own CI and Railway smoke;
-Bot adoption and the remaining release gates stay open. A passing rerun alone is
-insufficient.
+The refreshed renderer has passed its own CI and exact-candidate Railway smoke.
+Aligned pre.8 artifact verification/publication is complete. Bot adoption and
+the remaining release gates stay open. A passing rerun alone is insufficient.
 
 After all three tasks, audit both repositories for duplicated Core responsibilities, unjustified shims, bypass routes, ambiguous identity, General/ALL execution, stale/late delivery, lifecycle ownership and artifact identity.
 

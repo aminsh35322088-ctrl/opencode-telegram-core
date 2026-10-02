@@ -1,4 +1,4 @@
-# Custom-tool process capability (unreleased)
+# Custom-tool process capability (pre.8 prerelease)
 
 Core supplies `context.process.execFile(command, args, options)` to custom tools
 at the existing plugin registry boundary. It captures the actual runtime lease,
@@ -40,5 +40,6 @@ treated as governed solely because its launcher was admitted. Existing MCP/LSP/
 PTY services retain their existing service lifetimes; this capability does not
 attach those shared services to individual model runs.
 
-The Bot's raw custom-tool calls have not yet been migrated. This is an unreleased
-Core contract, not a declaration that custom-tool governance or v1 is complete.
+The Bot's raw custom-tool calls have not yet been migrated. The aligned pre.8
+artifacts passed verification and are published from `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`.
+The capability is not a declaration that Bot custom-tool governance or v1 is complete.
