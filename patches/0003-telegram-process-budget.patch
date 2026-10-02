@@ -798,10 +798,18 @@ index 05f12fa..3376921 100644
      })
  
 diff --git a/packages/opencode/src/tool/shell.ts b/packages/opencode/src/tool/shell.ts
-index 1e4423e..2171220 100644
+index 1e4423e..a9cd836 100644
 --- a/packages/opencode/src/tool/shell.ts
 +++ b/packages/opencode/src/tool/shell.ts
-@@ -291,10 +291,14 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
+@@ -13,6 +13,7 @@ import { fileURLToPath } from "url"
+ import { Config } from "@/config/config"
+ import { RuntimeFlags } from "@/effect/runtime-flags"
+ import { Shell } from "@opencode-ai/core/shell"
++import { activeDeadline } from "@opencode-ai/core/telegram-execution-context"
+ import { ShellID } from "./shell/id"
+ 
+ import * as Truncate from "./truncate"
+@@ -291,10 +292,14 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
  })
  
  function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
@@ -817,7 +825,7 @@ index 1e4423e..2171220 100644
        stdin: "ignore",
        detached: false,
      })
-@@ -303,7 +307,7 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
+@@ -303,7 +308,7 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
    return ChildProcess.make(command, [], {
      shell,
      cwd,
@@ -826,6 +834,15 @@ index 1e4423e..2171220 100644
      stdin: "ignore",
      detached: process.platform !== "win32",
    })
+@@ -537,7 +542,7 @@ export const ShellTool = Tool.define(
+             return Effect.sync(() => ctx.abort.removeEventListener("abort", handler))
+           })
+ 
+-          const timeout = Effect.sleep(`${input.timeout + 100} millis`)
++          const timeout = activeDeadline(Effect.never, input.timeout + 100, Effect.void)
+ 
+           const exit = yield* Effect.raceAll([
+             handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
 diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
 index 173210f..47b8041 100644
 --- a/packages/opencode/src/util/process.ts
