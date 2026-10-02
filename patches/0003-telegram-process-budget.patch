@@ -11,7 +11,7 @@ index 5488a1d..c51ea2e 100644
    },
    "imports": {
 diff --git a/packages/core/src/cross-spawn-spawner.ts b/packages/core/src/cross-spawn-spawner.ts
-index 6ea9022..fd24867 100644
+index 6ea9022..d6b70c8 100644
 --- a/packages/core/src/cross-spawn-spawner.ts
 +++ b/packages/core/src/cross-spawn-spawner.ts
 @@ -1,6 +1,7 @@
@@ -22,15 +22,18 @@ index 6ea9022..fd24867 100644
  import * as Deferred from "effect/Deferred"
  import * as Effect from "effect/Effect"
  import * as Exit from "effect/Exit"
-@@ -26,6 +27,7 @@ import { PassThrough } from "node:stream"
+@@ -26,6 +27,10 @@ import { PassThrough } from "node:stream"
  import launch from "cross-spawn"
  import { makeGlobalNode } from "./effect/app-node"
  import { filesystem, path } from "./effect/app-node-platform"
-+import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled } from "./telegram-process-budget"
++import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled, classifyTelegramProcess } from "./telegram-process-budget"
++import { CurrentTelegramExecution, CurrentTelegramEpoch } from "./telegram-execution-context"
++import type { SessionExecutionLease } from "./session-execution-control"
++import { ownShellProcess } from "./telegram-owned-process"
  
  const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
  
-@@ -76,6 +78,18 @@ const flatten = (command: ChildProcess.Command) => {
+@@ -76,6 +81,18 @@ const flatten = (command: ChildProcess.Command) => {
    }
  }
  
@@ -49,7 +52,7 @@ index 6ea9022..fd24867 100644
  const toPlatformError = (
    method: string,
    err: NodeJS.ErrnoException,
-@@ -202,10 +216,7 @@ export const make = Effect.gen(function* () {
+@@ -202,10 +219,7 @@ export const make = Effect.gen(function* () {
              const tap = new PassThrough()
              node.on("error", (err) => tap.destroy(toError(err)))
              node.pipe(tap)
@@ -61,10 +64,10 @@ index 6ea9022..fd24867 100644
            }
            if (x.config.sink) stream = Stream.transduce(stream, x.config.sink)
            outs.set(x.fd, stream)
-@@ -239,6 +250,23 @@ export const make = Effect.gen(function* () {
+@@ -239,6 +253,23 @@ export const make = Effect.gen(function* () {
        return Effect.succeed(sink)
      })
-
+ 
 +  // Listener attachment and finalizer registration must be atomic with respect
 +  // to interruption. An orphaned readable listener prevents Bun's exit-time
 +  // resume from draining the pipe, so the process never emits close.
@@ -85,7 +88,7 @@ index 6ea9022..fd24867 100644
    const setupOutput = (
      command: ChildProcess.StandardCommand,
      proc: NodeChildProcess.ChildProcess,
-@@ -246,16 +274,10 @@ export const make = Effect.gen(function* () {
+@@ -246,16 +277,10 @@ export const make = Effect.gen(function* () {
      err: ChildProcess.StderrConfig,
    ) => {
      let stdout = proc.stdout
@@ -102,10 +105,15 @@ index 6ea9022..fd24867 100644
 -        })
 +      ? processOutput(proc.stderr, command, "fromReadable(stderr)")
        : Stream.empty
-
+ 
      if (Sink.isSink(out.stream)) stdout = Stream.transduce(stdout, out.stream)
-@@ -267,21 +289,73 @@ export const make = Effect.gen(function* () {
-   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
+@@ -264,13 +289,74 @@ export const make = Effect.gen(function* () {
+     return { stdout, stderr, all: Stream.merge(stdout, stderr) }
+   }
+ 
+-  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
++  const owned = new WeakMap<NodeChildProcess.ChildProcess, ReturnType<typeof ownShellProcess>>()
++  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions, execution?: SessionExecutionLease, epoch?: number) =>
      Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
        const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
 -      const proc = launch(command.command, command.args, opts)
@@ -146,14 +154,28 @@ index 6ea9022..fd24867 100644
 +        return Effect.void
 +      }
 +
++      const controlled = lease?.kind === "shell" && execution !== undefined && epoch !== undefined
++      if (controlled && (process.platform === "win32" || !opts.detached)) {
++        lease?.release()
++        resume(Effect.fail(toPlatformError("spawn", new Error("owned shell requires an isolated POSIX process group"), command)))
++        return Effect.void
++      }
 +      let proc: NodeChildProcess.ChildProcess
 +      try {
++        if (controlled) execution.assertOwned(epoch)
 +        proc = launch(command.command, command.args, opts)
 +      } catch (error) {
 +        lease?.release()
 +        throw error
 +      }
 +
++      const ownership = controlled && proc.pid ? ownShellProcess(proc, execution, epoch, lease!) : undefined
++      if (ownership) owned.set(proc, ownership)
++      const releaseLease = () => {
++        if (!ownership) { lease?.release(); return }
++        ownership.closed()
++        void ownership.cleanup().catch(() => {}) // The scope joins this same failure.
++      }
        let end = false
 +      let spawned = false
        let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
@@ -162,25 +184,28 @@ index 6ea9022..fd24867 100644
          resume(Effect.fail(toPlatformError("spawn", err, command)))
        })
        proc.on("exit", (...args) => {
-         exit = args
-       })
-       proc.on("close", (...args) => {
--        if (end) return
-+        if (end) {
-+          lease?.release()
-+          return
-+        }
+@@ -280,9 +366,19 @@ export const make = Effect.gen(function* () {
+         if (end) return
          end = true
          Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
-+        lease?.release()
++        releaseLease()
        })
        proc.on("spawn", () => {
+-        resume(Effect.succeed([proc, signal]))
 +        spawned = true
 +        lease?.bindPid(proc.pid, true)
-         resume(Effect.succeed([proc, signal]))
++        try {
++          ownership?.attach()
++          resume(Effect.succeed([proc, signal]))
++        } catch (error) {
++          // Acquisition failed after launch; retain admission until group cleanup.
++          void ownership?.cleanup().catch(() => {})
++          resume(Effect.fail(toPlatformError("spawn", toError(error), command)))
++        }
        })
        return Effect.sync(() => {
-@@ -342,6 +416,33 @@ export const make = Effect.gen(function* () {
+         proc.kill("SIGTERM")
+@@ -342,6 +438,37 @@ export const make = Effect.gen(function* () {
        })
      }
  
@@ -189,9 +214,13 @@ index 6ea9022..fd24867 100644
 +    command: ChildProcess.StandardCommand,
 +    closed: ExitSignal,
 +    opts?: ChildProcess.KillOptions,
++    ownership?: ReturnType<typeof ownShellProcess>,
 +  ) => {
 +    const send = (signal: NodeJS.Signals) =>
-+      Effect.catch(killGroup(command, proc, signal), () => killOne(command, proc, signal)).pipe(
++      (ownership ? Effect.try({
++        try: () => ownership.signal(signal),
++        catch: (error) => toPlatformError("kill", toError(error), command),
++      }) : Effect.catch(killGroup(command, proc, signal), () => killOne(command, proc, signal))).pipe(
 +        // A signal can race with exit. Still require the terminal notification.
 +        Effect.catch(() => Effect.void),
 +      )
@@ -214,16 +243,41 @@ index 6ea9022..fd24867 100644
    const source = (handle: ChildProcessHandle, from: ChildProcess.PipeFromOption | undefined) => {
      const opt = from ?? "stdout"
      switch (opt) {
-@@ -379,7 +480,7 @@ export const make = Effect.gen(function* () {
+@@ -370,16 +497,30 @@ export const make = Effect.gen(function* () {
+           const extra = fds(command.options)
+           const dir = yield* cwd(command.options)
+ 
++          const processEnv = env(command.options)
++          const captured = yield* CurrentTelegramExecution
++          // Host cleanup utilities keep their existing bounded cleanup authority.
++          // Only governed execution-owned shells inherit the run's admission gate.
++          const execution = isTelegramProcessBudgetEnabled() &&
++            classifyTelegramProcess(command.command, processEnv, undefined, Boolean(command.options.shell)) === "shell"
++            ? captured : undefined
++          const epoch = (yield* CurrentTelegramEpoch) ?? execution?.epoch
++          if (execution) yield* Effect.promise((signal) => execution.checkpoint(signal, epoch))
+           const [proc, signal] = yield* Effect.acquireRelease(
+             spawn(command, {
+               cwd: dir,
+-              env: env(command.options),
++              env: processEnv,
+               stdio: stdios(sin, sout, serr, extra),
+               detached: command.options.detached ?? process.platform !== "win32",
                shell: command.options.shell,
                windowsHide: process.platform === "win32",
-             }),
+-            }),
 -            Effect.fnUntraced(function* ([proc, signal]) {
++            }, execution, epoch),
 +            Effect.fn("CrossSpawnSpawner.release")(function* ([proc, signal]) {
++              const ownership = owned.get(proc)
++              if (ownership) return yield* Effect.tryPromise({
++                try: () => ownership.cleanup(),
++                catch: (error) => toPlatformError("release", toError(error), command),
++              }).pipe(Effect.orDie)
                const done = yield* Deferred.isDone(signal)
                const kill = timeout(proc, command, command.options)
                if (done) {
-@@ -388,17 +489,7 @@ export const make = Effect.gen(function* () {
+@@ -388,17 +529,7 @@ export const make = Effect.gen(function* () {
                  if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
                  return yield* Effect.void
                }
@@ -242,11 +296,10 @@ index 6ea9022..fd24867 100644
              }),
            )
  
-@@ -424,17 +515,7 @@ export const make = Effect.gen(function* () {
-                 ),
+@@ -425,15 +556,13 @@ export const make = Effect.gen(function* () {
                )
              }),
--            kill: (opts?: ChildProcess.KillOptions) => {
+             kill: (opts?: ChildProcess.KillOptions) => {
 -              const sig = opts?.killSignal ?? "SIGTERM"
 -              const send = (s: NodeJS.Signals) =>
 -                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
@@ -256,12 +309,16 @@ index 6ea9022..fd24867 100644
 -                duration: opts.forceKillAfter,
 -                orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
 -              })
--            },
-+            kill: (opts?: ChildProcess.KillOptions) => terminate(proc, command, signal, opts),
++              const ownership = owned.get(proc)
++              return terminate(proc, command, signal, opts, ownership).pipe(Effect.andThen(
++                ownership ? Effect.tryPromise({
++                  try: () => ownership.cleanup(),
++                  catch: (error) => toPlatformError("kill", toError(error), command),
++                }) : Effect.void,
++              ))
+             },
              unref: Effect.sync(() => {
                if (ref) {
-                 proc.unref()
-
 diff --git a/packages/core/src/pty.ts b/packages/core/src/pty.ts
 index e5be4d4..82b8aa4 100644
 --- a/packages/core/src/pty.ts

@@ -127,12 +127,30 @@ After all three tasks, audit both repositories for duplicated Core responsibilit
 
 The stability pass must exercise concurrent Topics/sub-agents; pause/resume and parent abort; rotate/delete and crash/recovery; request/transport failure; scheduled tasks; file/tool/SSH isolation; custom processes; polling cancellation/timeout; memory pressure; SQLite recovery and restarts. Run both complete CI suites, all builds, artifact/install verification and Railway Core smoke. A Windows directory-fsync limitation is not a Linux production workaround.
 
-## Release sequence
+## Release sequence (Core-first stable, 2026-10-02)
 
-1. Remain on `v1.18.33-bot.13-pre.x` while any migration blocker remains.
-2. When the audit, stability matrix and both CI suites pass with clean repositories, prepare Core `v1.18.33-bot.13-rc.1` and Bot `1.0.0-rc.1`.
-3. Deploy the RC to Railway and record real usage/soak evidence: versions/commit identities, duration, scenarios, crashes/restarts, resource trends, leaked processes/sessions and routing failures. Synthetic CI and smoke alone do not qualify as production soak.
-4. Significant regressions require another prerelease/RC and repeat validation.
-5. Stable publication is gated on no known high-severity blocker or architecture workaround, clean ownership, aligned artifacts, complete documentation and verified upgrade/install paths. Prepare final notes only at that gate, then publish Core `v1.18.33-bot.13`, verify the Bot's stable pin and full suite, and publish Bot `v1.0.0`.
+Bot migration is frozen. PR #189 stays unmerged and production remains on pre.7.
+Intermediate Bot prerelease pin bumps are not part of Core validation unless
+needed to diagnose a specific compatibility defect.
 
-No stable version is authorized by passing only an intermediate task. The final report must include RC evidence, release tags/URLs, both CI and Railway status, ownership diffs, tests, deletions, documentation and remaining issues.
+1. Finish Core shell/process pause ownership, abort-after-pause, cleanup and
+   explicit persistent-daemon ownership. Preserve renderer, cancellation,
+   provenance and pause regressions.
+2. Complete Core ownership/stability audit, measured resource/performance pass,
+   repeated Linux stress, aligned runtime/SDK/native identity verification and
+   Railway Core smoke/soak using the actual candidate.
+3. Publish Core `v1.18.33-bot.13-rc.1` only when those gates pass. Validate that
+   exact RC, its install/upgrade path and realistic Railway soak. CI and smoke
+   alone do not qualify as soak evidence.
+4. Publish Core `v1.18.33-bot.13` only after thorough RC validation leaves no
+   known high-severity blocker. Significant regressions require another RC and
+   repeated verification; finalize public stable notes at this gate.
+5. After Core stable, perform one clean Bot migration directly from pre.7 to
+   stable: align all three artifacts, adopt renderer/pause/process/provenance,
+   remove proven obsolete renderers/shims/ownership, audit every Bot→Core route,
+   run the full Bot suite/CI and Railway production soak.
+
+Core release readiness is assessed independently of the frozen Bot migration.
+The final Core report must include tags/commits and release URLs, CI and Railway
+RC soak evidence, measured resource results, ownership audit, documentation and
+remaining non-blocking issues. No stable release is authorized by one green run.
