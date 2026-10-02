@@ -179,3 +179,28 @@ caught capturing the disconnect target before waiting for its permit: it returne
 with the replacement still alive. Disconnect now captures current ownership inside
 the permit. Focused/full/stress/review verification pending. Remote transports and
 workspace OAuth pending-state ownership are separate remaining audit gates.
+
+## Telegram production scope correction (slimming candidate)
+
+The authoritative current Bot audit supersedes the full-upstream scope above:
+see [consumer call-sites](BOT_CORE_CALLS.md), [subsystem audit](superpowers/specs/2026-10-02-minimum-telegram-core.md)
+and [candidate readiness](MINIMUM_TELEGRAM_RELEASE.md).
+PTY, its native adapter/ticket/upgrade routes, automatic MCP OS-browser launching,
+upstream remote workspace routing, sharing, Console account remote config,
+self-upgrade, mDNS and frontend/interactive services are excluded from the production
+bundle and fail closed. Their lifecycle work is removed from production release
+requirements. No shared-service SIGSTOP behavior was introduced.
+
+The current Bot's pause workflow aborts and resumes via a continuation prompt.
+Future live execution/pause/resume HTTP endpoints are debug/compatibility-only;
+their previously closed invariants remain in the full compatibility gate.
+Shell/custom-process authority, MCP stdio and LSP service retirement remain required.
+Persistent Playwright sessions are a real Bot custom-tool feature, distinct from
+OAuth browser opening. Current raw custom tools have not adopted Core's process
+capability; no Bot migration is performed here. That boundary, required detached
+browser ownership, remote MCP/OAuth ownership and actual crash containment remain
+explicit stable blockers. A passing short soak cannot close them.
+
+The Railway candidate image uses a child-reaping init. An un-reaping PID 1 leaves
+zombies and correctly causes Core to retain uncertain service admission; cleanup
+assertions/deadlines were not weakened to accommodate that environment.

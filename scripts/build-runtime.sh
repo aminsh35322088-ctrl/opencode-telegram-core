@@ -11,6 +11,7 @@ tree="$CORE_ROOT/.work/opencode"
 "$CORE_ROOT/scripts/apply-patches.sh" "$tree"
 bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree"
 "$BUN" install --cwd "$tree" --frozen-lockfile
+"$CORE_ROOT/scripts/apply-headless-profile.sh" "$tree"
 
 telegram_core_version="$(json_get telegramCoreVersion)"
 upstream_commit="$(json_get commit)"
@@ -30,6 +31,8 @@ mkdir -p "$CORE_ROOT/dist/runtime"
 export OPENCODE_PACKAGE_DIR="$tree/packages/opencode"
 export OPENCODE_HEADLESS_OUTPUT="$CORE_ROOT/dist/runtime/opencode"
 "$BUN" "$CORE_ROOT/scripts/build-headless-runtime.ts"
+python3 "$CORE_ROOT/scripts/verify-production-graph.py" "$CORE_ROOT/dist/runtime/opencode.metafile.json"
+(cd "$tree/packages/opencode" && "$BUN" x tsc -p tsconfig.telegram.json --noEmit)
 chmod +x "$CORE_ROOT/dist/runtime/opencode"
 
 "$CORE_ROOT/dist/runtime/opencode" --version

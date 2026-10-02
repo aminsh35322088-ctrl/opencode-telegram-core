@@ -16,6 +16,10 @@ rm -rf "$out"
   "$BUN" x tsc -p tsconfig.node.json
 )
 
+for retired in compat opencode/session-client opencode/session-event-pump ipc/json-line-worker-channel opencode/run-reconciler telegram/conformance; do
+  [[ ! -f "$out/$retired.js" ]] || die "retired native implementation shipped: $retired"
+done
+
 source_commit="$(git -C "$CORE_ROOT" rev-parse HEAD)"
 python3 - "$runtime_root/package.json" "$CORE_UPSTREAM_LOCK" "$source_commit" "$out/package.json" "$out/runtime-info.json" <<'PY'
 import json

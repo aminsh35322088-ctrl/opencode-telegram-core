@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import contextlib
 import json
 import os
@@ -48,8 +49,11 @@ def isolated_environment(root):
 
 
 class Server:
-    def __init__(self, binary):
+    def __init__(self, binary, readiness_path="/api/session", configure=None):
         self.binary = Path(binary).resolve()
+        self.readiness_path = readiness_path
+        self.configure = configure
+        self.headers = {}
         self.temp = None
         self.process = None
         self.base = None
@@ -60,6 +64,11 @@ class Server:
         self.temp = tempfile.TemporaryDirectory(prefix="opencode-core-compat-")
         root = Path(self.temp.name)
         env = isolated_environment(root)
+        if self.configure:
+            self.configure(root, env)
+        if env.get('OPENCODE_SERVER_PASSWORD'):
+            token = base64.b64encode((env.get('OPENCODE_SERVER_USERNAME', 'opencode') + ':' + env['OPENCODE_SERVER_PASSWORD']).encode()).decode()
+            self.headers['authorization'] = 'Basic ' + token
         port = free_port()
         self.base = f"http://127.0.0.1:{port}"
         self.process = subprocess.Popen(
@@ -75,7 +84,7 @@ class Server:
             if self.process.poll() is not None:
                 break
             try:
-                with urllib.request.urlopen(f"{self.base}/api/session", timeout=0.5) as response:
+                with urllib.request.urlopen(urllib.request.Request(self.base + self.readiness_path, headers=self.headers), timeout=0.5) as response:
                     if response.status == 200:
                         return self
             except Exception as exc:

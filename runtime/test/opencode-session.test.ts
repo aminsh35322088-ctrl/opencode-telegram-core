@@ -8,7 +8,7 @@ import {
   type BindingIdentity,
   type FetchLike,
   type OpenCodeRunStatusPort,
-} from "../src/index.js";
+} from "../src/compat.js";
 
 function binding(): BindingIdentity {
   return {

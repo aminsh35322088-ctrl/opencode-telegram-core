@@ -20,7 +20,7 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 - Release: `v1.18.33`
 - Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.33-bot.13-pre.8`
+- Telegram Core candidate: `1.18.33-bot.13-pre.9`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -74,7 +74,7 @@ Run from the repository root on a trusted Linux x64 build host:
 
 The scripts enforce the locked Bun version, materialize the exact upstream tag/commit, verify every downstream patch before applying any patch, install dependencies from locked inputs, and build the OpenCode and Telegram-native artifacts.
 
-The production runtime is now a Telegram-headless OpenCode server build. It preserves the complete server/session/provider/tool/MCP/skill/file API graph used by Telegram agents while excluding TUI, embedded Web UI, desktop and unrelated interactive CLI commands from the production binary. The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
+The production runtime is now a Telegram-headless OpenCode server build. It ships the audited Bot SDK routes and their internal agent dependencies. Production excludes PTY, v2/control-plane APIs, HTTP file/find/provider-auth routes, TUI, UI, sharing, self-upgrade, mDNS, Code Mode and the native FFF alternative search backend. Model execution, file tools, skills/plugins, MCP OAuth callbacks, LSP, subagents and execution control remain. File search uses the existing ripgrep backend. See the [consumer audit](docs/superpowers/specs/2026-10-02-minimum-telegram-core.md) and [release scope](docs/MINIMUM_TELEGRAM_RELEASE.md). The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
 
 A hard 140,000,000-byte size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release. The current v1.18.33 headless build is about 124 MB, roughly one third smaller than the previous full-CLI production binary.
 
@@ -118,7 +118,7 @@ Run the compiled OpenCode compatibility suite:
 ./scripts/run-compatibility.sh
 ```
 
-The compatibility suite starts the compiled runtime on loopback with isolated temporary state and no provider credentials. It verifies session lifecycle, context shape, idle interruption, exclusive durable-history cursors, session-stream isolation, reconnect semantics, concurrent SSE progress, and cleanup.
+The production suite starts the actual compiled runtime with isolated state and a deterministic local model fixture. It verifies required/forbidden APIs, real model and shell execution, physical pause/resume, abort while stopped, stale ownership, history and cleanup. Historical v2 durable-history/SSE checks run separately against the optional full compatibility CLI. Unsupported production APIs fail with non-success responses.
 
 ## Railway smoke verification
 
@@ -179,3 +179,5 @@ Provider behavior and OpenCode session semantics remain upstream-owned. The Tele
 The upstream OpenCode MIT license is retained at `LICENSES/upstream-opencode-MIT.txt`.
 
 - Telegram-native runtime foundation: `docs/superpowers/specs/2026-09-27-telegram-native-runtime-foundation.md`
+
+The native v2 session client/event pump are retained in `runtime/src/compat.ts` for migration/debug testing and excluded from production native artifacts. Production builds use a checked-in models.dev snapshot for reproducible identities. Container deployments require a child-reaping init (the actual-runtime Railway validation image uses tini); uncertain group cleanup never releases admission.

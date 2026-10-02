@@ -1,8 +1,9 @@
+import { TELEGRAM_CONFORMANCE } from "../src/compat.js";
 import { describe, expect, test } from "bun:test";
 import { Api } from "grammy";
 import {
   RailwayResourceGovernor,
-  TELEGRAM_CONFORMANCE,
+
   requireModelAdmission,
   telegramRouteKey,
   type TelegramRoute,

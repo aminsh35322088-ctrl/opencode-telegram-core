@@ -59,9 +59,9 @@ it.instance("overlapping MCP connects serialize service replacement", () => Effe
     environment: { MCP_TEST_CHILD_PID: path.join(directory, "overlap.pid") }, timeout: 5000,
   }
   const outcomes = yield* Effect.all([
-    mcp.add("racing-server", config).pipe(Effect.map((result) => result.status["racing-server"]?.status)),
-    mcp.add("racing-server", config).pipe(Effect.map((result) => result.status["racing-server"]?.status)),
-  ], { concurrency: "unbounded" })
+    mcp.add("racing-server", config).pipe(Effect.map((result) => ("racing-server" in result.status ? result.status["racing-server"]?.status : undefined))),
+    mcp.add("racing-server", config).pipe(Effect.map((result) => ("racing-server" in result.status ? result.status["racing-server"]?.status : undefined))),
+  ] as const, { concurrency: "unbounded" })
   expect(outcomes).toEqual(["connected", "connected"])
   expect(Object.keys(yield* mcp.clients())).toEqual(["racing-server"])
   yield* mcp.disconnect("racing-server")
@@ -90,7 +90,7 @@ it.instance("queued MCP disconnect retires the current replacement", () => Effec
   yield* Effect.gen(function* () {
     yield* Effect.all([
       mcp.add("queued-server", config), mcp.add("queued-server", config), mcp.disconnect("queued-server"),
-    ], { concurrency: "unbounded" })
+    ] as const, { concurrency: "unbounded" })
     expect(retired).toEqual([true, true])
     expect(Object.keys(yield* mcp.clients())).toEqual([])
   }).pipe(Effect.ensuring(Effect.sync(() => spawn.mockRestore())))

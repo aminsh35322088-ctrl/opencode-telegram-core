@@ -975,7 +975,7 @@ index 05f12fa..8410d91 100644
 +              (name) => closeClient(s, name).pipe(Effect.exit),
 +              { concurrency: "unbounded" },
 +            )
-+            const acquired = yield* Effect.tryPromise(() => pending).pipe(Effect.exit)
++            const acquired = yield* Effect.tryPromise(() => pending).pipe(Effect.asVoid, Effect.orDie, Effect.exit)
 +            const failed = [...exits, acquired].find(Exit.isFailure)
 +            if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause)
 +            pendingOAuthTransports.clear()
