@@ -1,3 +1,52 @@
+## Current recovery checkpoint — Core-only continuation
+
+This section supersedes historical handoff status below. User froze Bot migration:
+leave PR #189 unmerged, no intermediate pin bumps or Bot architecture changes.
+Finish Core independently, verify RC and actual runtime Railway soak, then stable;
+only after Core stable perform one clean Bot pre.7-to-stable migration.
+
+- Core main: `c5d2952d217d38237dce2e02167ea1437b63bad0` (PR #20 merged).
+- PR #15 renderer is merged; superseded cancellation patch was not reintroduced.
+- Latest published release: `v1.18.33-bot.13-pre.8`, target
+  `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`. All seven asset checksums and runtime/SDK/native
+  identities verified. New ShellTool active timeout and OS shell ownership fixes are newer than pre.8.
+- Bot main remains `471f644aefe44950f07c2e11effced4ffca7d525`, production pinned pre.7.
+- Cancellation root cause fixed in PR #16: Effect stream listener acquisition/finalizer
+  registration interruption gap. Deterministic listener regression, 50 real cancellation rounds,
+  disposable 300-round probe and original focused repeats passed. Do not reintroduce old patches.
+- PR #19 freezes ShellTool active deadline while paused.
+- PR #20 captures original governed shell execution/group identity; SIGSTOP/SIGCONT preserve
+  parent/child PIDs, abort kills stopped groups, cleanup joins terminal and group death,
+  uncertain admission stays retained. Retired handle.kill and failed paused attachment
+  regressions reproduced red and passed after fixes. Gate only governed shell execution:
+  utility Snapshot.patch cleanup must retain bounded destructive authority.
+- PR #20 candidate `3887880e359d687606eaa3248fc8091f735d2d8b`: upstream 168 pass/2 expected skip,
+  native 298 pass, Python 24 pass, 20 extra Linux rounds × 5 owned-shell tests = 100 pass.
+  Candidate CI 36988615162 green. Post-merge CI 37003163785 and 37003428264 green.
+- Railway exact candidate smoke `13f090ed-0ec5-4683-844b-3b16a4cdc786` passed;
+  post-merge main smoke `b38f1fdc-76a3-46a0-b5e5-c48f46e730c9` SUCCESS. Core smoke source
+  restored to main. This image runs native conformance/health, NOT a full OpenCode runtime soak.
+
+Next blocker: persistent workspace service ownership. Focused index:
+`docs/PROCESS_LIFECYCLE_AUDIT.md`, patch 0003, generated upstream MCP index.ts,
+LSP util/process.ts + lsp.ts + launch.ts, core pty.ts. MCP SDK transport closes/release
+uncertainty and leader-only binding remain unsafe; LSP stop does not join group death,
+and workspace teardown may race startup. PTY DOES acquire governor at high-level service
+(the earlier low-level adapter-only audit was incomplete), but releases on leader exit
+and teardown does not join descendants. Do not attach workspace daemons to arbitrary
+short-lived model runs. No fake ownership of detached browser launcher descendants.
+
+Worktree `/workspace/opencode-core-cancellation`, branch `fix/persistent-process-ownership`
+starts from c5d2952. Generated `.work/opencode-test` is disposable build output; committed
+patches/overlays are authoritative. Tests run sequentially via Linux subreaper helper
+`/workspace/scratch/run-subreaped.py` because Cloud PID1 does not reap. Parallel compiler/tests
+once exhausted Cloud cgroup and correctly rejected admission; do not mask pressure by retries.
+Bounded current diagnostic logs live in `/workspace/scratch/owned-shell-*.log`; old archived
+11k-line captures are historical and need not be reread.
+
+Remaining gates: daemon cleanup; actual runtime Railway resource baselines/soak; ownership and
+stability matrix; aligned candidate artifacts; RC then stable validation. No RC/stable claim.
+
 # Codex Cloud handoff — 2026-10-02
 
 Scope is frozen at the user's request. Preserve this work; do not restart the migration,

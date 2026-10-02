@@ -68,3 +68,53 @@ it.instance("the shell timeout counts active time while its parent is paused", (
   expect(kills).toBe(1)
   expect(result.output).toContain("exceeding timeout 40 ms")
 }))
+
+it.instance("actual ShellTool abort after parent pause terminates the same owned shell", () => Effect.gen(function* () {
+  if (process.platform !== "linux") return
+  const instance = yield* TestInstance
+  const control = new SessionExecutionControl()
+  const parent = control.start({ sessionId: "parent", runId: "pause-parent", directory: instance.directory })
+  const execution = control.start({ sessionId: "child", runId: "pause-tool", directory: instance.directory }, parent.owner)
+  const spawner = yield* ProcessSpawner.ChildProcessSpawner
+  const spawned = Deferred.makeUnsafe<number>()
+  const observing = ProcessSpawner.make((command) => spawner.spawn(command).pipe(
+    Effect.tap((handle) => Deferred.succeed(spawned, Number(handle.pid))),
+  ))
+  const previous = process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
+  yield* Effect.acquireUseRelease(
+    Effect.sync(() => { process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1" }),
+    () => Effect.gen(function* () {
+      const work = Effect.gen(function* () {
+        const initialized = yield* (yield* ShellTool).init()
+        return yield* initialized.execute({ command: "trap '' TERM; sleep 60", timeout: 10_000 }, {
+          sessionID: SessionID.make("ses_shell_abort_pause"), messageID: MessageID.make("msg_shell_abort_pause"),
+          agent: "build", abort: execution.signal, messages: [],
+          metadata: () => Effect.void, ask: () => Effect.void,
+        })
+      }).pipe(
+        Effect.provideService(ProcessSpawner.ChildProcessSpawner, observing),
+        Effect.provideService(CurrentTelegramExecution, execution),
+      )
+      const fiber = yield* work.pipe(Effect.forkChild)
+      const pid = yield* Deferred.await(spawned)
+      control.pause(parent.owner)
+      yield* Effect.promise(async () => {
+        const { readFile } = await import("node:fs/promises")
+        const end = Date.now() + 1000
+        while ((await readFile(`/proc/${pid}/stat`, "utf8")).split(") ")[1]!.split(" ")[0] !== "T") {
+          if (Date.now() >= end) throw new Error("actual ShellTool process did not stop")
+          await Bun.sleep(5)
+        }
+      })
+      control.close(parent.owner)
+      const result = yield* Fiber.join(fiber)
+      expect(result.output).toContain("User aborted the command")
+      expect(() => process.kill(pid, 0)).toThrow()
+    }),
+    () => Effect.sync(() => {
+      if (control.get(parent.owner)) control.close(parent.owner)
+      if (previous === undefined) delete process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
+      else process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = previous
+    }),
+  )
+}))

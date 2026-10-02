@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import {
   checkpoint,
@@ -12,7 +13,7 @@ import { MessageID } from "../../src/session/schema"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import type { SessionExecutionFrame, SessionExecutionLease } from "@opencode-ai/core/session-execution-control"
-import { Deferred, Effect, Fiber, Latch } from "effect"
+import { Deferred, Effect, Exit, Fiber, Latch } from "effect"
 import { Session } from "../../src/session/session"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionStatus } from "../../src/session/status"
@@ -25,6 +26,7 @@ import { EffectBridge } from "../../src/effect/bridge"
 const it = testEffect(
   LayerNode.compile(
     LayerNode.group([
+      CrossSpawnSpawner.node,
       Session.node,
       SessionRunState.node,
       SessionProjector.node,
@@ -555,3 +557,50 @@ it.instance("background completion retains the original parent run and rejects r
     expect(recreated).toBe(false)
   }),
 )
+
+it.instance("manual shell pause resumes the same process and cancellation joins its stopped group", () => Effect.gen(function* () {
+  if (process.platform !== "linux") return
+  const { ChildProcess, ChildProcessSpawner } = yield* Effect.promise(() => import("effect/unstable/process"))
+  const { readFile } = yield* Effect.promise(() => import("node:fs/promises"))
+  const sessions = yield* Session.Service
+  const state = yield* SessionRunState.Service
+  const session = yield* sessions.create()
+  const ready = yield* Deferred.make<number>()
+  const latch = yield* Latch.make()
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const previous = process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
+  yield* Effect.acquireUseRelease(
+    Effect.sync(() => { process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1" }),
+    () => Effect.gen(function* () {
+      const fiber = yield* state.startShell(session.id, Effect.die(new Error("cancelled shell")), Effect.gen(function* () {
+        const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", ["-c", "trap '' TERM; sleep 60"], {
+          stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true,
+        }))
+        yield* Deferred.succeed(ready, Number(handle.pid))
+        yield* latch.open
+        return yield* Effect.never
+      }).pipe(Effect.scoped, Effect.orDie), latch, "manual-pause-run").pipe(Effect.forkChild)
+      const pid = yield* Deferred.await(ready)
+      expect(yield* state.pause(session.id, "manual-pause-run")).toEqual({ runId: "manual-pause-run", paused: true, continuation: "live" })
+      const waitState = (paused: boolean) => Effect.promise(async () => {
+        const end = Date.now() + 1000
+        while (((await readFile(`/proc/${pid}/stat`, "utf8")).split(") ")[1]!.split(" ")[0] === "T") !== paused) {
+          if (Date.now() >= end) throw new Error("manual shell state did not settle")
+          await Bun.sleep(5)
+        }
+      })
+      yield* waitState(true)
+      expect(yield* state.resume(session.id, "manual-pause-run")).toEqual({ runId: "manual-pause-run", paused: false, continuation: "live" })
+      yield* waitState(false)
+      yield* state.pause(session.id, "manual-pause-run")
+      yield* state.cancel(session.id)
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+      expect(yield* state.execution(session.id)).toBeNull()
+      expect(() => process.kill(pid, 0)).toThrow()
+    }),
+    () => Effect.sync(() => {
+      if (previous === undefined) delete process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
+      else process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = previous
+    }),
+  )
+}))
