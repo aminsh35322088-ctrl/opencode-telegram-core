@@ -36,6 +36,57 @@ racing a rich mutation. Full Linux CI and aligned artifact checks precede Bot us
 - Core now captures original root and independent producer ownership before live publication, with the producer phase and workspace. SSE/global events and generated SDK schemas preserve `metadata.telegramExecution`; durable replay stays untagged. Native `SessionEventRouter.resolveExecution` requires this provenance and returns the complete captured run fence after ancestry validation. Delayed old-root events and replacement during lookup fail closed. Callers must retain and recheck that fence at delivery; the legacy `resolve` method is for session/control routing, not untagged execution delivery. Bot adoption remains gated on a verified aligned prerelease and final routing audit.
 - Host completion/cancellation events capture each retired owner's identity without retaining runtime authority. Ordinary completion waits through pause and rechecks pause under the admission guard before retirement; destructive cancellation still finalizes the original tree.
 
+## Renderer integration checkpoint (2026-10-02)
+
+PR #15 renderer work is refreshed onto Core `da4f28ab9c86b1bc9949f0635426caf85a6dac22`
+on the integration branch. The older branch's shell cancellation patch is omitted;
+`patches/series` and current runtime patches remain unchanged. Final output uses
+GFM/Telegram parsing, semantic blocks, recursive Persian/mixed-script direction
+handling and grapheme-safe chunking. Each chunk uses the current main delivery
+checkpoint and exact binding/run fence. Caller budgets must be positive integers
+within Telegram's hard limits; non-finite and oversized budgets fail closed.
+Independent review found and reproduced additional hard-limit failures in quote
+credits, combined block/inline nesting, synthesized quote blocks, cumulative table
+spans/rowspans, table captions and minimal container budgets. Regression tests now
+cover these; oversized spanning tables degrade to text rather than emitting spans
+across message boundaries. Local native typecheck and 298 tests pass; 24 release/
+toolchain contract tests passed. These results do not certify the full renderer
+or release gate.
+
+GitHub run 36909074671 passed native validation and the full upstream suite
+(158 pass, 2 skip), then reproduced `cancel interrupts loop queued behind shell`
+in the second focused repeat: release stalled and the expected abort marker was
+missing. PR #16 subsequently fixed the deterministically reproduced output-reader
+acquisition race. Its latest-main validation passed 160 upstream tests (2 skips),
+all five focused repeats, 238 native tests and 24 toolchain contracts. GitHub
+run 36975712031 passed both required jobs; Railway deployment
+`93c6d6cb-707f-49ee-bc28-a53bad4ca57b` on `da4f28ab` passed 238 tests and health.
+An additional 20 repeats of both focused cases had no process-release stalls;
+two setup/readJson delays were observed under concurrent build load. The refreshed
+renderer still needs its own full CI and actual-candidate Railway smoke. The first local upstream run also failed two custom-process tests because
+this cloud container PID 1 retained dead descendants as zombies. A test-only Linux
+subreaper restored all 14 applicable custom-process tests; production cleanup code
+was not weakened. Full local verification under that reaper is separate evidence.
+Bot adoption, aligned artifacts and production verification remain pending.
+
+Recovery confirmed Bot main `471f644aefe44950f07c2e11effced4ffca7d525`, version
+0.26.2 and the pre.7 compatibility pin. Bot PRs #176 and #110 remain open and
+must be reconciled against current Core before adopting their runtime behavior.
+Core main and Bot main CI were green at inspection. Railway Core smoke for
+`ef655249` passed 238 native tests and its healthcheck, then slept normally.
+Production Bot remains on `a0a0f4d0910659b9732da8650b2b3cab156f5eb6`; it was not
+redeployed during recovery.
+
+Railway production baseline at recovery (24-hour summary): reported memory
+current 0.5028 GB, average 0.5956 GB, maximum 0.9999 GB; CPU current 0.0216,
+average 0.0181, maximum 0.8229. Recent watchdog samples reported Bot RSS 124 MiB,
+service working set about 475 MiB, raw service memory about 480 MiB, cgroup limit
+954 MiB and six service processes (one admitted OpenCode server). These distinct
+measurements are observations of the older deployment, not before/after
+optimization evidence or a leak-free certification. Investigate the peak and
+collect scenario-based trends before RC. Smoke metrics describe the smoke server,
+not a full running model/tool workload.
+
 ## Review focus
 
 - A read or process spawn finishes after its owner is rotated or deleted: reject output and clean the exact old child.
@@ -59,9 +110,11 @@ A deterministic regression interrupts exactly after listener attachment and chec
 listener removal and pipe destruction. A Linux regression cancels 50 actual shells
 during merged-output admission and requires terminal close without cleanup defects.
 Existing fixtures still cover missing close, failed TERM delivery, explicit kill
-and trailing output. Local stress and full verification are recorded in the
-handoff continuation; GitHub CI and Railway smoke on the actual candidate remain
-required before closing this release gate. A passing rerun alone is insufficient.
+and trailing output. The deterministic regression, Linux stress, full verification,
+GitHub CI and actual-main Railway smoke cited above resolve this specific fault.
+The refreshed renderer candidate still requires its own CI and Railway smoke;
+Bot adoption and the remaining release gates stay open. A passing rerun alone is
+insufficient.
 
 After all three tasks, audit both repositories for duplicated Core responsibilities, unjustified shims, bypass routes, ambiguous identity, General/ALL execution, stale/late delivery, lifecycle ownership and artifact identity.
 
