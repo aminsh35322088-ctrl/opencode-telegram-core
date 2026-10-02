@@ -1,4 +1,4 @@
-# Live execution pause/resume (unreleased)
+# Live execution pause/resume (pre.8 source candidate)
 
 The source integration uses the existing upstream `SessionRunState` runners and
 model/tool fibers. It does not abort, recreate sessions, or send a synthetic
@@ -63,7 +63,7 @@ before a new run. It never replays lost work to simulate continuation.
 - Delete cancels before removing stored sessions. Disposal retires authority
   and attempts all owned resource and runner cleanup despite individual errors.
 
-## Native acknowledgment adapter (unreleased)
+## Native acknowledgment adapter
 
 `TelegramNativeCore` accepts an optional `executionControl` configuration with
 an `OpenCodeExecutionControlPort` and a finite `requestTimeoutMs`. The port maps
@@ -107,10 +107,13 @@ and rejects checkpoints instead of leaving a broken observation silently parked.
 
 ## Remaining release gates
 
-This source is not the complete client-facing migration. The native adapter and
-delivery/deadline/liveness changes require full Linux verification and aligned
-artifact verification. Producer run tags, persistent custom-tool daemon ownership,
-Bot tool migration and the Bot's Telegram controls still require integration.
+This source is not the complete client-facing migration. The pre.8 artifacts must
+pass compatibility/identity verification before publication and Bot adoption.
+OS suspension for intended manual/model-shell processes and the imported
+ShellTool active-time timeout change remain separate integration gates. Native
+delivery/deadline/liveness and producer-run provenance require Bot adoption and
+aligned artifact verification. Persistent custom-tool daemon ownership, Bot tool
+migration and the Bot's Telegram controls still require integration.
 Runtime, generated SDK, and native artifacts must
 ship from one verified prerelease before the Bot removes its old pause behavior.
 Full Linux CI, artifact identity checks, ownership audit, Railway validation and
