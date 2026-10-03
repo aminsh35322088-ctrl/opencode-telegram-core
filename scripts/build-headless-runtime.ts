@@ -5,6 +5,8 @@ const output = process.env.OPENCODE_HEADLESS_OUTPUT
 if (!packageDir) throw new Error("OPENCODE_PACKAGE_DIR is required")
 if (!output) throw new Error("OPENCODE_HEADLESS_OUTPUT is required")
 
+// A checked-in snapshot fixes the catalog input across local/CI/Railway builds.
+process.env.MODELS_DEV_API_JSON = path.resolve(import.meta.dir, "../runtime/models-dev.json")
 process.chdir(packageDir)
 const generated = await import(path.join(packageDir, "script/generate.ts"))
 
@@ -22,6 +24,7 @@ const result = await Bun.build({
   minify: true,
   splitting: true,
   sourcemap: "none",
+  metafile: true,
   compile: {
     autoloadBunfig: false,
     autoloadDotenv: false,
@@ -54,3 +57,5 @@ if (!result.success) {
   for (const log of result.logs) console.error(log)
   process.exit(1)
 }
+
+await Bun.write(output + ".metafile.json", JSON.stringify(result.metafile, null, 2) + "\n")

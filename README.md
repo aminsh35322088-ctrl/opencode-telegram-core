@@ -20,7 +20,7 @@ Telegram product UX and application-specific policy remain in `opencode-telegram
 - Release: `v1.18.33`
 - Commit: `51ef4be1d3c122f18fefb510dca8d778571f4f18`
 - Bun: `1.3.14`
-- Telegram Core version: `1.18.33-bot.13-pre.8`
+- Telegram Core candidate: `1.18.33-bot.13-pre.9`
 - Native runtime version: `0.1.0`
 - grammY: `1.46.0`
 - Telegram Bot API conformance target: `10.3`
@@ -30,9 +30,9 @@ The machine-readable upstream/release source of truth is `upstream/lock.json`. M
 
 ## Telegram-native runtime
 
-The migration remains on prereleases. See [migration and release gates](docs/MIGRATION_TO_V1.md) and [owned result polling](docs/RESULT_POLLING.md). Stable publication requires the complete ownership audit and a healthy production RC soak.
+The current [minimum Telegram release scope and blockers](docs/MINIMUM_TELEGRAM_RELEASE.md) supersede older upstream-parity and migration gates. This candidate changes Core only; Bot migration is excluded. Stable publication requires ownership of the remaining production process classes and a healthy RC soak. See [owned result polling](docs/RESULT_POLLING.md).
 
-The pre.8 prerelease contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, fail-closed recovery, and a native acknowledgment adapter that holds tasks and Telegram delivery. Core publisher provenance preserves original root/producer identity through live events; `SessionEventRouter.resolveExecution` requires that metadata and returns a complete run fence for execution delivery. A [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md) has passed Linux process-group regressions. The aligned runtime/SDK/native artifacts were verified and published from `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`; the headless runtime is 124,340,352 bytes within its 140,000,000-byte budget. Bot pause/tool/event migration, intended shell-process suspension and persistent-daemon ownership remain release gates.
+The pre.8 prerelease contains [live runtime pause/resume](docs/PAUSE_RESUME.md), with existing runner preservation, phase fencing, background ownership, fail-closed recovery, and a native acknowledgment adapter that holds tasks and Telegram delivery. Core publisher provenance preserves original root/producer identity through live events; `SessionEventRouter.resolveExecution` requires that metadata and returns a complete run fence for execution delivery. A [governed custom-tool process capability](docs/CUSTOM_TOOL_PROCESSES.md) has passed Linux process-group regressions. The aligned runtime/SDK/native artifacts were verified and published from `f110bd25419b6bedc40db36e9ae929bc4e52b9ac`; the headless runtime is 124,340,352 bytes within its 140,000,000-byte budget. That historical release used the broader scope. Current Bot pause is abort plus continuation; live execution/pause/resume APIs remain production-supported for the target native-control migration. The current report defines the remaining production ownership gates without requiring Bot migration.
 
 The native runtime is under `runtime/`. Its main contracts include:
 
@@ -43,8 +43,8 @@ The native runtime is under `runtime/`. Its main contracts include:
 - Core-owned application tasks with exact run leases, workspace-bound temporary abort targets, and bounded remote cleanup,
 - bounded deadlines, cancellation, provider retry ceilings, liveness and stuck-loop detection,
 - rolling bounded subagent fan-out with per-parent/global admission caps, child-local deadlines, and sibling failure isolation,
-- optional Telegram process-budget admission for shell/MCP/LSP/PTY/utility/helper children, enforced against cgroup memory headroom and global/category concurrency ceilings,
-- session-scoped durable SSE replay/reconnect with cross-session fail-closed validation,
+- production process-budget admission for shell/MCP/LSP/utility/helper children (PTY admission is compatibility-only), enforced against cgroup memory headroom and global/category concurrency ceilings,
+- directory-scoped SSE with original execution provenance and cross-session fail-closed validation; durable v2 replay remains compatibility-only,
 - Core-owned event routing through exact root bindings and verified session ancestry, with binding/run checks after asynchronous lookups,
 - native Telegram Rich Message / Rich Markdown streaming through grammY,
 - GFM + Telegram Rich Markdown/HTML → semantic `AgentDocument` parsing with native headings, tables, ordered/task lists, fenced/preformatted code language hints, inline math/LaTeX, spoilers, mark/underline/sub/superscript, footnotes/references, anchors, expandable quotes, pull quotes, details, media/figure captions, collage/slideshow, maps, custom emoji/time entities, and trusted rich buttons,
@@ -74,7 +74,7 @@ Run from the repository root on a trusted Linux x64 build host:
 
 The scripts enforce the locked Bun version, materialize the exact upstream tag/commit, verify every downstream patch before applying any patch, install dependencies from locked inputs, and build the OpenCode and Telegram-native artifacts.
 
-The production runtime is now a Telegram-headless OpenCode server build. It preserves the complete server/session/provider/tool/MCP/skill/file API graph used by Telegram agents while excluding TUI, embedded Web UI, desktop and unrelated interactive CLI commands from the production binary. The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
+The production runtime is now a Telegram-headless OpenCode server build. It ships the audited Bot SDK routes and their internal agent dependencies. Production excludes PTY, v2/control-plane APIs, HTTP file/find/provider-auth routes, TUI, UI, sharing, self-upgrade, mDNS, Code Mode and the native FFF alternative search backend. Model execution, file tools, skills/plugins, MCP OAuth callbacks, LSP, subagents, abort and internal execution fencing remain; live HTTP execution/pause/resume support the target True Pause/Resume migration. File search uses the existing ripgrep backend. See the [consumer audit](docs/superpowers/specs/2026-10-02-minimum-telegram-core.md) and [release scope](docs/MINIMUM_TELEGRAM_RELEASE.md). The full upstream CLI can still be built on demand with `./scripts/build-compat-cli.sh` as a migration/debug fallback; it is not part of the production release.
 
 A hard 140,000,000-byte size budget is enforced during production builds so accidental reintroduction of frontend dependency graphs fails the release. The current v1.18.33 headless build is about 124 MB, roughly one third smaller than the previous full-CLI production binary.
 
@@ -118,7 +118,7 @@ Run the compiled OpenCode compatibility suite:
 ./scripts/run-compatibility.sh
 ```
 
-The compatibility suite starts the compiled runtime on loopback with isolated temporary state and no provider credentials. It verifies session lifecycle, context shape, idle interruption, exclusive durable-history cursors, session-stream isolation, reconnect semantics, concurrent SSE progress, and cleanup.
+The production suite starts the actual compiled runtime with isolated state and a deterministic local model fixture. It verifies required/forbidden APIs, real model and shell execution, physical pause/resume, abort while stopped, stale ownership, history and cleanup. Historical v2 durable-history/SSE checks run separately against the optional full compatibility CLI. Unsupported production APIs fail with non-success responses.
 
 ## Railway smoke verification
 
@@ -179,3 +179,5 @@ Provider behavior and OpenCode session semantics remain upstream-owned. The Tele
 The upstream OpenCode MIT license is retained at `LICENSES/upstream-opencode-MIT.txt`.
 
 - Telegram-native runtime foundation: `docs/superpowers/specs/2026-09-27-telegram-native-runtime-foundation.md`
+
+The native v2 session client/event pump are retained in `runtime/src/compat.ts` for migration/debug testing and excluded from production native artifacts. Production builds use a checked-in models.dev snapshot to pin the model-catalog input. Container deployments require a child-reaping init (the actual-runtime Railway validation image uses tini); uncertain group cleanup never releases admission.

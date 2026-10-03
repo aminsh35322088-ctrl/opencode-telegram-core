@@ -1,0 +1,2895 @@
+diff --git a/packages/opencode/src/server/server.ts b/packages/opencode/src/server/server.ts
+--- a/packages/opencode/src/server/server.ts
++++ b/packages/opencode/src/server/server.ts
+@@ -4,13 +4,10 @@
+ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+ import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
+ import { HttpRouter, HttpServer } from "effect/unstable/http"
+-import { OpenApi } from "effect/unstable/httpapi"
+ import { createServer } from "node:http"
+-import { MDNS } from "./mdns"
+ import { HttpApiApp } from "./routes/instance/httpapi/server"
+ import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
+ import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
+-import { PublicApi } from "./routes/instance/httpapi/public"
+ import type { CorsOptions } from "@opencode-ai/server/cors"
+ import { lazy } from "@/util/lazy"
+ 
+@@ -65,7 +62,7 @@
+ })
+ 
+ export async function openapi() {
+-  return OpenApi.fromApi(PublicApi)
++  throw new Error("OpenAPI documentation is compatibility-only")
+ }
+ 
+ export let url: URL | undefined
+@@ -85,7 +82,7 @@
+     const state = yield* startWithPortFallback(opts)
+     const address = yield* tcpAddress(state)
+     const listenerUrl = makeURL(opts.hostname, address.port)
+-    const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
++    const unpublishMdns = Effect.void
+     url = listenerUrl
+ 
+     return {
+@@ -151,24 +148,6 @@
+   result.port = String(port)
+   return result
+ }
+-
+-function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
+-  return Effect.gen(function* () {
+-    const publish =
+-      opts.mdns && port && opts.hostname !== "127.0.0.1" && opts.hostname !== "localhost" && opts.hostname !== "::1"
+-    if (publish) {
+-      const unpublish = yield* Effect.cached(Effect.sync(() => MDNS.unpublish()))
+-      yield* Effect.sync(() => MDNS.publish(port, opts.mdnsDomain))
+-      yield* Scope.addFinalizer(scope, unpublish)
+-      return unpublish
+-    }
+-    if (opts.mdns) {
+-      yield* Effect.logWarning("mDNS enabled but hostname is loopback; skipping mDNS publish")
+-    }
+-    return Effect.void
+-  })
+-}
+-
+ function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>, listenerUrl: URL) {
+   return Effect.gen(function* () {
+     const forceCloseOnce = yield* Effect.cached(forceClose(state).pipe(Effect.ignore))
+diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
+--- a/packages/opencode/src/mcp/index.ts
++++ b/packages/opencode/src/mcp/index.ts
+@@ -31,7 +31,6 @@
+ import { InstanceState } from "@/effect/instance-state"
+ import { McpCatalog } from "./catalog"
+ import { McpEvent } from "@opencode-ai/schema/mcp-event"
+-import { McpBrowser } from "./browser"
+ 
+ const DEFAULT_TIMEOUT = 30_000
+ const CLIENT_OPTIONS = {
+@@ -208,7 +207,6 @@
+   Effect.gen(function* () {
+     const auth = yield* McpAuth.Service
+     const events = yield* EventV2Bridge.Service
+-    const browser = yield* McpBrowser.Service
+ 
+     type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
+ 
+@@ -900,52 +898,6 @@
+       )
+     })
+ 
+-    const authenticate = Effect.fn("MCP.authenticate")(function* (
+-      mcpName: string,
+-      onAuthorization?: (authorizationUrl: string) => void,
+-    ) {
+-      const result = yield* startAuth(mcpName)
+-      if (!result.authorizationUrl) {
+-        const client = "client" in result ? result.client : undefined
+-        const mcpConfig = yield* requireMcpConfig(mcpName).pipe(
+-          Effect.tapError(() => Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)),
+-        )
+-
+-        const listed = client
+-          ? client.getServerCapabilities()?.tools
+-            ? yield* McpCatalog.defs(client, mcpConfig.timeout)
+-            : []
+-          : undefined
+-        if (!client || !listed) {
+-          yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
+-          return { status: "failed", error: "Failed to get tools" } satisfies Status
+-        }
+-
+-        const s = yield* InstanceState.get(state)
+-        yield* auth.clearOAuthState(mcpName)
+-        return yield* storeClient(s, mcpName, client, listed, client.getInstructions()?.trim(), mcpConfig.timeout)
+-      }
+-
+-      const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
+-      onAuthorization?.(result.authorizationUrl)
+-
+-      yield* browser.open(result.authorizationUrl).pipe(
+-        Effect.catch(() => {
+-          return events.publish(BrowserOpenFailed, { mcpName, url: result.authorizationUrl }).pipe(Effect.ignore)
+-        }),
+-      )
+-
+-      const code = yield* Effect.promise(() => callbackPromise)
+-
+-      const storedState = yield* auth.getOAuthState(mcpName)
+-      if (storedState !== result.oauthState) {
+-        yield* auth.clearOAuthState(mcpName)
+-        throw new Error("OAuth state mismatch - potential CSRF attack")
+-      }
+-      yield* auth.clearOAuthState(mcpName)
+-      return yield* finishAuth(mcpName, code)
+-    })
+-
+     const finishAuth = Effect.fn("MCP.finishAuth")(function* (mcpName: string, authorizationCode: string) {
+       yield* requireMcpConfig(mcpName)
+       const pending = pendingOAuthTransports.get(mcpName)
+@@ -1015,7 +967,7 @@
+       getPrompt,
+       readResource,
+       startAuth,
+-      authenticate,
++      authenticate: () => Effect.die(new Error("Automatic MCP browser authentication is unavailable in Telegram production; use auth.start and auth.callback")),
+       finishAuth,
+       removeAuth,
+       supportsOAuth,
+@@ -1030,7 +982,7 @@
+ export const node = LayerNode.make({
+   service: Service,
+   layer: layer,
+-  deps: [ McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
++  deps: [ McpAuth.node, EventV2Bridge.node, Config.node],
+ })
+ 
+ export * as MCP from "."
+diff --git a/packages/opencode/src/project/bootstrap.ts b/packages/opencode/src/project/bootstrap.ts
+--- a/packages/opencode/src/project/bootstrap.ts
++++ b/packages/opencode/src/project/bootstrap.ts
+@@ -6,7 +6,6 @@
+ import * as Project from "./project"
+ import * as Vcs from "./vcs"
+ import { InstanceState } from "@/effect/instance-state"
+-import { ShareNext } from "@/share/share-next"
+ import { Effect, Layer } from "effect"
+ import { Config } from "@/config/config"
+ import { Service } from "./bootstrap-service"
+@@ -25,7 +24,6 @@
+     const lsp = yield* LSP.Service
+     const plugin = yield* Plugin.Service
+     const project = yield* Project.Service
+-    const shareNext = yield* ShareNext.Service
+     const snapshot = yield* Snapshot.Service
+     const vcs = yield* Vcs.Service
+ 
+@@ -39,7 +37,7 @@
+       // Each service self-manages its own slow work via Effect.forkScoped against
+       // its per-instance state scope. We just await materialization here.
+       yield* Effect.forEach(
+-        [lsp, shareNext, format, vcs, snapshot, project],
++        [lsp, format, vcs, snapshot, project],
+         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
+         { concurrency: "unbounded", discard: true },
+       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+@@ -52,7 +50,7 @@
+ export const node = makeGlobalNode({
+   service: Service,
+   layer: layer,
+-  deps: [Config.node, Format.node, LSP.node, Plugin.node, Project.node, ShareNext.node, Snapshot.node, Vcs.node],
++  deps: [Config.node, Format.node, LSP.node, Plugin.node, Project.node, Snapshot.node, Vcs.node],
+ })
+ 
+ export * as InstanceBootstrap from "./bootstrap"
+diff --git a/packages/opencode/src/tool/registry.ts b/packages/opencode/src/tool/registry.ts
+--- a/packages/opencode/src/tool/registry.ts
++++ b/packages/opencode/src/tool/registry.ts
+@@ -118,8 +118,6 @@
+     const patchtool = yield* ApplyPatchTool
+     const skilltool = yield* SkillTool
+     const agent = yield* Agent.Service
+-    const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
+-    const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
+ 
+     const state = yield* InstanceState.make<State>(
+       Effect.fn("ToolRegistry.state")(function* (ctx) {
+@@ -238,7 +236,6 @@
+           question: Tool.init(question),
+           lsp: Tool.init(lsptool),
+           plan: Tool.init(plan),
+-          ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
+         })
+ 
+         return {
+@@ -258,7 +255,6 @@
+             tool.search,
+             tool.skill,
+             tool.patch,
+-            ...(tool.execute ? [tool.execute] : []),
+             ...(flags.experimentalLspTool ? [tool.lsp] : []),
+             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
+           ],
+@@ -292,17 +288,6 @@
+       return ["Available agent types and the tools they have access to:", description].join("\n")
+     })
+ 
+-    const describeCodeMode = Effect.fn("ToolRegistry.describeCodeMode")(function* (input: {
+-      agent: Agent.Info
+-      permission?: PermissionV1.Ruleset
+-    }) {
+-      if (!codeMode) return
+-      const ruleset = Permission.merge(input.agent.permission, input.permission ?? [])
+-      const tools = Permission.visibleTools(yield* mcp.tools(), ruleset)
+-      if (Object.keys(tools).length === 0) return
+-      return codeMode.describeCatalog(tools, Object.keys(yield* mcp.clients()).map(McpCatalog.sanitize))
+-    })
+-
+     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+       const filtered = (yield* all()).filter((tool) => {
+         if (tool.id === WebSearchTool.id) {
+@@ -317,13 +302,8 @@
+         return true
+       })
+ 
+-      const codeModeDescription = filtered.some((tool) => tool.id === "execute")
+-        ? yield* describeCodeMode(input)
+-        : undefined
+-      const visible = filtered.filter((tool) => tool.id !== "execute" || codeModeDescription)
+-
+       return yield* Effect.forEach(
+-        visible,
++        filtered.filter((tool) => tool.id !== "execute"),
+         Effect.fnUntraced(function* (tool: Tool.Def) {
+           const output = {
+             description: tool.description,
+@@ -337,11 +317,7 @@
+               : undefined
+           return {
+             id: tool.id,
+-            description: [
+-              output.description,
+-              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+-              tool.id === "execute" ? codeModeDescription : undefined,
+-            ]
++            description: [output.description, tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined]
+               .filter(Boolean)
+               .join("\n"),
+             parameters: output.parameters,
+diff --git a/packages/opencode/src/config/config.ts b/packages/opencode/src/config/config.ts
+--- a/packages/opencode/src/config/config.ts
++++ b/packages/opencode/src/config/config.ts
+@@ -1,6 +1,9 @@
+ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
+ import { serviceUse } from "@opencode-ai/core/effect/service-use"
++import { Database } from "@opencode-ai/core/database/database"
++import { AccountStateTable, AccountTable } from "@opencode-ai/core/account/sql"
++import { eq } from "drizzle-orm"
+ import path from "path"
+ import { pathToFileURL } from "url"
+ import os from "os"
+@@ -13,7 +16,6 @@
+ import { applyEdits, modify } from "jsonc-parser"
+ import { InstallationLocal, InstallationVersion } from "@opencode-ai/core/installation/version"
+ import { existsSync } from "fs"
+-import { Account } from "@/account/account"
+ import { isRecord } from "@/util/record"
+ import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+@@ -23,7 +25,7 @@
+ import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
+ import { containsPath, type InstanceContext } from "../project/instance-context"
+ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+-import { RemoteAuthError } from "@opencode-ai/core/v1/config/error"
++import { RemoteAuthError, InvalidError } from "@opencode-ai/core/v1/config/error"
+ import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
+ import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
+ import { ConfigAgent } from "./agent"
+@@ -178,10 +180,10 @@
+   Effect.gen(function* () {
+     const fs = yield* FSUtil.Service
+     const authSvc = yield* Auth.Service
+-    const accountSvc = yield* Account.Service
+     const env = yield* Env.Service
+     const npmSvc = yield* Npm.Service
+     const http = yield* HttpClient.HttpClient
++    const { db } = yield* Database.Service
+ 
+     const readConfigFile = (filepath: string) => fs.readFileStringSafe(filepath).pipe(Effect.orDie)
+ 
+@@ -489,42 +491,15 @@
+           yield* Effect.logDebug("loaded custom config from OPENCODE_CONFIG_CONTENT")
+         }
+ 
+-        const activeAccount = Option.getOrUndefined(
+-          yield* accountSvc.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+-        )
+-        if (activeAccount?.active_org_id) {
+-          const accountID = activeAccount.id
+-          const orgID = activeAccount.active_org_id
+-          const url = activeAccount.url
+-          yield* Effect.gen(function* () {
+-            const [configOpt, tokenOpt] = yield* Effect.all(
+-              [accountSvc.config(accountID, orgID), accountSvc.token(accountID)],
+-              { concurrency: 2 },
+-            )
+-            if (Option.isSome(tokenOpt)) {
+-              process.env["OPENCODE_CONSOLE_TOKEN"] = tokenOpt.value
+-              yield* env.set("OPENCODE_CONSOLE_TOKEN", tokenOpt.value)
+-            }
+-
+-            if (Option.isSome(configOpt)) {
+-              const source = `${url}/api/config`
+-              const next = yield* loadConfig(JSON.stringify(configOpt.value), {
+-                dir: path.dirname(source),
+-                source,
+-              })
+-              for (const providerID of Object.keys(next.provider ?? {})) {
+-                consoleManagedProviders.add(providerID)
+-              }
+-              yield* merge(source, next, "global")
+-            }
+-          }).pipe(
+-            Effect.withSpan("Config.loadActiveOrgConfig"),
+-            Effect.catch((err) =>
+-              Effect.logDebug("failed to fetch remote account config", {
+-                error: err instanceof Error ? err.message : String(err),
+-              }),
+-            ),
+-          )
++        const consoleState = yield* db
++          .select({ org: AccountStateTable.active_org_id })
++          .from(AccountStateTable)
++          .innerJoin(AccountTable, eq(AccountTable.id, AccountStateTable.active_account_id))
++          .where(eq(AccountStateTable.id, 1))
++          .get()
++          .pipe(Effect.orDie)
++        if (consoleState?.org) {
++          return yield* Effect.die(new InvalidError({ path: "account_state.active_org_id", message: "Console organization integration is unavailable in Telegram Core; use provider configuration or the compatibility CLI" }))
+         }
+ 
+         const managedDir = ConfigManaged.managedConfigDir()
+@@ -618,7 +593,10 @@
+     )
+ 
+     const get = Effect.fn("Config.get")(function* () {
+-      return yield* InstanceState.use(state, (s) => s.config)
++      const config = yield* InstanceState.use(state, (s) => s.config)
++      if (config.share && config.share !== "disabled")
++        throw new Error("Session sharing is unsupported by Telegram Core")
++      return config
+     })
+ 
+     const directories = Effect.fn("Config.directories")(function* () {
+@@ -695,7 +673,7 @@
+ export const node = LayerNode.make({
+   service: Service,
+   layer: layer,
+-  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient],
++  deps: [FSUtil.node, Auth.node, Env.node, Npm.node, Database.node, httpClient],
+ })
+ 
+ export * as Config from "./config"
+diff --git a/packages/opencode/src/session/schema.ts b/packages/opencode/src/session/schema.ts
+--- a/packages/opencode/src/session/schema.ts
++++ b/packages/opencode/src/session/schema.ts
+@@ -1,10 +1,9 @@
+ import { Schema } from "effect"
+ 
+ import { Identifier } from "@/id/id"
+-import { SessionV2 } from "@opencode-ai/core/session"
++import { SessionSchema } from "@opencode-ai/core/session/schema"
+ import { statics } from "@opencode-ai/core/schema"
+-
+-export const SessionID = SessionV2.ID
++export const SessionID = SessionSchema.ID
+ export type SessionID = Schema.Schema.Type<typeof SessionID>
+ 
+ export const MessageID = Schema.String.check(Schema.isStartsWith("msg")).pipe(
+diff --git a/packages/opencode/src/session/session.ts b/packages/opencode/src/session/session.ts
+--- a/packages/opencode/src/session/session.ts
++++ b/packages/opencode/src/session/session.ts
+@@ -10,10 +10,6 @@
+ import { InstallationVersion } from "@opencode-ai/core/installation/version"
+ import { Database } from "@opencode-ai/core/database/database"
+ import { EventV2Bridge } from "@/event-v2-bridge"
+-import { SessionV2 } from "@opencode-ai/core/session"
+-import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
+-import { locationServiceMapLayer } from "@opencode-ai/core/location-services"
+-
+ import { NotFoundError } from "@/storage/storage"
+ import { eq } from "drizzle-orm"
+ import { and } from "drizzle-orm"
+@@ -327,8 +323,15 @@
+   Diff: SessionV1.Event.Diff,
+   Error: SessionV1.Event.Error,
+ }
+-
+-export function plan(input: { slug: string; time: { created: number } }, instance: InstanceContext) {
++export function plan(
++  input: {
++    slug: string
++    time: {
++      created: number
++    }
++  },
++  instance: InstanceContext,
++) {
+   const base = instance.project.vcs
+     ? path.join(instance.worktree, ".opencode", "plans")
+     : path.join(Global.Path.data, "plans")
+@@ -381,23 +384,23 @@
+     input.model.cost?.tiers
+       ?.filter((item) => item.tier.type === "context" && contextTokens > item.tier.size)
+       .sort((a, b) => b.tier.size - a.tier.size)[0] ??
+-    (input.model.cost?.experimentalOver200K && contextTokens > 200_000
++    (input.model.cost?.experimentalOver200K && contextTokens > 200000
+       ? input.model.cost.experimentalOver200K
+       : input.model.cost)
+   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
+   return {
+     cost:
+       typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0
+-        ? new Decimal(totalNanoAiu).div(100_000_000_000).toNumber()
++        ? new Decimal(totalNanoAiu).div(100000000000).toNumber()
+         : safe(
+             new Decimal(0)
+-              .add(new Decimal(tokens.input).mul(finite(costInfo?.input ?? 0)).div(1_000_000))
+-              .add(new Decimal(tokens.output).mul(finite(costInfo?.output ?? 0)).div(1_000_000))
+-              .add(new Decimal(tokens.cache.read).mul(finite(costInfo?.cache?.read ?? 0)).div(1_000_000))
+-              .add(new Decimal(tokens.cache.write).mul(finite(costInfo?.cache?.write ?? 0)).div(1_000_000))
++              .add(new Decimal(tokens.input).mul(finite(costInfo?.input ?? 0)).div(1000000))
++              .add(new Decimal(tokens.output).mul(finite(costInfo?.output ?? 0)).div(1000000))
++              .add(new Decimal(tokens.cache.read).mul(finite(costInfo?.cache?.read ?? 0)).div(1000000))
++              .add(new Decimal(tokens.cache.write).mul(finite(costInfo?.cache?.write ?? 0)).div(1000000))
+               // TODO: update models.dev to have better pricing model, for now:
+               // charge reasoning tokens at the same rate as output tokens
+-              .add(new Decimal(tokens.reasoning).mul(finite(costInfo?.output ?? 0)).div(1_000_000))
++              .add(new Decimal(tokens.reasoning).mul(finite(costInfo?.output ?? 0)).div(1000000))
+               .toNumber(),
+           ),
+     tokens,
+diff --git a/packages/opencode/src/effect/runtime-flags.ts b/packages/opencode/src/effect/runtime-flags.ts
+--- a/packages/opencode/src/effect/runtime-flags.ts
++++ b/packages/opencode/src/effect/runtime-flags.ts
+@@ -45,7 +45,7 @@
+   experimentalLspTool: enabledByExperimental("OPENCODE_EXPERIMENTAL_LSP_TOOL"),
+   experimentalOxfmt: enabledByExperimental("OPENCODE_EXPERIMENTAL_OXFMT"),
+   experimentalPlanMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_PLAN_MODE"),
+-  experimentalCodeMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_CODE_MODE"),
++  experimentalCodeMode: Config.succeed(false),
+   experimentalEventSystem: enabledByExperimental("OPENCODE_EXPERIMENTAL_EVENT_SYSTEM"),
+   experimentalWorkspaces: enabledByExperimental("OPENCODE_EXPERIMENTAL_WORKSPACES"),
+   experimentalIconDiscovery: enabledByExperimental("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY"),
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/server.ts b/packages/opencode/src/server/routes/instance/httpapi/server.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/server.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/server.ts
+@@ -1,31 +1,25 @@
+-import { Config as EffectConfig, Context, Effect, Layer } from "effect"
+-import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
+-import { HttpClient, HttpMiddleware, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
+-import * as Socket from "effect/unstable/socket/Socket"
++import { Config as EffectConfig, Context, Layer } from "effect"
++import { HttpApiBuilder } from "effect/unstable/httpapi"
++import { HttpMiddleware, HttpRouter, HttpServer } from "effect/unstable/http"
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+ import * as Observability from "@opencode-ai/core/observability"
+-import { Account } from "@/account/account"
+ import { Agent } from "@/agent/agent"
+ import { Auth } from "@/auth"
+ import { BackgroundJob } from "@/background/job"
+ import { Command } from "@/command"
+ import { Config } from "@/config/config"
+-import { Workspace } from "@/control-plane/workspace"
+ import { Env } from "@/env"
+ import { EventV2Bridge } from "@/event-v2-bridge"
+ import { Format } from "@/format"
+ import { Git } from "@/git"
+-import { Installation } from "@/installation"
+ import { LSP } from "@/lsp/lsp"
+ import { MCP } from "@/mcp"
+ import { McpAuth } from "@/mcp/auth"
+ import { Permission } from "@/permission"
+ import { Plugin } from "@/plugin"
+-import { PluginPtyEnvironment } from "@/plugin/pty-environment"
+ import { InstanceStore } from "@/project/instance-store"
+ import { Project } from "@/project/project"
+ import { Vcs } from "@/project/vcs"
+-import { ProviderAuth } from "@/provider/auth"
+ import { Provider } from "@/provider/provider"
+ import { Question } from "@/question"
+ import { SessionCompaction } from "@/session/compaction"
+@@ -39,17 +33,13 @@
+ import { SessionStatus } from "@/session/status"
+ import { SessionSummary } from "@/session/summary"
+ import { Todo } from "@/session/todo"
+-import { SessionShare } from "@/share/session"
+-import { ShareNext } from "@/share/share-next"
+ import { Skill } from "@/skill"
+ import { Discovery } from "@/skill/discovery"
+ import { Snapshot } from "@/snapshot"
+ import { Storage } from "@/storage/storage"
+ import { ToolRegistry } from "@/tool/registry"
+ import { Truncate } from "@/tool/truncate"
+-import { Worktree } from "@/worktree"
+ import { RuntimeFlags } from "@/effect/runtime-flags"
+-import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+ import { Database } from "@opencode-ai/core/database/database"
+ import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
+ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+@@ -59,53 +49,23 @@
+ import { Npm } from "@opencode-ai/core/npm"
+ import { PermissionSaved } from "@opencode-ai/core/permission/saved"
+ import { ProjectV2 } from "@opencode-ai/core/project"
+-import { ProjectCopy } from "@opencode-ai/core/project/copy"
+-import { PtyTicket } from "@opencode-ai/core/pty/ticket"
+ import { Ripgrep } from "@opencode-ai/core/ripgrep"
+ import { SessionProjector } from "@opencode-ai/core/session/projector"
+-import { SessionV2 } from "@opencode-ai/core/session"
+-import { SessionExecution } from "@opencode-ai/core/session/execution"
+-import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
+ import { lazy } from "@/util/lazy"
+ import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@opencode-ai/server/cors"
+-import { serveUIEffect } from "@/server/shared/ui"
+ import { ServerAuth } from "@/server/auth"
+ import { InstanceHttpApi, RootHttpApi } from "./api"
+-import { Api } from "@opencode-ai/server/api"
+-import { PublicApi } from "./public"
+-import {
+-  authorizationLayer,
+-  authorizationRouterMiddleware,
+-  ptyConnectAuthorizationLayer,
+-  serverAuthorizationLayer,
+-} from "./middleware/authorization"
++import { authorizationLayer } from "./middleware/authorization"
+ import { EventApi } from "./groups/event"
+-import { PtyConnectApi } from "./groups/pty"
+ import { eventHandlers } from "./handlers/event"
+ import { configHandlers } from "./handlers/config"
+-import { controlHandlers } from "./handlers/control"
+-import { controlPlaneHandlers } from "./handlers/control-plane"
+-import { experimentalHandlers } from "./handlers/experimental"
+-import { fileHandlers } from "./handlers/file"
+ import { globalHandlers } from "./handlers/global"
+ import { instanceHandlers } from "./handlers/instance"
+ import { mcpHandlers } from "./handlers/mcp"
+ import { permissionHandlers } from "./handlers/permission"
+ import { projectHandlers } from "./handlers/project"
+-import { projectCopyHandlers } from "./handlers/project-copy"
+-import { providerHandlers } from "./handlers/provider"
+-import { ptyConnectHandlers, ptyHandlers } from "./handlers/pty"
+ import { questionHandlers } from "./handlers/question"
+ import { sessionHandlers } from "./handlers/session"
+-import { syncHandlers } from "./handlers/sync"
+-import { tuiHandlers } from "./handlers/tui"
+-import { handlers } from "@opencode-ai/server/handlers"
+-import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
+-import { layer as locationLayer } from "@opencode-ai/server/location"
+-import { sessionLocationLayer } from "@opencode-ai/server/middleware/session-location"
+-import { PtyEnvironment } from "@opencode-ai/server/pty-environment"
+-import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/middleware/schema-error"
+-import { workspaceHandlers } from "./handlers/workspace"
+ import { instanceContextLayer } from "./middleware/instance-context"
+ import { workspaceRoutingLayer } from "./middleware/workspace-routing"
+ import { disposeMiddleware } from "./lifecycle"
+@@ -122,24 +82,15 @@
+   HttpRouter.middleware(
+     HttpMiddleware.cors({
+       allowedOrigins: (origin) => isAllowedCorsOrigin(origin, corsOptions),
+-      maxAge: 86_400,
++      maxAge: 86400,
+     }),
+     { global: true },
+   )
+-
+-// Route tree:
+-// - rootApiRoutes: typed /global/* and control routes; auth is declared by RootHttpApi.
+-// - eventApiRoutes: typed SSE route with instance routing context and its existing API contract.
+-// - ptyConnectApiRoutes: typed WebSocket upgrade route with ticket-aware auth.
+-// - instanceApiRoutes: remaining typed instance routes.
+-// - uiRoute: raw catch-all fallback; auth is router middleware so public static assets can bypass it.
+-const authOnlyRouterLayer = authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuth.Config.layer))
++// Telegram routes: authenticated global health/disposal, directory SSE, and the Bot SDK contract.
+ const httpApiAuthLayer = authorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
+-const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
+-const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
+-const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
++const workspaceRoutingLive = workspaceRoutingLayer
+ const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
+-  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
++  Layer.provide([globalHandlers]),
+   Layer.provide(schemaErrorLayer),
+   Layer.provide(httpApiAuthLayer),
+ )
+@@ -147,61 +98,21 @@
+   Layer.provide(eventHandlers),
+   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+ )
+-const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
+-  Layer.provide(ptyConnectHandlers),
+-  Layer.provide([ptyConnectHttpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+-)
+ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
+   Layer.provide([
+     configHandlers,
+-    experimentalHandlers,
+-    fileHandlers,
+     instanceHandlers,
+     mcpHandlers,
+     projectHandlers,
+-    projectCopyHandlers,
+-    ptyHandlers,
+     questionHandlers,
+     permissionHandlers,
+-    providerHandlers,
+     sessionHandlers,
+-    syncHandlers,
+-    tuiHandlers,
+-    workspaceHandlers,
+   ]),
+ )
+ 
+ const instanceRoutes = instanceApiRoutes.pipe(
+   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
+ )
+-const serverRoutes = HttpApiBuilder.layer(Api).pipe(
+-  Layer.provide(handlers),
+-  Layer.provide(PluginPtyEnvironment.layer),
+-  Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
+-)
+-
+-// `OpenApi.fromApi` is non-trivial; defer until /doc is actually hit so
+-// processes that never serve it (CLI, scripts) don't pay at module load.
+-// `HttpServerResponse.jsonUnsafe` runs JSON.stringify eagerly, so caching
+-// the response also caches the serialized body — every /doc request reuses
+-// the same Uint8Array instead of re-stringifying the spec.
+-const docResponse = lazy(() => HttpServerResponse.jsonUnsafe(OpenApi.fromApi(PublicApi)))
+-
+-const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effect.succeed(docResponse()))).pipe(
+-  Layer.provide(authOnlyRouterLayer),
+-)
+-
+-const uiRoute = HttpRouter.use((router) =>
+-  Effect.gen(function* () {
+-    const fs = yield* FSUtil.Service
+-    const client = yield* HttpClient.HttpClient
+-    const flags = yield* RuntimeFlags.Service
+-    yield* router.add("*", "/*", (request) =>
+-      serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+-    )
+-  }),
+-).pipe(Layer.provide(authOnlyRouterLayer))
+-
+ type RouteRequirements =
+   | HttpRouter.HttpRouter
+   | HttpRouter.Request<"Error", unknown>
+@@ -214,7 +125,6 @@
+   FSUtil.node,
+   Database.node,
+   Auth.node,
+-  Account.node,
+   Config.node,
+   Env.node,
+   Git.node,
+@@ -224,7 +134,6 @@
+   Plugin.node,
+   ModelsDev.node,
+   Provider.node,
+-  ProviderAuth.node,
+   Agent.node,
+   Skill.node,
+   Discovery.node,
+@@ -255,59 +164,19 @@
+   Format.node,
+   Project.node,
+   Vcs.node,
+-  Workspace.node,
+-  Worktree.node,
+-  Installation.node,
+-  ShareNext.node,
+-  SessionShare.node,
+   InstanceStore.node,
+   httpClient,
+   EventV2.node,
+   ProjectV2.node,
+-  ProjectCopy.node,
+-  PtyTicket.node,
+ ])
+ 
+ export function createRoutes(
+   corsOptions?: CorsOptions,
+ ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
+-  const locationServiceMapV2 = buildLocationServiceMap()
+-
+-  return Layer.mergeAll(
+-    rootApiRoutes,
+-    eventApiRoutes,
+-    ptyConnectApiRoutes,
+-    instanceRoutes,
+-    serverRoutes,
+-    docRoute,
+-    uiRoute,
+-  ).pipe(
+-    Layer.provide([
+-      errorLayer,
+-      compressionLayer,
+-      corsVaryFix,
+-      fenceLayer,
+-      cors(corsOptions),
+-      AppNodeBuilderV1.build(MoveSession.node, [[LocationServiceMap.node, locationServiceMapV2]]),
+-      HttpServer.layerServices,
+-    ]),
++  return Layer.mergeAll(rootApiRoutes, eventApiRoutes, instanceRoutes).pipe(
++    Layer.provide([errorLayer, compressionLayer, corsVaryFix, fenceLayer, cors(corsOptions), HttpServer.layerServices]),
+     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
+-    Layer.provide(sessionLocationLayer),
+-    Layer.provide(locationLayer),
+-    Layer.provide(PtyEnvironment.layer),
+-    Layer.provide(
+-      AppNodeBuilderV1.build(SessionV2.node, [
+-        [LocationServiceMap.node, locationServiceMapV2],
+-        [SessionExecution.node, SessionExecutionLocal.node],
+-      ]),
+-    ),
+-    Layer.provide(locationServiceMapV2),
+-
+     Layer.provide(AppNodeBuilderV1.build(app)),
+-    // Must stay last: layers provided later in this pipe build beneath earlier ones,
+-    // so Observability must come after every service graph. Otherwise eagerly forked
+-    // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout
+-    // logger and corrupt the TUI (#34730).
+     Layer.provideMerge(Observability.layer),
+   )
+ }
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/api.ts b/packages/opencode/src/server/routes/instance/httpapi/api.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/api.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/api.ts
+@@ -8,26 +8,13 @@
+ import { InstanceDisposed } from "@/server/event"
+ import { Question } from "@/question"
+ import { ConfigApi } from "./groups/config"
+-import { ControlApi } from "./groups/control"
+-import { ControlPlaneApi } from "./groups/control-plane"
+ import { EventApi } from "./groups/event"
+-import { ExperimentalApi } from "./groups/experimental"
+-import { FileApi } from "./groups/file"
+ import { InstanceApi } from "./groups/instance"
+ import { McpApi } from "./groups/mcp"
+ import { PermissionApi } from "./groups/permission"
+ import { ProjectApi } from "./groups/project"
+-import { ProjectCopyApi } from "./groups/project-copy"
+-import { ProviderApi } from "./groups/provider"
+-import { PtyApi, PtyConnectApi } from "./groups/pty"
+ import { QuestionApi } from "./groups/question"
+ import { SessionApi } from "./groups/session"
+-import { SyncApi } from "./groups/sync"
+-import { TuiApi } from "./groups/tui"
+-import { WorkspaceApi } from "./groups/workspace"
+-import { makeApi } from "@opencode-ai/protocol/api"
+-import { LocationMiddleware } from "@opencode-ai/server/location"
+-import { SessionLocationMiddleware } from "@opencode-ai/server/middleware/session-location"
+ import { GlobalApi } from "./groups/global"
+ import { Authorization } from "./middleware/authorization"
+ import { SchemaErrorMiddleware } from "./middleware/schema-error"
+@@ -45,44 +32,25 @@
+     .toArray(),
+   InstanceDisposed,
+ ]).annotate({ identifier: "Event" })
+-
+-export const ServerApi = makeApi({
+-  definitions: EventManifest.Latest.values().toArray(),
+-  locationMiddleware: LocationMiddleware,
+-  sessionLocationMiddleware: SessionLocationMiddleware,
+-})
+-
+ export const RootHttpApi = HttpApi.make("opencode-root")
+-  .addHttpApi(ControlApi)
+-  .addHttpApi(ControlPlaneApi)
+   .addHttpApi(GlobalApi)
+   .middleware(SchemaErrorMiddleware)
+   .middleware(Authorization)
+ 
+ export const InstanceHttpApi = HttpApi.make("opencode-instance")
+   .addHttpApi(ConfigApi)
+-  .addHttpApi(ExperimentalApi)
+-  .addHttpApi(FileApi)
+   .addHttpApi(InstanceApi)
+   .addHttpApi(McpApi)
+   .addHttpApi(ProjectApi)
+-  .addHttpApi(ProjectCopyApi)
+-  .addHttpApi(PtyApi)
+   .addHttpApi(QuestionApi)
+   .addHttpApi(PermissionApi)
+-  .addHttpApi(ProviderApi)
+   .addHttpApi(SessionApi)
+-  .addHttpApi(SyncApi)
+-  .addHttpApi(TuiApi)
+-  .addHttpApi(WorkspaceApi)
+   .middleware(SchemaErrorMiddleware)
+ 
+ export const OpenCodeHttpApi = HttpApi.make("opencode")
+   .addHttpApi(RootHttpApi)
+   .addHttpApi(EventApi)
+   .addHttpApi(InstanceHttpApi)
+-  .addHttpApi(ServerApi)
+-  .addHttpApi(PtyConnectApi)
+   .annotate(HttpApi.AdditionalSchemas, [
+     EventSchema,
+     Question.Replied,
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
+@@ -90,18 +90,6 @@
+               "Complete OAuth authentication for a Model Context Protocol (MCP) server using the authorization code.",
+           }),
+         ),
+-        HttpApiEndpoint.post("authAuthenticate", McpPaths.authAuthenticate, {
+-          params: { name: Schema.String },
+-          query: WorkspaceRoutingQuery,
+-          success: described(MCP.Status, "OAuth authentication completed"),
+-          error: [UnsupportedOAuthError, McpServerNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "mcp.auth.authenticate",
+-            summary: "Authenticate MCP OAuth",
+-            description: "Start OAuth flow and wait for callback (opens browser).",
+-          }),
+-        ),
+         HttpApiEndpoint.delete("authRemove", McpPaths.auth, {
+           params: { name: Schema.String },
+           query: WorkspaceRoutingQuery,
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/instance.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/instance.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/instance.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/instance.ts
+@@ -1,11 +1,9 @@
+ import { Agent } from "@/agent/agent"
+ import { Command } from "@/command"
+-import { Format } from "@/format"
+-import { LSP } from "@/lsp/lsp"
+ import { Vcs } from "@/project/vcs"
+ import { Skill } from "@/skill"
+ import { Schema } from "effect"
+-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
++import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+ import { Authorization } from "../middleware/authorization"
+ import { InstanceContextMiddleware } from "../middleware/instance-context"
+ import {
+@@ -59,16 +57,6 @@
+   .add(
+     HttpApiGroup.make("instance")
+       .add(
+-        HttpApiEndpoint.post("dispose", InstancePaths.dispose, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Schema.Boolean, "Instance disposed"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "instance.dispose",
+-            summary: "Dispose instance",
+-            description: "Clean up and dispose the current OpenCode instance, releasing all resources.",
+-          }),
+-        ),
+         HttpApiEndpoint.get("path", InstancePaths.path, {
+           query: WorkspaceRoutingQuery,
+           success: PathInfo,
+@@ -78,62 +66,6 @@
+             summary: "Get paths",
+             description:
+               "Retrieve the current working directory and related path information for the OpenCode instance.",
+-          }),
+-        ),
+-        HttpApiEndpoint.get("vcs", InstancePaths.vcs, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Vcs.Info, "VCS info"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "vcs.get",
+-            summary: "Get VCS info",
+-            description:
+-              "Retrieve version control system (VCS) information for the current project, such as git branch.",
+-          }),
+-        ),
+-        HttpApiEndpoint.get("vcsStatus", InstancePaths.vcsStatus, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Schema.Array(Vcs.FileStatus), "VCS status"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "vcs.status",
+-            summary: "Get VCS status",
+-            description: "Retrieve changed files in the current working tree without patches.",
+-          }),
+-        ),
+-        HttpApiEndpoint.get("vcsDiff", InstancePaths.vcsDiff, {
+-          query: VcsDiffQuery,
+-          success: described(Schema.Array(Vcs.FileDiff), "VCS diff"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "vcs.diff",
+-            summary: "Get VCS diff",
+-            description: "Retrieve the current git diff for the working tree or against the default branch.",
+-          }),
+-        ),
+-        HttpApiEndpoint.get("vcsDiffRaw", InstancePaths.vcsDiffRaw, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(
+-            Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/x-diff; charset=utf-8" })),
+-            "Raw VCS diff",
+-          ),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "vcs.diff.raw",
+-            summary: "Get raw VCS diff",
+-            description: "Retrieve a raw patch for current uncommitted changes.",
+-          }),
+-        ),
+-        HttpApiEndpoint.post("vcsApply", InstancePaths.vcsApply, {
+-          query: WorkspaceRoutingQuery,
+-          payload: Vcs.ApplyInput,
+-          success: described(Vcs.ApplyResult, "VCS patch applied"),
+-          error: ApiVcsApplyError,
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "vcs.apply",
+-            summary: "Apply VCS patch",
+-            description: "Apply a raw patch to the current working tree.",
+           }),
+         ),
+         HttpApiEndpoint.get("command", InstancePaths.command, {
+@@ -166,26 +98,6 @@
+             description: "Get a list of all available skills in the OpenCode system.",
+           }),
+         ),
+-        HttpApiEndpoint.get("lsp", InstancePaths.lsp, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Schema.Array(LSP.Status), "LSP server status"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "lsp.status",
+-            summary: "Get LSP status",
+-            description: "Get LSP server status",
+-          }),
+-        ),
+-        HttpApiEndpoint.get("formatter", InstancePaths.formatter, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Schema.Array(Format.Status), "Formatter status"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "formatter.status",
+-            summary: "Get formatter status",
+-            description: "Get formatter status",
+-          }),
+-        ),
+       )
+       .annotateMerge(
+         OpenApi.annotations({
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/project.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/project.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/project.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/project.ts
+@@ -1,8 +1,6 @@
+ import { Project } from "@/project/project"
+-import { ProjectV2 } from "@opencode-ai/core/project"
+ import { Schema } from "effect"
+-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+-import { ProjectNotFoundError } from "../errors"
++import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+ import { Authorization } from "../middleware/authorization"
+ import { InstanceContextMiddleware } from "../middleware/instance-context"
+ import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
+@@ -29,50 +27,6 @@
+             description: "Get a list of projects that have been opened with OpenCode.",
+           }),
+         ),
+-        HttpApiEndpoint.get("current", `${root}/current`, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Project.Info, "Current project information"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "project.current",
+-            summary: "Get current project",
+-            description: "Retrieve the currently active project that OpenCode is working with.",
+-          }),
+-        ),
+-        HttpApiEndpoint.post("initGit", `${root}/git/init`, {
+-          query: WorkspaceRoutingQuery,
+-          success: described(Project.Info, "Project information after git initialization"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "project.initGit",
+-            summary: "Initialize git repository",
+-            description: "Create a git repository for the current project and return the refreshed project info.",
+-          }),
+-        ),
+-        HttpApiEndpoint.patch("update", `${root}/:projectID`, {
+-          params: { projectID: ProjectV2.ID },
+-          query: WorkspaceRoutingQuery,
+-          payload: UpdatePayload,
+-          success: described(Project.Info, "Updated project information"),
+-          error: [HttpApiError.BadRequest, ProjectNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "project.update",
+-            summary: "Update project",
+-            description: "Update project properties such as name, icon, and commands.",
+-          }),
+-        ),
+-        HttpApiEndpoint.get("directories", `${root}/:projectID/directories`, {
+-          params: { projectID: ProjectV2.ID },
+-          query: WorkspaceRoutingQuery,
+-          success: described(ProjectV2.Directories, "Project directories"),
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "project.directories",
+-            summary: "List project directories",
+-            description: "List known local absolute directories for a project.",
+-          }),
+-        ),
+       )
+       .annotateMerge(
+         OpenApi.annotations({
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/global.ts
+@@ -1,11 +1,10 @@
+-import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+ import { EventV2 } from "@opencode-ai/core/event"
+ import { EventManifest } from "@/event-manifest"
+ import { InstanceDisposed } from "@/server/event"
+ import "@opencode-ai/core/account"
+ import "@/server/event"
+ import { Schema } from "effect"
+-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
++import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+ import semver from "semver"
+ import { described } from "./metadata"
+ 
+@@ -91,35 +90,6 @@
+           description: "Get health information about the OpenCode server.",
+         }),
+       ),
+-      HttpApiEndpoint.get("event", GlobalPaths.event, {
+-        success: GlobalEventSchema,
+-      }).annotateMerge(
+-        OpenApi.annotations({
+-          identifier: "global.event",
+-          summary: "Get global events",
+-          description: "Subscribe to global events from the OpenCode system using server-sent events.",
+-        }),
+-      ),
+-      HttpApiEndpoint.get("configGet", GlobalPaths.config, {
+-        success: described(ConfigV1.Info, "Get global config info"),
+-      }).annotateMerge(
+-        OpenApi.annotations({
+-          identifier: "global.config.get",
+-          summary: "Get global configuration",
+-          description: "Retrieve the current global OpenCode configuration settings and preferences.",
+-        }),
+-      ),
+-      HttpApiEndpoint.patch("configUpdate", GlobalPaths.config, {
+-        payload: ConfigV1.Info,
+-        success: described(ConfigV1.Info, "Successfully updated global config"),
+-        error: HttpApiError.BadRequest,
+-      }).annotateMerge(
+-        OpenApi.annotations({
+-          identifier: "global.config.update",
+-          summary: "Update global configuration",
+-          description: "Update global OpenCode configuration settings and preferences.",
+-        }),
+-      ),
+       HttpApiEndpoint.post("dispose", GlobalPaths.dispose, {
+         success: described(Schema.Boolean, "Global disposed"),
+       }).annotateMerge(
+@@ -129,17 +99,6 @@
+           description: "Clean up and dispose all OpenCode instances, releasing all resources.",
+         }),
+       ),
+-      HttpApiEndpoint.post("upgrade", GlobalPaths.upgrade, {
+-        payload: GlobalUpgradeInput,
+-        success: described(GlobalUpgradeResult, "Upgrade result"),
+-        error: HttpApiError.BadRequest,
+-      }).annotateMerge(
+-        OpenApi.annotations({
+-          identifier: "global.upgrade",
+-          summary: "Upgrade opencode",
+-          description: "Upgrade opencode to the specified version.",
+-        }),
+-      ),
+     )
+     .annotateMerge(OpenApi.annotations({ title: "global", description: "Global server routes." })),
+ )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+@@ -1,15 +1,13 @@
+ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+-import { Permission } from "@/permission"
+ import { SessionV1 } from "@opencode-ai/core/v1/session"
+ 
+ import { Session } from "@/session/session"
+-import { MessageV2 } from "@/session/message-v2"
+ import { SessionPrompt } from "@/session/prompt"
+ import { SessionRevert } from "@/session/revert"
+ import { SessionStatus } from "@/session/status"
+ import { SessionSummary } from "@/session/summary"
+ import { Todo } from "@/session/todo"
+-import { MessageID, PartID, SessionID } from "@/session/schema"
++import { MessageID, SessionID } from "@/session/schema"
+ import { Snapshot } from "@/snapshot"
+ import { Schema, Struct } from "effect"
+ import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+@@ -20,7 +18,7 @@
+   WorkspaceRoutingQuery,
+   WorkspaceRoutingQueryFields,
+ } from "../middleware/workspace-routing"
+-import { ApiNotFoundError, ConflictError, PermissionNotFoundError, SessionBusyError } from "../errors"
++import { ApiNotFoundError, ConflictError, SessionBusyError } from "../errors"
+ import { described } from "./metadata"
+ import { QueryBoolean } from "./query"
+ import { ProviderV2 } from "@opencode-ai/core/provider"
+@@ -197,18 +195,6 @@
+             description: "Retrieve all messages in a session, including user prompts and AI responses.",
+           }),
+         ),
+-        HttpApiEndpoint.get("message", SessionPaths.message, {
+-          params: { sessionID: SessionID, messageID: MessageID },
+-          query: WorkspaceRoutingQuery,
+-          success: described(SessionV1.WithParts, "Message"),
+-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "session.message",
+-            summary: "Get message",
+-            description: "Retrieve a specific message from a session by its message ID.",
+-          }),
+-        ),
+         HttpApiEndpoint.post("create", SessionPaths.create, {
+           query: WorkspaceRoutingQuery,
+           payload: [HttpApiSchema.NoContent, Session.CreateInput],
+@@ -297,44 +283,6 @@
+           error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError],
+         }).annotateMerge(
+           OpenApi.annotations({ identifier: "session.resume", summary: "Resume the existing execution tree" }),
+-        ),
+-        HttpApiEndpoint.post("init", SessionPaths.init, {
+-          params: { sessionID: SessionID },
+-          query: WorkspaceRoutingQuery,
+-          payload: InitPayload,
+-          success: described(Schema.Boolean, "200"),
+-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "session.init",
+-            summary: "Initialize session",
+-            description:
+-              "Analyze the current application and create an AGENTS.md file with project-specific agent configurations.",
+-          }),
+-        ),
+-        HttpApiEndpoint.post("share", SessionPaths.share, {
+-          params: { sessionID: SessionID },
+-          query: WorkspaceRoutingQuery,
+-          success: described(Session.Info, "Successfully shared session"),
+-          error: [HttpApiError.InternalServerError, ApiNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "session.share",
+-            summary: "Share session",
+-            description: "Create a shareable link for a session, allowing others to view the conversation.",
+-          }),
+-        ),
+-        HttpApiEndpoint.delete("unshare", SessionPaths.share, {
+-          params: { sessionID: SessionID },
+-          query: WorkspaceRoutingQuery,
+-          success: described(Session.Info, "Successfully unshared session"),
+-          error: [HttpApiError.InternalServerError, ApiNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "session.unshare",
+-            summary: "Unshare session",
+-            description: "Remove the shareable link for a session, making it private again.",
+-          }),
+         ),
+         HttpApiEndpoint.post("summarize", SessionPaths.summarize, {
+           params: { sessionID: SessionID },
+@@ -389,19 +337,6 @@
+             description: "Send a new command to a session for execution by the AI assistant.",
+           }),
+         ),
+-        HttpApiEndpoint.post("shell", SessionPaths.shell, {
+-          params: { sessionID: SessionID },
+-          query: WorkspaceRoutingQuery,
+-          payload: ShellPayload,
+-          success: described(SessionV1.WithParts, "Created message"),
+-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "session.shell",
+-            summary: "Run shell command",
+-            description: "Execute a shell command within the session context and return the AI's response.",
+-          }),
+-        ),
+         HttpApiEndpoint.post("revert", SessionPaths.revert, {
+           params: { sessionID: SessionID },
+           query: WorkspaceRoutingQuery,
+@@ -428,20 +363,6 @@
+             description: "Restore all previously reverted messages in a session.",
+           }),
+         ),
+-        HttpApiEndpoint.post("permissionRespond", SessionPaths.permissions, {
+-          params: { sessionID: SessionID, permissionID: PermissionV1.ID },
+-          query: WorkspaceRoutingQuery,
+-          payload: PermissionResponsePayload,
+-          success: described(Schema.Boolean, "Permission processed successfully"),
+-          error: [HttpApiError.BadRequest, ApiNotFoundError, PermissionNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "permission.respond",
+-            summary: "Respond to permission",
+-            description: "Approve or deny a permission request from the AI assistant.",
+-            deprecated: true,
+-          }),
+-        ),
+         HttpApiEndpoint.delete("deleteMessage", SessionPaths.deleteMessage, {
+           params: { sessionID: SessionID, messageID: MessageID },
+           query: WorkspaceRoutingQuery,
+@@ -453,29 +374,6 @@
+             summary: "Delete message",
+             description:
+               "Permanently delete a specific message and all of its parts from a session without reverting file changes.",
+-          }),
+-        ),
+-        HttpApiEndpoint.delete("deletePart", SessionPaths.deletePart, {
+-          params: { sessionID: SessionID, messageID: MessageID, partID: PartID },
+-          query: WorkspaceRoutingQuery,
+-          success: described(Schema.Boolean, "Successfully deleted part"),
+-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "part.delete",
+-            description: "Delete a part from a message.",
+-          }),
+-        ),
+-        HttpApiEndpoint.patch("updatePart", SessionPaths.updatePart, {
+-          params: { sessionID: SessionID, messageID: MessageID, partID: PartID },
+-          query: WorkspaceRoutingQuery,
+-          payload: SessionV1.Part,
+-          success: described(SessionV1.Part, "Successfully updated part"),
+-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "part.update",
+-            description: "Update a part in a message.",
+           }),
+         ),
+       )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/config.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/config.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/config.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/config.ts
+@@ -1,7 +1,6 @@
+-import { Config } from "@/config/config"
+ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+ import { Provider } from "@/provider/provider"
+-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
++import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+ import { Authorization } from "../middleware/authorization"
+ import { InstanceContextMiddleware } from "../middleware/instance-context"
+ import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
+@@ -21,18 +20,6 @@
+             identifier: "config.get",
+             summary: "Get configuration",
+             description: "Retrieve the current OpenCode configuration settings and preferences.",
+-          }),
+-        ),
+-        HttpApiEndpoint.patch("update", root, {
+-          query: WorkspaceRoutingQuery,
+-          payload: ConfigV1.Info,
+-          success: described(ConfigV1.Info, "Successfully updated config"),
+-          error: HttpApiError.BadRequest,
+-        }).annotateMerge(
+-          OpenApi.annotations({
+-            identifier: "config.update",
+-            summary: "Update configuration",
+-            description: "Update OpenCode configuration settings and preferences.",
+           }),
+         ),
+         HttpApiEndpoint.get("providers", `${root}/providers`, {
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts b/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
+@@ -1,250 +1,35 @@
+-import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+-import type { Target } from "@/control-plane/types"
+-import { Workspace } from "@/control-plane/workspace"
+-import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
+-import { Session } from "@/session/session"
+-import { HttpApiProxy } from "./proxy"
+-import * as Fence from "@/server/shared/fence"
+-import { getWorkspaceRouteSessionID, isLocalWorkspaceRoute, workspaceProxyURL } from "@/server/shared/workspace-routing"
+-import { NotFoundError } from "@/storage/storage"
+-import { Flag } from "@opencode-ai/core/flag/flag"
+-import { Context, Data, Effect, Layer, Option, Schema } from "effect"
+-import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
++import { Context, Effect, Layer, Schema } from "effect"
++import { HttpServerRequest } from "effect/unstable/http"
+ import { HttpApiMiddleware } from "effect/unstable/httpapi"
+-import * as Socket from "effect/unstable/socket/Socket"
++import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
+ import { InvalidRequestError } from "../errors"
+-
+-// Query fields this middleware reads from the URL. Spread into every
+-// endpoint query schema in groups that apply WorkspaceRoutingMiddleware,
+-// otherwise HttpApi rejects requests carrying these params with 400.
+-// HttpApiMiddleware in effect-smol cannot declare query params today —
+-// remove this once upstream supports middleware-declared query schemas.
+ export const WorkspaceRoutingQueryFields = {
+   directory: Schema.optional(Schema.String),
+   workspace: Schema.optional(Schema.String),
+ }
+ 
+ export const WorkspaceRoutingQuery = Schema.Struct(WorkspaceRoutingQueryFields)
+-
+-type RemoteTarget = Extract<Target, { type: "remote" }>
+-
+-type RequestPlan = Data.TaggedEnum<{
+-  InvalidWorkspace: {}
+-  MissingWorkspace: { readonly workspaceID: WorkspaceV2.ID }
+-  Local: { readonly directory: string; readonly workspaceID?: WorkspaceV2.ID }
+-  Remote: {
+-    readonly request: HttpServerRequest.HttpServerRequest
+-    readonly workspace: Workspace.Info
+-    readonly target: RemoteTarget
+-    readonly url: URL
+-  }
+-}>
+-const RequestPlan = Data.taggedEnum<RequestPlan>()
+-const InvalidWorkspaceID = Symbol("InvalidWorkspaceID")
+-
+ export class WorkspaceRouteContext extends Context.Service<
+   WorkspaceRouteContext,
+-  {
+-    readonly directory: string
+-    readonly workspaceID?: WorkspaceV2.ID
+-  }
+->()("@opencode/ExperimentalHttpApiWorkspaceRouteContext") {}
+-
++  { readonly directory: string; readonly workspaceID?: WorkspaceV2.ID }
++>()("@opencode/ExperimentalHttpApiWorkspaceRoute") {}
+ export class WorkspaceRoutingMiddleware extends HttpApiMiddleware.Service<
+   WorkspaceRoutingMiddleware,
+-  {
+-    provides: WorkspaceRouteContext
+-    requires: Session.Service
+-  }
+->()("@opencode/ExperimentalHttpApiWorkspaceRouting") {}
+-
+-function requestURL(request: HttpServerRequest.HttpServerRequest): URL {
+-  return new URL(request.url, "http://localhost")
+-}
+-
+-function configuredWorkspaceID(): WorkspaceV2.ID | undefined {
+-  return Flag.OPENCODE_WORKSPACE_ID ? WorkspaceV2.ID.make(Flag.OPENCODE_WORKSPACE_ID) : undefined
+-}
+-
+-function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceV2.ID): WorkspaceV2.ID | undefined {
+-  const workspaceParam = url.searchParams.get("workspace")
+-  return sessionWorkspaceID ?? (workspaceParam ? WorkspaceV2.ID.make(workspaceParam) : undefined)
+-}
+-
+-function selectedV2WorkspaceID(
+-  url: URL,
+-  sessionWorkspaceID?: WorkspaceV2.ID,
+-): WorkspaceV2.ID | typeof InvalidWorkspaceID | undefined {
+-  if (sessionWorkspaceID) return sessionWorkspaceID
+-  const workspaceParam = url.searchParams.get("workspace")
+-  if (!workspaceParam) return undefined
+-  const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(workspaceParam)
+-  if (Option.isNone(workspaceID)) return InvalidWorkspaceID
+-  return workspaceID.value
+-}
+-
+-function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
+-  return url.searchParams.get("directory") || request.headers["x-opencode-directory"] || process.cwd()
+-}
+-
+-function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {
+-  return isLocalWorkspaceRoute(request.method, url.pathname) || url.pathname.startsWith("/console")
+-}
+-
+-function resolveWorkspace(
+-  id: WorkspaceV2.ID | undefined,
+-  envWorkspaceID: WorkspaceV2.ID | undefined,
+-): Effect.Effect<Workspace.Info | void, never, Workspace.Service> {
+-  if (!id || envWorkspaceID) return Effect.void
+-  return Workspace.Service.use((workspace) => workspace.get(id))
+-}
+-
+-function missingWorkspaceResponse(id: WorkspaceV2.ID): HttpServerResponse.HttpServerResponse {
+-  return HttpServerResponse.text(`Workspace not found: ${id}`, {
+-    status: 500,
+-    contentType: "text/plain; charset=utf-8",
+-  })
+-}
+-
+-function resolveTarget(workspace: Workspace.Info): Effect.Effect<Target> {
+-  return WorkspaceAdapterRuntime.target(workspace)
+-}
+-
+-function proxyRemote(
+-  client: HttpClient.HttpClient,
+-  request: HttpServerRequest.HttpServerRequest,
+-  workspace: Workspace.Info,
+-  target: RemoteTarget,
+-  url: URL,
+-): Effect.Effect<HttpServerResponse.HttpServerResponse, never, Socket.WebSocketConstructor | Workspace.Service> {
+-  return Effect.gen(function* () {
+-    const syncing = yield* Workspace.Service.use((svc) => svc.isSyncing(workspace.id))
+-    if (!syncing) {
+-      return HttpServerResponse.text(`broken sync connection for workspace: ${workspace.id}`, {
+-        status: 503,
+-        contentType: "text/plain; charset=utf-8",
+-      })
+-    }
+-    const proxyURL = workspaceProxyURL(target.url, url)
+-    const headers = request.headers as Record<string, string>
+-    if (headers["upgrade"]?.toLowerCase() === "websocket") return yield* HttpApiProxy.websocket(request, proxyURL)
+-    const response = yield* HttpApiProxy.http(client, proxyURL, target.headers, request)
+-    const sync = Fence.parse(new Headers(response.headers))
+-    if (sync) {
+-      const syncFailure = yield* Fence.wait(
+-        workspace.id,
+-        sync,
+-        request.source instanceof Request ? request.source.signal : undefined,
+-      ).pipe(
+-        Effect.as(undefined),
+-        Effect.catch((error) => Effect.succeed(HttpServerResponse.text(error.message, { status: 503 }))),
++  { provides: WorkspaceRouteContext }
++>()("@opencode/ExperimentalHttpApiWorkspaceRouting", { error: InvalidRequestError }) {}
++export const workspaceRoutingLayer = Layer.succeed(WorkspaceRoutingMiddleware)(
++  WorkspaceRoutingMiddleware.of((effect) =>
++    Effect.gen(function* () {
++      const request = yield* HttpServerRequest.HttpServerRequest
++      const url = new URL(request.url, "http://localhost")
++      if (
++        url.searchParams.has("workspace") ||
++        request.headers["x-opencode-workspace"] ||
++        process.env.OPENCODE_WORKSPACE_ID
+       )
+-      if (syncFailure) return syncFailure
+-    }
+-    return response
+-  })
+-}
+-
+-function planWorkspaceRequest(
+-  request: HttpServerRequest.HttpServerRequest,
+-  url: URL,
+-  workspace: Workspace.Info,
+-): Effect.Effect<RequestPlan, never, Workspace.Service> {
+-  return Effect.gen(function* () {
+-    const target = yield* resolveTarget(workspace)
+-    if (target.type === "remote") return RequestPlan.Remote({ request, workspace, target, url })
+-    return RequestPlan.Local({ directory: target.directory, workspaceID: workspace.id })
+-  })
+-}
+-
+-function planRequest(
+-  request: HttpServerRequest.HttpServerRequest,
+-  session?: Session.Info,
+-): Effect.Effect<RequestPlan, never, Workspace.Service> {
+-  return Effect.gen(function* () {
+-    const url = requestURL(request)
+-    const envWorkspaceID = configuredWorkspaceID()
+-    const workspaceID = url.pathname.startsWith("/api/")
+-      ? selectedV2WorkspaceID(url, session?.workspaceID)
+-      : selectedWorkspaceID(url, session?.workspaceID)
+-    if (workspaceID === InvalidWorkspaceID) return RequestPlan.InvalidWorkspace()
+-    const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
+-
+-    if (workspaceID && workspace === undefined && !envWorkspaceID) {
+-      return RequestPlan.MissingWorkspace({ workspaceID })
+-    }
+-
+-    if (workspace !== undefined && !envWorkspaceID && !shouldStayOnControlPlane(request, url)) {
+-      return yield* planWorkspaceRequest(request, url, workspace)
+-    }
+-
+-    return RequestPlan.Local({
+-      directory: session?.directory || defaultDirectory(request, url),
+-      workspaceID: envWorkspaceID ?? workspaceID,
+-    })
+-  })
+-}
+-
+-function routeWorkspace<E>(
+-  client: HttpClient.HttpClient,
+-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
+-  plan: RequestPlan,
+-): Effect.Effect<HttpServerResponse.HttpServerResponse, E, Socket.WebSocketConstructor | Workspace.Service> {
+-  return RequestPlan.$match(plan, {
+-    InvalidWorkspace: () =>
+-      Effect.succeed(
+-        HttpServerResponse.jsonUnsafe(
+-          new InvalidRequestError({
+-            message: "Invalid workspace query parameter",
+-            kind: "Query",
+-            field: "workspace",
+-          }),
+-          { status: 400 },
+-        ),
+-      ),
+-    MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
+-    Remote: ({ request, workspace, target, url }) => proxyRemote(client, request, workspace, target, url),
+-    Local: ({ directory, workspaceID }) =>
+-      effect.pipe(Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID }))),
+-  })
+-}
+-
+-function routeHttpApiWorkspace<E>(
+-  client: HttpClient.HttpClient,
+-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
+-): Effect.Effect<
+-  HttpServerResponse.HttpServerResponse,
+-  E,
+-  Session.Service | Workspace.Service | HttpServerRequest.HttpServerRequest | Socket.WebSocketConstructor
+-> {
+-  return Effect.gen(function* () {
+-    const request = yield* HttpServerRequest.HttpServerRequest
+-    const sessionID = getWorkspaceRouteSessionID(requestURL(request))
+-    const session = sessionID
+-      ? yield* Session.Service.use((svc) => svc.get(sessionID)).pipe(
+-          Effect.catchIf(
+-            (error): error is NotFoundError => NotFoundError.isInstance(error),
+-            () => Effect.succeed(undefined),
+-          ),
+-          Effect.catchDefect(() => Effect.succeed(undefined)),
+-        )
+-      : undefined
+-    const plan = yield* planRequest(request, session)
+-    return yield* routeWorkspace(client, effect, plan)
+-  })
+-}
+-
+-export const workspaceRoutingLayer = Layer.effect(
+-  WorkspaceRoutingMiddleware,
+-  Effect.gen(function* () {
+-    const makeWebSocket = yield* Socket.WebSocketConstructor
+-    const workspace = yield* Workspace.Service
+-    const client = yield* HttpClient.HttpClient
+-    return WorkspaceRoutingMiddleware.of((effect) =>
+-      routeHttpApiWorkspace(client, effect).pipe(
+-        Effect.provideService(Socket.WebSocketConstructor, makeWebSocket),
+-        Effect.provideService(Workspace.Service, workspace),
+-      ),
+-    )
+-  }),
++        return yield* new InvalidRequestError({ message: "Remote workspace placement is unsupported by Telegram Core" })
++      const directory = url.searchParams.get("directory") ?? request.headers["x-opencode-directory"] ?? process.cwd()
++      return yield* effect.pipe(Effect.provideService(WorkspaceRouteContext, { directory }))
++    }),
++  ),
+ )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts
+@@ -19,8 +19,11 @@
+         "status" in result ? { [ctx.payload.name]: result } : result,
+       ).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+     })
+-
+-    const authStart = Effect.fn("McpHttpApi.authStart")(function* (ctx: { params: { name: string } }) {
++    const authStart = Effect.fn("McpHttpApi.authStart")(function* (ctx: {
++      params: {
++        name: string
++      }
++    }) {
+       return yield* Effect.gen(function* () {
+         if (!(yield* mcp.supportsOAuth(ctx.params.name))) {
+           return yield* new UnsupportedOAuthError({ error: `MCP server ${ctx.params.name} does not support OAuth` })
+@@ -34,7 +37,9 @@
+     })
+ 
+     const authCallback = Effect.fn("McpHttpApi.authCallback")(function* (ctx: {
+-      params: { name: string }
++      params: {
++        name: string
++      }
+       payload: typeof AuthCallbackPayload.Type
+     }) {
+       return yield* mcp
+@@ -47,21 +52,11 @@
+           ),
+         )
+     })
+-
+-    const authAuthenticate = Effect.fn("McpHttpApi.authAuthenticate")(function* (ctx: { params: { name: string } }) {
+-      return yield* Effect.gen(function* () {
+-        if (!(yield* mcp.supportsOAuth(ctx.params.name))) {
+-          return yield* new UnsupportedOAuthError({ error: `MCP server ${ctx.params.name} does not support OAuth` })
+-        }
+-        return yield* mcp.authenticate(ctx.params.name)
+-      }).pipe(
+-        Effect.catchTag("MCP.NotFoundError", (error) =>
+-          Effect.fail(new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` })),
+-        ),
+-      )
+-    })
+-
+-    const authRemove = Effect.fn("McpHttpApi.authRemove")(function* (ctx: { params: { name: string } }) {
++    const authRemove = Effect.fn("McpHttpApi.authRemove")(function* (ctx: {
++      params: {
++        name: string
++      }
++    }) {
+       const status = yield* mcp.status()
+       if (!(ctx.params.name in status))
+         return yield* new McpServerNotFoundError({
+@@ -71,8 +66,11 @@
+       yield* mcp.removeAuth(ctx.params.name)
+       return { success: true as const }
+     })
+-
+-    const connect = Effect.fn("McpHttpApi.connect")(function* (ctx: { params: { name: string } }) {
++    const connect = Effect.fn("McpHttpApi.connect")(function* (ctx: {
++      params: {
++        name: string
++      }
++    }) {
+       yield* mcp
+         .connect(ctx.params.name)
+         .pipe(
+@@ -84,8 +82,11 @@
+         )
+       return true
+     })
+-
+-    const disconnect = Effect.fn("McpHttpApi.disconnect")(function* (ctx: { params: { name: string } }) {
++    const disconnect = Effect.fn("McpHttpApi.disconnect")(function* (ctx: {
++      params: {
++        name: string
++      }
++    }) {
+       yield* mcp
+         .disconnect(ctx.params.name)
+         .pipe(
+@@ -103,7 +104,6 @@
+       .handle("add", add)
+       .handle("authStart", authStart)
+       .handle("authCallback", authCallback)
+-      .handle("authAuthenticate", authAuthenticate)
+       .handle("authRemove", authRemove)
+       .handle("connect", connect)
+       .handle("disconnect", disconnect)
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/instance.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/instance.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/instance.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/instance.ts
+@@ -1,31 +1,16 @@
+ import { Agent } from "@/agent/agent"
+ import { Command } from "@/command"
+ import * as InstanceState from "@/effect/instance-state"
+-import { Format } from "@/format"
+ import { Global } from "@opencode-ai/core/global"
+-import { LSP } from "@/lsp/lsp"
+-import { Vcs } from "@/project/vcs"
+ import { Skill } from "@/skill"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/unstable/httpapi"
+ import { InstanceHttpApi } from "../api"
+-import { ApiVcsApplyError } from "../groups/instance"
+-import { markInstanceForDisposal } from "../lifecycle"
+-
+ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
+   Effect.gen(function* () {
+     const agent = yield* Agent.Service
+     const command = yield* Command.Service
+-    const format = yield* Format.Service
+-    const lsp = yield* LSP.Service
+     const skill = yield* Skill.Service
+-    const vcs = yield* Vcs.Service
+-
+-    const dispose = Effect.fn("InstanceHttpApi.dispose")(function* () {
+-      yield* markInstanceForDisposal(yield* InstanceState.context)
+-      return true
+-    })
+-
+     const getPath = Effect.fn("InstanceHttpApi.path")(function* () {
+       const ctx = yield* InstanceState.context
+       return {
+@@ -36,43 +21,6 @@
+         directory: ctx.directory,
+       }
+     })
+-
+-    const getVcs = Effect.fn("InstanceHttpApi.vcs")(function* () {
+-      const [branch, default_branch] = yield* Effect.all([vcs.branch(), vcs.defaultBranch()], {
+-        concurrency: "unbounded",
+-      })
+-      return { branch, default_branch }
+-    })
+-
+-    const getVcsStatus = Effect.fn("InstanceHttpApi.vcsStatus")(function* () {
+-      return yield* vcs.status()
+-    })
+-
+-    const getVcsDiff = Effect.fn("InstanceHttpApi.vcsDiff")(function* (ctx: {
+-      query: { mode: Vcs.Mode; context?: number }
+-    }) {
+-      return yield* vcs.diff(ctx.query.mode, { context: ctx.query.context })
+-    })
+-
+-    const getVcsDiffRaw = Effect.fn("InstanceHttpApi.vcsDiffRaw")(function* () {
+-      return yield* vcs.diffRaw()
+-    })
+-
+-    const applyVcs = Effect.fn("InstanceHttpApi.vcsApply")(function* (ctx: { payload: Vcs.ApplyInput }) {
+-      return yield* vcs.apply(ctx.payload).pipe(
+-        Effect.mapError(
+-          (error) =>
+-            new ApiVcsApplyError({
+-              name: "VcsApplyError",
+-              data: {
+-                message: error.message,
+-                reason: error.reason,
+-              },
+-            }),
+-        ),
+-      )
+-    })
+-
+     const getCommand = Effect.fn("InstanceHttpApi.command")(function* () {
+       return yield* command.list()
+     })
+@@ -84,27 +32,10 @@
+     const getSkill = Effect.fn("InstanceHttpApi.skill")(function* () {
+       return yield* skill.all()
+     })
+-
+-    const getLsp = Effect.fn("InstanceHttpApi.lsp")(function* () {
+-      return yield* lsp.status()
+-    })
+-
+-    const getFormatter = Effect.fn("InstanceHttpApi.formatter")(function* () {
+-      return yield* format.status()
+-    })
+-
+     return handlers
+-      .handle("dispose", dispose)
+       .handle("path", getPath)
+-      .handle("vcs", getVcs)
+-      .handle("vcsStatus", getVcsStatus)
+-      .handle("vcsDiff", getVcsDiff)
+-      .handle("vcsDiffRaw", getVcsDiffRaw)
+-      .handle("vcsApply", applyVcs)
+       .handle("command", getCommand)
+       .handle("agent", getAgent)
+       .handle("skill", getSkill)
+-      .handle("lsp", getLsp)
+-      .handle("formatter", getFormatter)
+   }),
+ )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/project.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/project.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/project.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/project.ts
+@@ -1,63 +1,13 @@
+-import * as InstanceState from "@/effect/instance-state"
+ import { Project } from "@/project/project"
+-import { ProjectV2 } from "@opencode-ai/core/project"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/unstable/httpapi"
+ import { InstanceHttpApi } from "../api"
+-import { ProjectNotFoundError } from "../errors"
+-import { markInstanceForReload } from "../lifecycle"
+-
+ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", (handlers) =>
+   Effect.gen(function* () {
+     const svc = yield* Project.Service
+-    const project = yield* ProjectV2.Service
+-
+     const list = Effect.fn("ProjectHttpApi.list")(function* () {
+       return yield* svc.list()
+     })
+-
+-    const current = Effect.fn("ProjectHttpApi.current")(function* () {
+-      return (yield* InstanceState.context).project
+-    })
+-
+-    const initGit = Effect.fn("ProjectHttpApi.initGit")(function* () {
+-      const ctx = yield* InstanceState.context
+-      const next = yield* svc.initGit({ directory: ctx.directory, project: ctx.project })
+-      if (next.id === ctx.project.id && next.vcs === ctx.project.vcs && next.worktree === ctx.project.worktree)
+-        return next
+-      yield* markInstanceForReload(ctx, {
+-        directory: ctx.directory,
+-        worktree: ctx.directory,
+-        project: next,
+-      })
+-      return next
+-    })
+-
+-    const update = Effect.fn("ProjectHttpApi.update")(function* (ctx: {
+-      params: { projectID: ProjectV2.ID }
+-      payload: Project.UpdatePayload
+-    }) {
+-      return yield* svc.update({ ...ctx.payload, projectID: ctx.params.projectID }).pipe(
+-        Effect.catchTag("Project.NotFoundError", (error) =>
+-          Effect.fail(
+-            new ProjectNotFoundError({
+-              projectID: error.projectID,
+-              message: `Project not found: ${error.projectID}`,
+-            }),
+-          ),
+-        ),
+-      )
+-    })
+-
+-    const directories = Effect.fn("ProjectHttpApi.directories")((ctx: { params: { projectID: ProjectV2.ID } }) =>
+-      project.directories({ projectID: ctx.params.projectID }),
+-    )
+-
+-    return handlers
+-      .handle("list", list)
+-      .handle("current", current)
+-      .handle("initGit", initGit)
+-      .handle("update", update)
+-      .handle("directories", directories)
++    return handlers.handle("list", list)
+   }),
+ )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts
+@@ -1,8 +1,5 @@
+-import { Config } from "@/config/config"
+ import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
+-import { EffectBridge } from "@/effect/bridge"
+ import { EventV2 } from "@opencode-ai/core/event"
+-import { Installation } from "@/installation"
+ import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+ import { InstallationVersion } from "@opencode-ai/core/installation/version"
+ import { Effect, Queue } from "effect"
+@@ -11,8 +8,6 @@
+ import { HttpApiBuilder } from "effect/unstable/httpapi"
+ import * as Sse from "effect/unstable/encoding/Sse"
+ import { RootHttpApi } from "../api"
+-import { GlobalUpgradeInput } from "../groups/global"
+-
+ function eventData(data: unknown): Sse.Event {
+   return {
+     _tag: "Event",
+@@ -59,10 +54,6 @@
+ 
+ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handlers) =>
+   Effect.gen(function* () {
+-    const config = yield* Config.Service
+-    const installation = yield* Installation.Service
+-    const bridge = yield* EffectBridge.make()
+-
+     const health = Effect.fn("GlobalHttpApi.health")(function* () {
+       return { healthy: true as const, version: InstallationVersion }
+     })
+@@ -70,57 +61,10 @@
+     const event = Effect.fn("GlobalHttpApi.event")(function* () {
+       return yield* eventResponse()
+     })
+-
+-    const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {
+-      return yield* config.getGlobal()
+-    })
+-
+-    const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
+-      const result = yield* config.updateGlobal(ctx.payload)
+-      if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
+-      return result.info
+-    })
+-
+     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {
+       yield* disposeAllInstancesAndEmitGlobalDisposed()
+       return true
+     })
+-
+-    const upgrade = Effect.fn("GlobalHttpApi.upgrade")(function* (ctx: { payload: typeof GlobalUpgradeInput.Type }) {
+-      const method = yield* installation.method()
+-      if (method === "unknown") {
+-        return HttpServerResponse.jsonUnsafe(
+-          { success: false as const, error: "Unknown installation method" },
+-          { status: 400 },
+-        )
+-      }
+-      const target = ctx.payload.target
+-      const result = yield* installation.upgrade(method, target).pipe(
+-        Effect.as({ success: true as const, version: target }),
+-        Effect.catch((err) =>
+-          Effect.succeed({
+-            success: false as const,
+-            error: err instanceof Error ? err.message : String(err),
+-          }),
+-        ),
+-      )
+-      if (!result.success) return HttpServerResponse.jsonUnsafe(result, { status: 500 })
+-      GlobalBus.emit("event", {
+-        directory: "global",
+-        payload: {
+-          type: Installation.Event.Updated.type,
+-          properties: { version: target },
+-        },
+-      })
+-      return HttpServerResponse.jsonUnsafe(result)
+-    })
+-
+-    return handlers
+-      .handle("health", health)
+-      .handleRaw("event", event)
+-      .handle("configGet", configGet)
+-      .handle("configUpdate", configUpdate)
+-      .handle("dispose", dispose)
+-      .handle("upgrade", upgrade)
++    return handlers.handle("health", health).handle("dispose", dispose)
+   }),
+ )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
+@@ -1,10 +1,6 @@
+-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+ import { Agent } from "@/agent/agent"
+-import { SessionV1 } from "@opencode-ai/core/v1/session"
+ import { EventV2Bridge } from "@/event-v2-bridge"
+-import { Command } from "@/command"
+ import { Permission } from "@/permission"
+-import { SessionShare } from "@/share/session"
+ import { Session } from "@/session/session"
+ import { SessionCompaction } from "@/session/compaction"
+ import { MessageV2 } from "@/session/message-v2"
+@@ -14,7 +10,7 @@
+ import { SessionStatus } from "@/session/status"
+ import { SessionSummary } from "@/session/summary"
+ import { Todo } from "@/session/todo"
+-import { MessageID, PartID, SessionID } from "@/session/schema"
++import { MessageID, SessionID } from "@/session/schema"
+ import { NamedError } from "@opencode-ai/core/util/error"
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+ import { Cause, Effect, Option, Schema, Scope } from "effect"
+@@ -28,17 +24,14 @@
+   ExecutionControlPayload,
+   DiffQuery,
+   ForkPayload,
+-  InitPayload,
+   ListQuery,
+   MessagesQuery,
+-  PermissionResponsePayload,
+   PromptPayload,
+   RevertPayload,
+-  ShellPayload,
+   SummarizePayload,
+   UpdatePayload,
+ } from "../groups/session"
+-import { ConflictError, PermissionNotFoundError } from "../errors"
++import { ConflictError } from "../errors"
+ import * as SessionError from "./session-errors"
+ 
+ const tryParseJson = (text: string) =>
+@@ -50,13 +43,11 @@
+ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
+   Effect.gen(function* () {
+     const session = yield* Session.Service
+-    const shareSvc = yield* SessionShare.Service
+     const promptSvc = yield* SessionPrompt.Service
+     const revertSvc = yield* SessionRevert.Service
+     const compactSvc = yield* SessionCompaction.Service
+     const runState = yield* SessionRunState.Service
+     const agentSvc = yield* Agent.Service
+-    const permissionSvc = yield* Permission.Service
+     const statusSvc = yield* SessionStatus.Service
+     const todoSvc = yield* Todo.Service
+     const summary = yield* SessionSummary.Service
+@@ -103,30 +94,43 @@
+       }
+       return info
+     })
+-
+-    const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
++    const get = Effect.fn("SessionHttpApi.get")(function* (ctx: {
++      params: {
++        sessionID: SessionID
++      }
++    }) {
+       return yield* requireSession(ctx.params.sessionID)
+     })
+-
+-    const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
++    const children = Effect.fn("SessionHttpApi.children")(function* (ctx: {
++      params: {
++        sessionID: SessionID
++      }
++    }) {
+       yield* requireSession(ctx.params.sessionID)
+       return yield* session.children(ctx.params.sessionID)
+     })
+-
+-    const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: { params: { sessionID: SessionID } }) {
++    const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: {
++      params: {
++        sessionID: SessionID
++      }
++    }) {
+       yield* requireSession(ctx.params.sessionID)
+       return yield* todoSvc.get(ctx.params.sessionID)
+     })
+ 
+     const diff = Effect.fn("SessionHttpApi.diff")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       query: typeof DiffQuery.Type
+     }) {
+       return yield* summary.diff({ sessionID: ctx.params.sessionID, messageID: ctx.query.messageID })
+     })
+ 
+     const messages = Effect.fn("SessionHttpApi.messages")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       query: typeof MessagesQuery.Type
+     }) {
+       if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
+@@ -167,7 +171,10 @@
+     })
+ 
+     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
+-      params: { sessionID: SessionID; messageID: MessageID }
++      params: {
++        sessionID: SessionID
++        messageID: MessageID
++      }
+     }) {
+       return yield* SessionError.mapStorageNotFound(
+         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
+@@ -175,7 +182,7 @@
+     })
+ 
+     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
+-      return yield* shareSvc.create(ctx.payload)
++      return yield* session.create(ctx.payload)
+     })
+ 
+     const createRaw = Effect.fn("SessionHttpApi.createRaw")(function* (ctx: {
+@@ -196,8 +203,11 @@
+         : decoded
+       return yield* create({ payload })
+     })
+-
+-    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
++    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: {
++      params: {
++        sessionID: SessionID
++      }
++    }) {
+       yield* requireExecutionSession(ctx.params.sessionID)
+       yield* runState.cancel(ctx.params.sessionID)
+       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
+@@ -205,7 +215,9 @@
+     })
+ 
+     const update = Effect.fn("SessionHttpApi.update")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof UpdatePayload.Type
+     }) {
+       const current = yield* requireSession(ctx.params.sessionID)
+@@ -228,7 +240,9 @@
+     })
+ 
+     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload?: typeof ForkPayload.Type
+     }) {
+       return yield* SessionError.mapStorageNotFound(
+@@ -240,7 +254,9 @@
+     })
+ 
+     const forkRaw = Effect.fn("SessionHttpApi.forkRaw")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       request: HttpServerRequest.HttpServerRequest
+     }) {
+       const body = yield* Effect.orDie(ctx.request.text)
+@@ -277,52 +293,19 @@
+         return yield* controlError((paused ? runState.pause : runState.resume)(ctx.params.sessionID, ctx.payload.runId))
+       })
+     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof ExecutionControlPayload.Type | void
+     }) {
+       if (ctx.payload) yield* requireExecutionSession(ctx.params.sessionID)
+       yield* controlError(runState.cancel(ctx.params.sessionID, ctx.payload?.runId))
+       return true
+     })
+-
+-    const init = Effect.fn("SessionHttpApi.init")(function* (ctx: {
+-      params: { sessionID: SessionID }
+-      payload: typeof InitPayload.Type
+-    }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      yield* promptSvc
+-        .command({
+-          sessionID: ctx.params.sessionID,
+-          messageID: ctx.payload.messageID,
+-          model: `${ctx.payload.providerID}/${ctx.payload.modelID}`,
+-          command: Command.Default.INIT,
+-          arguments: "",
+-        })
+-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+-      return true
+-    })
+-
+-    // share/unshare errors aren't all client-induced — storage and network
+-    // failures from SessionShare are real possibilities. Map to a typed 500
+-    // (matches the legacy route behavior which routed any failure through
+-    // ErrorMiddleware → NamedError.Unknown 500) instead of blanket-mapping
+-    // every failure to a 400 BadRequest.
+-    const share = Effect.fn("SessionHttpApi.share")(function* (ctx: { params: { sessionID: SessionID } }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      yield* shareSvc.share(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
+-      return yield* requireSession(ctx.params.sessionID)
+-    })
+-
+-    const unshare = Effect.fn("SessionHttpApi.unshare")(function* (ctx: { params: { sessionID: SessionID } }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      yield* shareSvc
+-        .unshare(ctx.params.sessionID)
+-        .pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
+-      return yield* requireSession(ctx.params.sessionID)
+-    })
+-
+     const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof SummarizePayload.Type
+     }) {
+       yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
+@@ -344,7 +327,9 @@
+     })
+ 
+     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof PromptPayload.Type
+     }) {
+       yield* requireSession(ctx.params.sessionID)
+@@ -360,7 +345,9 @@
+     })
+ 
+     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof PromptPayload.Type
+     }) {
+       yield* requireSession(ctx.params.sessionID)
+@@ -380,7 +367,9 @@
+     })
+ 
+     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof CommandPayload.Type
+     }) {
+       yield* requireSession(ctx.params.sessionID)
+@@ -388,77 +377,33 @@
+         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
+         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+     })
+-
+-    const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
+-      params: { sessionID: SessionID }
+-      payload: typeof ShellPayload.Type
+-    }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+-    })
+-
+     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
+-      params: { sessionID: SessionID }
++      params: {
++        sessionID: SessionID
++      }
+       payload: typeof RevertPayload.Type
+     }) {
+       yield* requireSession(ctx.params.sessionID)
+       return yield* SessionError.mapBusy(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
+     })
+-
+-    const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
++    const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: {
++      params: {
++        sessionID: SessionID
++      }
++    }) {
+       yield* requireSession(ctx.params.sessionID)
+       return yield* SessionError.mapBusy(revertSvc.unrevert({ sessionID: ctx.params.sessionID }))
+     })
+-
+-    const permissionRespond = Effect.fn("SessionHttpApi.permissionRespond")(function* (ctx: {
+-      params: { sessionID: SessionID; permissionID: PermissionV1.ID }
+-      payload: typeof PermissionResponsePayload.Type
+-    }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
+-        Effect.catchTag("Permission.NotFoundError", (error) =>
+-          Effect.fail(
+-            new PermissionNotFoundError({
+-              requestID: String(error.requestID),
+-              message: `Permission request not found: ${error.requestID}`,
+-            }),
+-          ),
+-        ),
+-      )
+-      return true
+-    })
+-
+     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
+-      params: { sessionID: SessionID; messageID: MessageID }
++      params: {
++        sessionID: SessionID
++        messageID: MessageID
++      }
+     }) {
+       yield* requireSession(ctx.params.sessionID)
+       yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
+       yield* session.removeMessage(ctx.params)
+       return true
+-    })
+-
+-    const deletePart = Effect.fn("SessionHttpApi.deletePart")(function* (ctx: {
+-      params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
+-    }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      yield* session.removePart(ctx.params)
+-      return true
+-    })
+-
+-    const updatePart = Effect.fn("SessionHttpApi.updatePart")(function* (ctx: {
+-      params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
+-      payload: typeof SessionV1.Part.Type
+-    }) {
+-      yield* requireSession(ctx.params.sessionID)
+-      const payload = ctx.payload as SessionV1.Part
+-      if (
+-        payload.id !== ctx.params.partID ||
+-        payload.messageID !== ctx.params.messageID ||
+-        payload.sessionID !== ctx.params.sessionID
+-      ) {
+-        return yield* new HttpApiError.BadRequest({})
+-      }
+-      return yield* session.updatePart(payload)
+     })
+ 
+     return handlers
+@@ -469,7 +414,6 @@
+       .handle("todo", todo)
+       .handle("diff", diff)
+       .handle("messages", messages)
+-      .handle("message", message)
+       .handleRaw("create", createRaw)
+       .handle("remove", remove)
+       .handle("update", update)
+@@ -478,19 +422,12 @@
+       .handle("execution", execution)
+       .handle("pause", changeExecution(true))
+       .handle("resume", changeExecution(false))
+-      .handle("init", init)
+-      .handle("share", share)
+-      .handle("unshare", unshare)
+       .handle("summarize", summarize)
+       .handle("prompt", prompt)
+       .handle("promptAsync", promptAsync)
+       .handle("command", command)
+-      .handle("shell", shell)
+       .handle("revert", revert)
+       .handle("unrevert", unrevert)
+-      .handle("permissionRespond", permissionRespond)
+       .handle("deleteMessage", deleteMessage)
+-      .handle("deletePart", deletePart)
+-      .handle("updatePart", updatePart)
+   }),
+ )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/config.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/config.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/config.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/config.ts
+@@ -1,11 +1,8 @@
+ import { Config } from "@/config/config"
+ import { Provider } from "@/provider/provider"
+-import * as InstanceState from "@/effect/instance-state"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/unstable/httpapi"
+ import { InstanceHttpApi } from "../api"
+-import { markInstanceForDisposal } from "../lifecycle"
+-
+ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (handlers) =>
+   Effect.gen(function* () {
+     const providerSvc = yield* Provider.Service
+@@ -15,12 +12,6 @@
+       return yield* configSvc.get()
+     })
+ 
+-    const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {
+-      yield* configSvc.update(ctx.payload)
+-      yield* markInstanceForDisposal(yield* InstanceState.context)
+-      return ctx.payload
+-    })
+-
+     const providers = Effect.fn("ConfigHttpApi.providers")(function* () {
+       const providers = yield* providerSvc.list()
+       return {
+@@ -28,7 +19,6 @@
+         default: Provider.defaultModelIDs(providers),
+       }
+     })
+-
+-    return handlers.handle("get", get).handle("update", update).handle("providers", providers)
++    return handlers.handle("get", get).handle("providers", providers)
+   }),
+ )
+diff --git a/packages/core/src/permission.ts b/packages/core/src/permission.ts
+--- a/packages/core/src/permission.ts
++++ b/packages/core/src/permission.ts
+@@ -6,7 +6,8 @@
+ import { EventV2 } from "./event"
+ import { Location } from "./location"
+ import { AgentV2 } from "./agent"
+-import { SessionV2 } from "./session"
++import { SessionSchema } from "./session/schema"
++import { SessionError } from "./session/error"
+ import { SessionStore } from "./session/store"
+ import { Wildcard } from "./util/wildcard"
+ import { PermissionSaved } from "./permission/saved"
+@@ -90,11 +91,11 @@
+ }
+ 
+ export interface Interface {
+-  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionV2.NotFoundError>
+-  readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionV2.NotFoundError>
++  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionError.NotFoundError>
++  readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionError.NotFoundError>
+   readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
+   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
+-  readonly forSession: (sessionID: SessionV2.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
++  readonly forSession: (sessionID: SessionSchema.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
+   readonly list: () => EffectRuntime.Effect<ReadonlyArray<Request>>
+ }
+ 
+@@ -135,11 +136,11 @@
+     })
+ 
+     const configured = EffectRuntime.fn("PermissionV2.configured")(function* (
+-      sessionID: SessionV2.ID,
++      sessionID: SessionSchema.ID,
+       agentID?: AgentV2.ID,
+     ) {
+       const session = yield* sessions.get(sessionID)
+-      if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
++      if (!session) return yield* new SessionError.NotFoundError({ sessionID })
+       const agent = yield* agents.resolve(agentID ?? session.agent)
+       return agent?.permissions ?? missingAgentPermissions
+     })
+@@ -293,7 +294,7 @@
+       return pending.get(id)?.request
+     })
+ 
+-    const forSession = EffectRuntime.fn("PermissionV2.forSession")(function* (sessionID: SessionV2.ID) {
++    const forSession = EffectRuntime.fn("PermissionV2.forSession")(function* (sessionID: SessionSchema.ID) {
+       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
+     })
+ 
+diff --git a/packages/core/src/location-services.ts b/packages/core/src/location-services.ts
+--- a/packages/core/src/location-services.ts
++++ b/packages/core/src/location-services.ts
+@@ -1,83 +1,13 @@
+ import { Effect, Layer, LayerMap } from "effect"
+-import { AgentV2 } from "./agent"
+-import { AISDK } from "./aisdk"
+-import { Catalog } from "./catalog"
+-import { CommandV2 } from "./command"
+-import { Config } from "./config"
+ import { LayerNode } from "./effect/layer-node"
+ import { Node } from "./effect/app-node"
+-import { FileMutation } from "./file-mutation"
+-import { FileSystem } from "./filesystem"
+-import { FileSystemSearch } from "./filesystem/search"
+-import { Watcher } from "./filesystem/watcher"
+-import { Image } from "./image"
+-import { Integration } from "./integration"
+ import { Location } from "./location"
+-import { LocationMutation } from "./location-mutation"
+ import { LocationServiceMap } from "./location-service-map"
+-import { PermissionV2 } from "./permission"
++import { PluginInternal } from "./plugin/internal"
++import { Reference } from "./reference"
+ import { PluginV2 } from "./plugin"
+-import { PluginInternal } from "./plugin/internal"
+-import { Policy } from "./policy"
+-import { ProjectCopy } from "./project/copy"
+-import { Pty } from "./pty"
+-import { QuestionV2 } from "./question"
+-import { Reference } from "./reference"
+-import { ReferenceGuidance } from "./reference/guidance"
+-import * as SessionRunnerLLM from "./session/runner/llm"
+-import { SessionRunnerModel } from "./session/runner/model"
+-import { SessionTodo } from "./session/todo"
+-import { SkillV2 } from "./skill"
+-import { SkillGuidance } from "./skill/guidance"
+-import { Snapshot } from "./snapshot"
+-import { SystemContextBuiltIns } from "./system-context/builtins"
+-import { SystemContextRegistry } from "./system-context/registry"
+-import { BuiltInTools } from "./tool/builtins"
+-import { ReadToolFileSystem } from "./tool/read-filesystem"
+-import { ToolRegistry } from "./tool/registry"
+-import { ToolOutputStore } from "./tool-output-store"
+-
+ export { LocationServiceMap } from "./location-service-map"
+-
+-export const locationServices = LayerNode.group([
+-  Location.node,
+-  Policy.node,
+-  Config.node,
+-  AgentV2.node,
+-  CommandV2.node,
+-  Reference.node,
+-  Integration.node,
+-  Catalog.node,
+-  AISDK.node,
+-  PluginV2.node,
+-  PluginInternal.node,
+-  ProjectCopy.node,
+-  ProjectCopy.refreshNode,
+-  FileSystemSearch.node,
+-  FileSystem.node,
+-  Watcher.node,
+-  Pty.node,
+-  SkillV2.node,
+-  SystemContextRegistry.node,
+-  SystemContextBuiltIns.node,
+-  LocationMutation.node,
+-  FileMutation.node,
+-  PermissionV2.node,
+-  ToolOutputStore.node,
+-  ToolRegistry.node,
+-  ToolRegistry.toolsNode,
+-  Image.node,
+-  SkillGuidance.node,
+-  ReferenceGuidance.node,
+-  SessionTodo.node,
+-  QuestionV2.node,
+-  ReadToolFileSystem.node,
+-  BuiltInTools.node,
+-  SessionRunnerModel.node,
+-  Snapshot.node,
+-  SessionRunnerLLM.node,
+-])
+-
++export const locationServices = LayerNode.group([Location.node, PluginInternal.node, Reference.node, PluginV2.node])
+ export type LocationServices = LayerNode.Output<typeof locationServices>
+ export type LocationError = LayerNode.Error<typeof locationServices>
+ 
+diff --git a/packages/core/src/session.ts b/packages/core/src/session.ts
+--- a/packages/core/src/session.ts
++++ b/packages/core/src/session.ts
+@@ -1,3 +1,4 @@
++import { NotFoundError } from "./session/error"
+ export * as SessionV2 from "./session"
+ export * from "./session/schema"
+ 
+@@ -88,9 +89,7 @@
+   prompt?: Prompt
+ }
+ 
+-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
+-  sessionID: SessionSchema.ID,
+-}) {}
++export { NotFoundError } from "./session/error"
+ 
+ export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
+   "Session.OperationUnavailableError",
+diff --git a/packages/core/src/session/error.ts b/packages/core/src/session/error.ts
+--- a/packages/core/src/session/error.ts
++++ b/packages/core/src/session/error.ts
+@@ -1,3 +1,4 @@
++export * as SessionError from "./error"
+ import { Schema } from "effect"
+ import { SessionMessage } from "./message"
+ import { SessionSchema } from "./schema"
+@@ -22,3 +23,7 @@
+     return `Failed to decode context snapshot for session ${this.sessionID}: ${this.details}`
+   }
+ }
++
++export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
++  sessionID: SessionSchema.ID,
++}) {}
+diff --git a/packages/core/src/filesystem/search.ts b/packages/core/src/filesystem/search.ts
+--- a/packages/core/src/filesystem/search.ts
++++ b/packages/core/src/filesystem/search.ts
+@@ -3,7 +3,6 @@
+ import { makeLocationNode } from "../effect/app-node"
+ import path from "path"
+ import { Context, Effect, Layer, Scope } from "effect"
+-import { Fff } from "#fff"
+ import fuzzysort from "fuzzysort"
+ import { Entry, Match } from "@opencode-ai/schema/filesystem"
+ import type { FileSystem } from "../filesystem"
+@@ -11,7 +10,6 @@
+ import { Location } from "../location"
+ import { Ripgrep } from "../ripgrep"
+ import { RelativePath } from "../schema"
+-import { Flag } from "../flag/flag"
+ 
+ export interface Interface {
+   readonly find: (input: FileSystem.FindInput) => Effect.Effect<FileSystem.Entry[]>
+@@ -120,120 +118,7 @@
+   }),
+ )
+ 
+-export const fffLayer = Layer.effect(
+-  Service,
+-  Effect.gen(function* () {
+-    const location = yield* Location.Service
+-    const result = yield* Effect.try({
+-      try: () =>
+-        Fff.create({
+-          basePath: location.directory,
+-          aiMode: true,
+-          disableMmapCache: true,
+-          disableContentIndexing: true,
+-        }),
+-      catch: (cause) => cause,
+-    }).pipe(
+-      Effect.catch((error) => Effect.logWarning("failed to initialize fff", { error }).pipe(Effect.as(undefined))),
+-    )
+-    if (!result?.ok) {
+-      if (result) yield* Effect.logWarning("failed to initialize fff", { error: result.error })
+-      return Service.of({
+-        find: () => Effect.succeed([]),
+-        glob: () => Effect.succeed([]),
+-        grep: () => Effect.succeed([]),
+-      })
+-    }
+-    yield* Effect.addFinalizer(() => Effect.sync(() => result.value.destroy()).pipe(Effect.ignore))
+-    return Service.of({
+-      glob: (input) =>
+-        Effect.sync(() => {
+-          const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
+-          const found = result.value.glob(prefix ? `${prefix}/${input.pattern}` : input.pattern, {
+-            pageIndex: 0,
+-            pageSize: input.limit,
+-          })
+-          if (!found.ok) throw found.error
+-          return found.value.items.map((item) =>
+-            Entry.make({
+-              path: RelativePath.make(item.relativePath.replaceAll("\\", "/")),
+-              type: "file",
+-            }),
+-          )
+-        }),
+-      grep: (input) =>
+-        Effect.sync(() => {
+-          const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
+-          const found = result.value.grep(
+-            [prefix ? `${prefix}/**` : undefined, input.include, input.pattern]
+-              .filter((value) => value !== undefined)
+-              .join(" "),
+-            { mode: "regex", pageSize: input.limit, timeBudgetMs: 1_500 },
+-          )
+-          if (!found.ok) throw found.error
+-          return found.value.items.map((match) => {
+-            const bytes = Buffer.from(match.lineContent)
+-            return Match.make({
+-              entry: Entry.make({
+-                path: RelativePath.make(match.relativePath.replaceAll("\\", "/")),
+-                type: "file",
+-              }),
+-              line: match.lineNumber,
+-              offset: match.byteOffset,
+-              text: match.lineContent.length > 2_000 ? match.lineContent.slice(0, 2_000) + "..." : match.lineContent,
+-              submatches: match.matchRanges.map(([start, end]) => ({
+-                text: bytes.subarray(start, end).toString("utf8"),
+-                start,
+-                end,
+-              })),
+-            })
+-          })
+-        }),
+-      find: (input) =>
+-        Effect.sync(() => {
+-          const options = { pageIndex: 0, pageSize: input.limit ?? 50 }
+-          const items = (() => {
+-            if (input.type === "file") {
+-              const found = result.value.fileSearch(input.query.trim(), options)
+-              if (!found.ok) throw found.error
+-              return found.value.items.map((item, index) => ({
+-                path: item.relativePath,
+-                type: "file" as const,
+-                score: found.value.scores[index]?.total ?? 0,
+-              }))
+-            }
+-            if (input.type === "directory") {
+-              const found = result.value.directorySearch(input.query.trim(), options)
+-              if (!found.ok) throw found.error
+-              return found.value.items.map((item, index) => ({
+-                path: item.relativePath,
+-                type: "directory" as const,
+-                score: found.value.scores[index]?.total ?? 0,
+-              }))
+-            }
+-            const found = result.value.mixedSearch(input.query.trim(), options)
+-            if (!found.ok) throw found.error
+-            return found.value.items.map((item, index) => ({
+-              path: item.item.relativePath,
+-              type: item.type,
+-              score: found.value.scores[index]?.total ?? 0,
+-            }))
+-          })()
+-          return items
+-            .sort((a, b) => b.score - a.score || a.path.length - b.path.length)
+-            .map((item) => {
+-              const relative = item.path.replaceAll("\\", "/").replace(/\/$/, "")
+-              return Entry.make({
+-                path: RelativePath.make(relative + (item.type === "directory" ? path.sep : "")),
+-                type: item.type,
+-              })
+-            })
+-        }),
+-    })
+-  }),
+-)
+-
+-const layer = Layer.unwrap(Effect.sync(() => (Flag.OPENCODE_DISABLE_FFF || !Fff.available() ? ripgrepLayer : fffLayer)))
++const layer = ripgrepLayer
+ 
+ export const locationLayer = layer
+ 
+diff --git a/packages/opencode/src/effect/app-runtime.ts b/packages/opencode/src/effect/app-runtime.ts
+--- a/packages/opencode/src/effect/app-runtime.ts
++++ b/packages/opencode/src/effect/app-runtime.ts
+@@ -5,7 +5,6 @@
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+ import { Database } from "@opencode-ai/core/database/database"
+ import { Auth } from "@/auth"
+-import { Account } from "@/account/account"
+ import { Config } from "@/config/config"
+ import { Git } from "@/git"
+ import { Ripgrep } from "@opencode-ai/core/ripgrep"
+@@ -14,7 +13,6 @@
+ import { Plugin } from "@/plugin"
+ import { ModelsDev } from "@opencode-ai/core/models-dev"
+ import { Provider } from "@/provider/provider"
+-import { ProviderAuth } from "@/provider/auth"
+ import { Agent } from "@/agent/agent"
+ import { Skill } from "@/skill"
+ import { Discovery } from "@/skill/discovery"
+@@ -41,11 +39,6 @@
+ import { InstanceStore } from "@/project/instance-store"
+ import { Project } from "@/project/project"
+ import { Vcs } from "@/project/vcs"
+-import { Workspace } from "@/control-plane/workspace"
+-import { Worktree } from "@/worktree"
+-import { Installation } from "@/installation"
+-import { ShareNext } from "@/share/share-next"
+-import { SessionShare } from "@/share/session"
+ import { Npm } from "@opencode-ai/core/npm"
+ import { memoMap } from "@opencode-ai/core/effect/memo-map"
+ import { BackgroundJob } from "@/background/job"
+@@ -61,7 +54,6 @@
+     FSUtil.node,
+     Database.node,
+     Auth.node,
+-    Account.node,
+     Config.node,
+     Git.node,
+     Storage.node,
+@@ -69,7 +61,6 @@
+     Plugin.node,
+     ModelsDev.node,
+     Provider.node,
+-    ProviderAuth.node,
+     Agent.node,
+     Skill.node,
+     Discovery.node,
+@@ -100,11 +91,6 @@
+     InstanceStore.node,
+     Project.node,
+     Vcs.node,
+-    Workspace.node,
+-    Worktree.node,
+-    Installation.node,
+-    ShareNext.node,
+-    SessionShare.node,
+   ]),
+ ).pipe(Layer.provideMerge(AppNodeBuilderV1.build(Ripgrep.node)), Layer.provideMerge(Observability.layer))
+ 
+diff --git a/packages/opencode/src/effect/bootstrap-runtime.ts b/packages/opencode/src/effect/bootstrap-runtime.ts
+--- a/packages/opencode/src/effect/bootstrap-runtime.ts
++++ b/packages/opencode/src/effect/bootstrap-runtime.ts
+@@ -5,7 +5,6 @@
+ import { Plugin } from "@/plugin"
+ import { LSP } from "@/lsp/lsp"
+ import { Format } from "@/format"
+-import { ShareNext } from "@/share/share-next"
+ import { Vcs } from "@/project/vcs"
+ import { Snapshot } from "@/snapshot"
+ import { Config } from "@/config/config"
+@@ -13,7 +12,7 @@
+ import { memoMap } from "@opencode-ai/core/effect/memo-map"
+ 
+ export const BootstrapLayer = AppNodeBuilder.build(
+-  LayerNode.group([Config.node, Plugin.node, ShareNext.node, Format.node, LSP.node, Vcs.node, Snapshot.node]),
++  LayerNode.group([Config.node, Plugin.node, Format.node, LSP.node, Vcs.node, Snapshot.node]),
+ ).pipe(Layer.provide(Observability.layer))
+ 
+ export const BootstrapRuntime = ManagedRuntime.make(BootstrapLayer, { memoMap })
+diff --git a/packages/opencode/src/plugin/index.ts b/packages/opencode/src/plugin/index.ts
+--- a/packages/opencode/src/plugin/index.ts
++++ b/packages/opencode/src/plugin/index.ts
+@@ -28,8 +28,6 @@
+ import { errorMessage } from "@/util/error"
+ import { PluginLoader } from "./loader"
+ import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
+-import { registerAdapter } from "@/control-plane/adapters"
+-import type { WorkspaceAdapter } from "@/control-plane/types"
+ import { RuntimeFlags } from "@/effect/runtime-flags"
+ import { EventV2Bridge } from "@/event-v2-bridge"
+ import { InstallationChannel } from "@opencode-ai/core/installation/version"
+@@ -157,7 +155,7 @@
+           directory: ctx.directory,
+           experimental_workspace: {
+             register(type: string, adapter: PluginWorkspaceAdapter) {
+-              registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
++              throw new Error("Workspace adapters are unavailable in Telegram production; use the compatibility CLI")
+             },
+           },
+           get serverUrl(): URL {
+diff --git a/packages/opencode/src/server/shared/fence.ts b/packages/opencode/src/server/shared/fence.ts
+--- a/packages/opencode/src/server/shared/fence.ts
++++ b/packages/opencode/src/server/shared/fence.ts
+@@ -1,8 +1,6 @@
+ import { Database } from "@opencode-ai/core/database/database"
+ import { inArray } from "drizzle-orm"
+ import { EventSequenceTable } from "@opencode-ai/core/event/sql"
+-import { Workspace } from "@/control-plane/workspace"
+-import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
+ import { Effect } from "effect"
+ 
+ export const HEADER = "x-opencode-sync"
+@@ -50,11 +48,3 @@
+     }),
+   )
+ }
+-
+-export function wait(workspaceID: WorkspaceV2.ID, state: State, signal?: AbortSignal) {
+-  return Effect.gen(function* () {
+-    yield* Effect.logInfo("waiting for state", { workspaceID, state })
+-    yield* Workspace.Service.use((workspace) => workspace.waitForSync(workspaceID, state, signal))
+-    yield* Effect.logInfo("state fully synced", { workspaceID, state })
+-  })
+-}
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts b/packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts
+@@ -1,16 +1,8 @@
+ import { ServerAuth } from "@/server/auth"
+ import { Effect, Encoding, Layer, Redacted } from "effect"
+-import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
++import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+ import { HttpApiError, HttpApiMiddleware } from "effect/unstable/httpapi"
+-import { hasPtyConnectTicketURL } from "@/server/shared/pty-ticket"
+-import { isPublicUIPath } from "@/server/shared/public-ui"
+-export {
+-  Authorization as ServerAuthorization,
+-  authorizationLayer as serverAuthorizationLayer,
+-} from "@opencode-ai/server/middleware/authorization"
+-
+ const AUTH_TOKEN_QUERY = "auth_token"
+-const UNAUTHORIZED = 401
+ const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
+ 
+ // Avoid HttpApiSecurity alternatives here: Effect security middleware wraps the
+@@ -18,13 +10,6 @@
+ // and remap an authorized NotFound into Unauthorized.
+ export class Authorization extends HttpApiMiddleware.Service<Authorization>()(
+   "@opencode/ExperimentalHttpApiAuthorization",
+-  {
+-    error: HttpApiError.UnauthorizedNoContent,
+-  },
+-) {}
+-
+-export class PtyConnectAuthorization extends HttpApiMiddleware.Service<PtyConnectAuthorization>()(
+-  "@opencode/ExperimentalHttpApiPtyConnectAuthorization",
+   {
+     error: HttpApiError.UnauthorizedNoContent,
+   },
+@@ -82,39 +67,6 @@
+   return Effect.succeed(emptyCredential())
+ }
+ 
+-function validateRawCredential<A, E, R>(
+-  effect: Effect.Effect<A, E, R>,
+-  credential: ServerAuth.DecodedCredentials,
+-  config: ServerAuth.Info,
+-) {
+-  if (!ServerAuth.required(config)) return effect
+-  if (!ServerAuth.authorized(credential, config))
+-    return Effect.succeed(
+-      HttpServerResponse.empty({
+-        status: UNAUTHORIZED,
+-        headers: { "www-authenticate": WWW_AUTHENTICATE },
+-      }),
+-    )
+-  return effect
+-}
+-
+-export const authorizationRouterMiddleware = HttpRouter.middleware()(
+-  Effect.gen(function* () {
+-    const config = yield* ServerAuth.Config
+-    if (!ServerAuth.required(config)) return (effect) => effect
+-
+-    return (effect) =>
+-      Effect.gen(function* () {
+-        const request = yield* HttpServerRequest.HttpServerRequest
+-        const url = new URL(request.url, "http://localhost")
+-        if (isPublicUIPath(request.method, url.pathname)) return yield* effect
+-        return yield* credentialFromURL(url, request).pipe(
+-          Effect.flatMap((credential) => validateRawCredential(effect, credential, config)),
+-        )
+-      })
+-  }),
+-)
+-
+ export const authorizationLayer = Layer.effect(
+   Authorization,
+   Effect.gen(function* () {
+@@ -130,21 +82,3 @@
+     )
+   }),
+ )
+-
+-export const ptyConnectAuthorizationLayer = Layer.effect(
+-  PtyConnectAuthorization,
+-  Effect.gen(function* () {
+-    const config = yield* ServerAuth.Config
+-    if (!ServerAuth.required(config)) return PtyConnectAuthorization.of((effect) => effect)
+-    return PtyConnectAuthorization.of((effect) =>
+-      Effect.gen(function* () {
+-        const request = yield* HttpServerRequest.HttpServerRequest
+-        const url = new URL(request.url, "http://localhost")
+-        if (hasPtyConnectTicketURL(url)) return yield* effect
+-        return yield* credentialFromURL(url, request).pipe(
+-          Effect.flatMap((credential) => validateCredential(effect, credential, config)),
+-        )
+-      }),
+-    )
+-  }),
+-)
+diff --git a/packages/opencode/tsconfig.telegram.json b/packages/opencode/tsconfig.telegram.json
+new file mode 100644
+--- /dev/null
++++ b/packages/opencode/tsconfig.telegram.json
+@@ -0,0 +1 @@
++{"extends":"./tsconfig.json","include":["src/telegram-headless.ts","src/**/*.d.ts"],"exclude":["test","src/cli"]}

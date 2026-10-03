@@ -1,0 +1,7 @@
+{
+  "source": "https://models.dev/api.json",
+  "retrievedUTCDate": "2026-10-02",
+  "bytes": 5310394,
+  "sha256": "81f8b4433bbcd07c4a2912b2d1abc32b48e0c20ec1db4aedaa33b03fcf098c06",
+  "purpose": "Reproducible Telegram provider/model catalog builds; not a new provider allowlist."
+}

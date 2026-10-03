@@ -54,12 +54,16 @@ jobs:
         with:
           node-version: 22.14.0
 
+      - name: Install native grammar build tool
+        if: steps.release.outputs.publish == 'true'
+        run: npm install --global node-gyp@11
+
       - name: Build compatibility unit
         if: steps.release.outputs.publish == 'true'
         run: |
           ./scripts/build-runtime.sh
           ./scripts/build-sdk.sh
-          ./scripts/run-compatibility.sh
+          ./scripts/test-headless-runtime.sh
           ./scripts/package-release.sh
           ./scripts/verify-release.sh
 

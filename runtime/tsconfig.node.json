@@ -3,12 +3,24 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "../dist/native-runtime-node",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "declaration": true,
     "declarationMap": false,
     "sourceMap": false,
     "noEmit": false
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/smoke-server.ts"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/smoke-server.ts",
+    "src/compat.ts",
+    "src/opencode/session-client.ts",
+    "src/opencode/session-event-pump.ts",
+    "src/ipc/json-line-worker-channel.ts",
+    "src/opencode/run-reconciler.ts",
+    "src/telegram/conformance.ts"
+  ]
 }

@@ -1,7 +1,8 @@
+import { AuthoritativeRunReconciler } from "../src/compat.js";
 import { expect, test } from "bun:test";
 import path from "node:path";
 import { Api } from "grammy";
-import { AuthoritativeRunReconciler, BindingRegistry, GrammyNativeMarkdownStreamPort, OpenCodeTopicWorker, OutboundGateway, PerRunStuckDetector, RunRegistry, RunLivenessTracker, SerialTaskQueue, TelegramRichStreamController, pollRunResult, withDeadline, type BindingIdentity } from "../src/index.js";
+import {  BindingRegistry, GrammyNativeMarkdownStreamPort, OpenCodeTopicWorker, OutboundGateway, PerRunStuckDetector, RunRegistry, RunLivenessTracker, SerialTaskQueue, TelegramRichStreamController, pollRunResult, withDeadline, type BindingIdentity } from "../src/index.js";
 
 function binding(id = "one", threadId = 11): BindingIdentity {
   return { bindingId: id, botId: "bot", chatId: 10, threadId, sessionId: "session-" + id,

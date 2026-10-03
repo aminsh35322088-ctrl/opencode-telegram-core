@@ -1,3 +1,4 @@
+import { consumeWorkerJsonLines } from "../src/compat.js";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +7,7 @@ import {
   OutboundGateway,
   RunRegistry,
   WorkerOutboundGate,
-  consumeWorkerJsonLines,
+
   type BindingIdentity,
   type OutboundEnvelope,
 } from "../src/index.js";

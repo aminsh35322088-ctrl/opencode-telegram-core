@@ -4,3 +4,4 @@
 0004-telegram-session-execution.patch
 0005-telegram-custom-process-context.patch
 0006-telegram-event-provenance.patch
+0007-telegram-service-retry-cancellation.patch

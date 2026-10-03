@@ -29,23 +29,12 @@ function optionValue(name: string, fallback?: string): string | undefined {
   return optionValues(name).at(-1) ?? fallback
 }
 
-function booleanOption(name: string, fallback: boolean): boolean {
-  if (argv.includes("--no-" + name.slice(2))) return false
-  const direct = argv.find((arg) => arg === name || arg.startsWith(name + "="))
-  if (!direct) return fallback
-  if (direct === name) return true
-  const value = direct.slice(name.length + 1).toLowerCase()
-  if (value === "true" || value === "1") return true
-  if (value === "false" || value === "0") return false
-  throw new Error(`invalid boolean value for ${name}: ${value}`)
-}
-
 function printHelp(): void {
   console.log([
     "OpenCode Telegram headless runtime",
     "",
     "Usage:",
-    "  opencode serve [--hostname HOST] [--port PORT] [--cors ORIGIN] [--mdns]",
+    "  opencode serve [--hostname HOST] [--port PORT] [--cors ORIGIN]",
     "  opencode --version",
     "  opencode debug build-info",
     "",
@@ -78,6 +67,19 @@ async function main(): Promise<void> {
   const command = argv[0] && !argv[0].startsWith("--") ? argv[0] : "serve"
   if (command !== "serve") throw new Error(`unsupported command in Telegram headless profile: ${command}`)
 
+  for (const option of ["--mdns", "--mdns-domain"]) {
+    if (argv.some((arg) => arg === option || arg.startsWith(option + "="))) {
+      throw new Error(`${option} is unsupported by Telegram Core`)
+    }
+  }
+  if (process.env.OPENCODE_CONSOLE_TOKEN) throw new Error("Upstream Console account integration is unavailable in Telegram Core; configure a provider credential")
+  if (process.env.OPENCODE_WORKSPACE_ID) throw new Error("Remote workspace routing is unavailable in Telegram Core")
+  for (const name of ["OPENCODE_EXPERIMENTAL_CODE_MODE", "OPENCODE_AUTO_SHARE"]) {
+    if (["1", "true"].includes(process.env[name]?.toLowerCase() ?? "")) {
+      throw new Error(`${name} is unsupported by Telegram Core`)
+    }
+  }
+
   if (argv.includes("--pure")) process.env.OPENCODE_PURE = "1"
   if (argv.includes("--print-logs")) process.env.OPENCODE_PRINT_LOGS = "1"
   const logLevel = optionValue("--log-level")
@@ -95,13 +97,11 @@ async function main(): Promise<void> {
   const port = Number(portText)
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error(`invalid port: ${portText}`)
 
-  const mdns = booleanOption("--mdns", false)
-  const hostname = optionValue("--hostname", mdns ? "0.0.0.0" : "127.0.0.1")!
-  const mdnsDomain = optionValue("--mdns-domain", "opencode.local")
+  const hostname = optionValue("--hostname", "127.0.0.1")!
   const cors = optionValues("--cors")
 
   const { Server } = await import("./server/server")
-  const server = await Server.listen({ hostname, port, mdns, mdnsDomain, cors })
+  const server = await Server.listen({ hostname, port, cors })
   console.log(`opencode telegram headless server listening on http://${server.hostname}:${server.port}`)
 
   let stopping = false

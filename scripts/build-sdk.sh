@@ -4,12 +4,15 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 BUN="$("$CORE_ROOT/scripts/ensure-bun.sh")"
 bun_dir="$(dirname "$BUN")"
-tree="$CORE_ROOT/.work/opencode"
+tree="$CORE_ROOT/.work/opencode-sdk"
 export PATH="$bun_dir:$tree/node_modules/.bin:$PATH"
 export_upstream_build_environment
 expected="$(json_get commit)"
 
-[[ -d "$tree/.git" ]] || die "upstream worktree missing; run build-runtime.sh first"
+"$CORE_ROOT/scripts/materialize-upstream.sh" "$tree"
+"$CORE_ROOT/scripts/apply-patches.sh" "$tree"
+bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree"
+"$BUN" install --cwd "$tree" --frozen-lockfile
 actual="$(git -C "$tree" rev-parse HEAD)"
 [[ "$actual" == "$expected" ]] || die "SDK source mismatch: expected $expected, got $actual"
 

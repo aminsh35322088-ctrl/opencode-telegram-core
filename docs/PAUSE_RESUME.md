@@ -1,9 +1,12 @@
-# Live execution pause/resume (pre.8 prerelease)
+# Production live execution pause/resume
 
 The source integration uses the existing upstream `SessionRunState` runners and
 model/tool fibers. It does not abort, recreate sessions, or send a synthetic
-resume prompt. The published Bot pin remains Core pre.7 until the complete
-runtime/SDK/native integration is verified and released together.
+resume prompt. The current Bot still aborts and reprompts. It will adopt the aligned runtime/SDK/native
+control contract in a separate migration after Core stable. See the
+[production architectural decision](TELEGRAM_EXECUTION_CONTROL.md). These three
+legacy routes remain in the minimal production build; they are not upstream-only
+compatibility APIs.
 
 ## Runtime control contract
 
@@ -69,7 +72,9 @@ before a new run. It never replays lost work to simulate continuation.
 an `OpenCodeExecutionControlPort` and a finite `requestTimeoutMs`. The port maps
 `execution`, `pause` and `resume` to the runtime API above, carrying the captured
 session, canonical directory and logical run ID. Model admission must pass that
-same ID as `telegramRunId` to the legacy prompt/command/shell API.
+same ID as `telegramRunId` to production legacy prompt/command admission. Agent
+shell tools inherit that captured execution; the direct manual-shell HTTP API is
+compatibility-only.
 
 `pauseRun`, `resumeRun` and `inspectExecution` operate on an existing worker's
 owned target. They never create a worker or session. Temporary tasks use their
