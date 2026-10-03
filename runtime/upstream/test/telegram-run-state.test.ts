@@ -275,6 +275,37 @@ it.instance("workspace disposal terminates all owned resources even if runner id
   }),
 )
 
+it.instance("workspace retirement terminates paused resources before joining model work", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const state = yield* SessionRunState.Service
+    const test = yield* TestInstance
+    const session = yield* sessions.create()
+    const ready = yield* Deferred.make<SessionExecutionLease>()
+    let terminated = false
+    let release!: () => void
+    const retired = new Promise<void>(resolve => { release = resolve })
+    const fiber = yield* state.ensureRunning(
+      session.id,
+      Effect.die(new Error("cancelled")),
+      Effect.gen(function* () {
+        const execution = yield* CurrentTelegramExecution
+        if (!execution) return yield* Effect.die(new Error("execution context missing"))
+        execution.attach({ pause() {}, resume() {}, terminate() { terminated = true; release() } })
+        yield* Deferred.succeed(ready, execution)
+        // Physical close also cannot finish until authority terminates the group.
+        return yield* Effect.never.pipe(Effect.ensuring(Effect.promise(() => retired)))
+      }),
+    ).pipe(Effect.forkChild)
+    const execution = yield* Deferred.await(ready)
+    yield* state.pause(session.id, execution.owner.runId)
+    yield* Effect.promise(() => disposeInstance(test.directory))
+    expect(terminated).toBe(true)
+    expect(execution.signal.aborted).toBe(true)
+    expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+  }),
+)
+
 it.instance("pause persists intent and resume continues the existing session runner", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service

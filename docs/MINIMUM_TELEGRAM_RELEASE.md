@@ -215,3 +215,17 @@ MCP/LSP/tool/shell, event/render/poll/scheduled, restart/failure); demonstrate b
 resource trends and confirmed cleanup/rollback over an agreed soak window; keep all
 prior invariants green; publish stable from the exact verified RC-derived commit.
 No RC or stable label is justified by this slimming prerelease alone.
+
+## Shared retirement investigation after PR #25
+
+PR #25 is merged at `e5dd2b1bbebe5287b4621ca35ed07a4b91956234`; pre.9 remains
+the independently verified `28e7527` candidate. A new deterministic investigation
+proved cleanup failure suppression, closing-workspace admission and stale-context
+cache reacquisition in the shared upstream lifecycle. See
+[the retirement evidence](WORKSPACE_RETIREMENT.md). Candidate `03f20bd` corrects
+these failures, including terminate-before-join for physically paused model shells.
+Cumulative CI, repeated Linux stress and actual compiled Railway tests are green.
+This closes the reproduced shared retirement regressions, not every interrupted
+bootstrap/helper acquisition, remote MCP/OAuth or persistent-browser boundary.
+Broader resource, concurrency and crash/restart gates remain open. Pre.9 does not
+contain this candidate; no RC/stable is published. Bot remains frozen.

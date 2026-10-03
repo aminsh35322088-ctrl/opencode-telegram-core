@@ -1,0 +1,277 @@
+diff --git a/packages/opencode/src/effect/instance-registry.ts b/packages/opencode/src/effect/instance-registry.ts
+index 59c556e..a0ad9e1 100644
+--- a/packages/opencode/src/effect/instance-registry.ts
++++ b/packages/opencode/src/effect/instance-registry.ts
+@@ -1,12 +1,56 @@
++import type { InstanceContext } from "@/project/instance-context"
++
+ const disposers = new Set<(directory: string) => Promise<void>>()
++const retirements = new Map<string, Promise<void>>()
++const retiredContexts = new WeakSet<InstanceContext>()
++const contexts = new Map<string, Set<InstanceContext>>()
+ 
+ export function registerDisposer(disposer: (directory: string) => Promise<void>) {
+   disposers.add(disposer)
+-  return () => {
+-    disposers.delete(disposer)
+-  }
++  return () => { disposers.delete(disposer) }
++}
++
++export function registerContext(ctx: InstanceContext) {
++  assertContextActive(ctx)
++  let owned = contexts.get(ctx.directory)
++  if (!owned) { owned = new Set(); contexts.set(ctx.directory, owned) }
++  owned.add(ctx)
++}
++
++export function retireContext(ctx: InstanceContext) {
++  retiredContexts.add(ctx)
++}
++
++export function assertDirectoryAvailable(directory: string) {
++  if (retirements.has(directory)) throw new Error("Workspace retirement is pending or uncertain")
++}
++
++export function isContextActive(ctx: InstanceContext) {
++  return !retiredContexts.has(ctx) && !retirements.has(ctx.directory)
++}
++
++export function assertContextActive(ctx: InstanceContext) {
++  if (retiredContexts.has(ctx)) throw new Error("Workspace context has retired")
++  assertDirectoryAvailable(ctx.directory)
++}
++
++export function hasUnsettledRetirement(directory: string) {
++  return retirements.has(directory)
+ }
+ 
+-export async function disposeInstance(directory: string) {
+-  await Promise.allSettled([...disposers].map((disposer) => disposer(directory)))
++export function disposeInstance(directory: string): Promise<void> {
++  const previous = retirements.get(directory)
++  if (previous) return previous
++  for (const ctx of contexts.get(directory) ?? []) retireContext(ctx)
++  contexts.delete(directory)
++  // Register the fence before invoking any disposer. A rejected retirement stays
++  // quarantined: invalidated service caches cannot safely retry uncertain cleanup.
++  const retirement = Promise.resolve().then(async () => {
++    const exits = await Promise.allSettled([...disposers].map(disposer => Promise.resolve().then(() => disposer(directory))))
++    const failures = exits.filter((exit): exit is PromiseRejectedResult => exit.status === "rejected")
++    if (failures.length) throw new AggregateError(failures.map(exit => exit.reason), "Workspace cleanup failed")
++    if (retirements.get(directory) === retirement) retirements.delete(directory)
++  })
++  retirements.set(directory, retirement)
++  return retirement
+ }
+diff --git a/packages/opencode/src/effect/instance-state.ts b/packages/opencode/src/effect/instance-state.ts
+index b40168f..464637a 100644
+--- a/packages/opencode/src/effect/instance-state.ts
++++ b/packages/opencode/src/effect/instance-state.ts
+@@ -1,7 +1,7 @@
+ import { Effect, ScopedCache, Scope } from "effect"
+ import type { InstanceContext } from "@/project/instance-context"
+ import { InstanceRef, WorkspaceRef } from "./instance-ref"
+-import { registerDisposer } from "./instance-registry"
++import { assertContextActive, registerDisposer } from "./instance-registry"
+ import { WorkspaceContext } from "@/control-plane/workspace-context"
+ 
+ const TypeId = "~opencode/InstanceState"
+@@ -46,7 +46,11 @@ export const make = <A, E = never, R = never>(
+ 
+ export const get = <A, E, R>(self: InstanceState<A, E, R>) =>
+   Effect.gen(function* () {
+-    return yield* ScopedCache.get(self.cache, yield* directory)
++    const ctx = yield* context
++    assertContextActive(ctx)
++    const value = yield* ScopedCache.get(self.cache, ctx.directory)
++    assertContextActive(ctx)
++    return value
+   })
+ 
+ export const use = <A, E, R, B>(self: InstanceState<A, E, R>, select: (value: A) => B) => Effect.map(get(self), select)
+@@ -58,7 +62,9 @@ export const useEffect = <A, E, R, B, E2, R2>(
+ 
+ export const has = <A, E, R>(self: InstanceState<A, E, R>) =>
+   Effect.gen(function* () {
+-    return yield* ScopedCache.has(self.cache, yield* directory)
++    const ctx = yield* context
++    assertContextActive(ctx)
++    return yield* ScopedCache.has(self.cache, ctx.directory)
+   })
+ 
+ export const invalidate = <A, E, R>(self: InstanceState<A, E, R>) =>
+diff --git a/packages/opencode/src/project/instance-store.ts b/packages/opencode/src/project/instance-store.ts
+index 720549d..dee7417 100644
+--- a/packages/opencode/src/project/instance-store.ts
++++ b/packages/opencode/src/project/instance-store.ts
+@@ -4,7 +4,7 @@ import { GlobalBus } from "@/bus/global"
+ import { serviceUse } from "@opencode-ai/core/effect/service-use"
+ import { WorkspaceContext } from "@/control-plane/workspace-context"
+ import { InstanceRef } from "@/effect/instance-ref"
+-import { disposeInstance as runDisposers } from "@/effect/instance-registry"
++import { assertContextActive, assertDirectoryAvailable, hasUnsettledRetirement, registerContext, retireContext, disposeInstance as runDisposers } from "@/effect/instance-registry"
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+ import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
+ import { type InstanceContext } from "./instance-context"
+@@ -32,6 +32,7 @@ export const use = serviceUse(Service)
+ 
+ interface Entry {
+   readonly deferred: Deferred.Deferred<InstanceContext>
++  closing?: boolean
+ }
+ 
+ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Service> = Layer.effect(
+@@ -58,7 +59,10 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+                   project: result.project,
+                 })),
+               )
+-        yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
++        registerContext(ctx)
++        yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx), Effect.onExit(exit =>
++          Exit.isFailure(exit) ? disposeContext(ctx) : Effect.void,
++        ))
+         return ctx
+       }).pipe(Effect.withSpan("InstanceStore.boot"))
+ 
+@@ -72,7 +76,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+     const completeLoad = (directory: string, input: LoadInput, entry: Entry) =>
+       Effect.gen(function* () {
+         const exit = yield* Effect.exit(boot({ ...input, directory }))
+-        if (Exit.isFailure(exit)) yield* removeEntry(directory, entry)
++        if (Exit.isFailure(exit) && !hasUnsettledRetirement(directory)) yield* removeEntry(directory, entry)
+         yield* Deferred.done(entry.deferred, exit).pipe(Effect.asVoid)
+       })
+ 
+@@ -92,6 +96,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+       )
+ 
+     const disposeContext = Effect.fn("InstanceStore.disposeContext")(function* (ctx: InstanceContext) {
++      retireContext(ctx)
+       yield* Effect.logInfo("disposing instance", { directory: ctx.directory })
+       yield* Effect.promise(() => runDisposers(ctx.directory))
+       yield* emitDisposed({ directory: ctx.directory, project: ctx.project.id })
+@@ -99,6 +104,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+ 
+     const disposeEntry = Effect.fnUntraced(function* (directory: string, entry: Entry, ctx: InstanceContext) {
+       if (cache.get(directory) !== entry) return false
++      entry.closing = true
+       yield* disposeContext(ctx)
+       if (cache.get(directory) !== entry) return false
+       cache.delete(directory)
+@@ -110,7 +116,14 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+       return Effect.uninterruptibleMask((restore) =>
+         Effect.gen(function* () {
+           const existing = cache.get(directory)
+-          if (existing) return yield* restore(Deferred.await(existing.deferred))
++          if (existing) {
++            if (existing.closing) return yield* Effect.die(new Error("Workspace is closing"))
++            const ctx = yield* restore(Deferred.await(existing.deferred))
++            if (existing.closing) return yield* Effect.die(new Error("Workspace is closing"))
++            assertContextActive(ctx)
++            return ctx
++          }
++          assertDirectoryAvailable(directory)
+ 
+           const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }
+           cache.set(directory, entry)
+@@ -118,7 +131,10 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+             yield* Effect.logInfo("creating instance", { directory: directory })
+             yield* completeLoad(directory, input, entry)
+           }).pipe(Effect.forkIn(scope, { startImmediately: true }))
+-          return yield* restore(Deferred.await(entry.deferred))
++          const ctx = yield* restore(Deferred.await(entry.deferred))
++          if (entry.closing) return yield* Effect.die(new Error("Workspace is closing"))
++          assertContextActive(ctx)
++          return ctx
+         }),
+       ).pipe(Effect.withSpan("InstanceStore.load"))
+     }
+@@ -128,18 +144,27 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+       return Effect.uninterruptibleMask((restore) =>
+         Effect.gen(function* () {
+           const previous = cache.get(directory)
+-          const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }
++          if (previous?.closing) return yield* Effect.die(new Error("Workspace is closing"))
++          assertDirectoryAvailable(directory)
++          if (previous) previous.closing = true
++          const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>(), closing: true }
+           cache.set(directory, entry)
+           yield* Effect.gen(function* () {
+             yield* Effect.logInfo("reloading instance", { directory: directory })
+             if (previous) {
+-              yield* Deferred.await(previous.deferred).pipe(Effect.ignore)
+-              yield* Effect.promise(() => runDisposers(directory))
+-              yield* emitDisposed({ directory, project: input.project?.id })
++              const ctx = yield* Deferred.await(previous.deferred)
++              yield* disposeContext(ctx)
+             }
++            entry.closing = false
+             yield* completeLoad(directory, input, entry)
+-          }).pipe(Effect.forkIn(scope, { startImmediately: true }))
+-          return yield* restore(Deferred.await(entry.deferred))
++          }).pipe(
++            Effect.catchCause(cause => Deferred.done(entry.deferred, Exit.failCause(cause)).pipe(Effect.asVoid)),
++            Effect.forkIn(scope, { startImmediately: true }),
++          )
++          const ctx = yield* restore(Deferred.await(entry.deferred))
++          if (entry.closing) return yield* Effect.die(new Error("Workspace is closing"))
++          assertContextActive(ctx)
++          return ctx
+         }),
+       ).pipe(Effect.withSpan("InstanceStore.reload"))
+     }
+@@ -149,8 +174,12 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+       if (!entry) return yield* disposeContext(ctx)
+ 
+       const exit = yield* Deferred.await(entry.deferred).pipe(Effect.exit)
+-      if (Exit.isFailure(exit)) return yield* removeEntry(ctx.directory, entry).pipe(Effect.asVoid)
++      if (Exit.isFailure(exit)) {
++        if (hasUnsettledRetirement(ctx.directory)) return yield* Effect.failCause(exit.cause)
++        return
++      }
+       if (exit.value !== ctx) return
++      entry.closing = true
+       yield* disposeEntry(ctx.directory, entry, ctx).pipe(Effect.asVoid)
+     })
+ 
+@@ -158,27 +187,33 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
+       const directory = FSUtil.resolve(input)
+       const entry = cache.get(directory)
+       if (!entry) return
++      entry.closing = true
+       const exit = yield* Deferred.await(entry.deferred).pipe(Effect.exit)
+-      if (Exit.isFailure(exit)) return yield* removeEntry(directory, entry).pipe(Effect.asVoid)
++      if (Exit.isFailure(exit)) {
++        if (hasUnsettledRetirement(directory)) return yield* Effect.failCause(exit.cause)
++        return
++      }
+       yield* disposeEntry(directory, entry, exit.value).pipe(Effect.asVoid)
+     })
+ 
+     const disposeAllOnce = Effect.fnUntraced(function* () {
+       yield* Effect.logInfo("disposing all instances")
+-      yield* Effect.forEach(
++      const exits = yield* Effect.forEach(
+         [...cache.entries()],
+         (item) =>
+           Effect.gen(function* () {
++            item[1].closing = true
+             const exit = yield* Deferred.await(item[1].deferred).pipe(Effect.exit)
+             if (Exit.isFailure(exit)) {
+               yield* Effect.logWarning("instance dispose failed", { key: item[0], cause: exit.cause })
+-              yield* removeEntry(item[0], item[1])
+-              return
++              if (!hasUnsettledRetirement(item[0])) yield* removeEntry(item[0], item[1])
++              return yield* Effect.failCause(exit.cause)
+             }
+             yield* disposeEntry(item[0], item[1], exit.value)
+-          }),
+-        { discard: true },
++          }).pipe(Effect.exit),
+       )
++      const failed = exits.find(Exit.isFailure)
++      if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause)
+     })
+ 
+     const cachedDisposeAll = yield* Effect.cachedWithTTL(disposeAllOnce(), Duration.zero)

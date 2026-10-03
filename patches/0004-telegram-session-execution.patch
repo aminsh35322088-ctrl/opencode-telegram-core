@@ -333,10 +333,13 @@ index 9f85309..f928d04 100644
            "session.id": input.sessionID,
            messageID: input.assistantMessage.id,
 diff --git a/packages/opencode/src/session/run-state.ts b/packages/opencode/src/session/run-state.ts
-index 5cefdd0..5f1ae31 100644
+index 5cefdd0..6da4250 100644
 --- a/packages/opencode/src/session/run-state.ts
 +++ b/packages/opencode/src/session/run-state.ts
-@@ -3,24 +3,72 @@ import { InstanceState } from "@/effect/instance-state"
+@@ -1,26 +1,75 @@
+ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
++import { isContextActive } from "@/effect/instance-registry"
+ import { InstanceState } from "@/effect/instance-state"
  import { SessionV1 } from "@opencode-ai/core/v1/session"
  import { Runner } from "@/effect/runner"
  import { BackgroundJob } from "@/background/job"
@@ -411,7 +414,7 @@ index 5cefdd0..5f1ae31 100644
    ) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
  }
  
-@@ -31,66 +79,311 @@ const layer = Layer.effect(
+@@ -31,66 +80,321 @@ const layer = Layer.effect(
    Effect.gen(function* () {
      const background = yield* BackgroundJob.Service
      const status = yield* SessionStatus.Service
@@ -419,9 +422,11 @@ index 5cefdd0..5f1ae31 100644
  
      const state = yield* InstanceState.make(
 -      Effect.fn("SessionRunState.state")(function* () {
-+      Effect.fn("SessionRunState.state")(function* (ctx) {
-         const scope = yield* Scope.Scope
+-        const scope = yield* Scope.Scope
 -        const runners = new Map<SessionID, Runner.Runner<SessionV1.WithParts>>()
++      Effect.fn("SessionRunState.state")(function* (ctx) {
++        // Join work only after authority has terminated owned stopped groups.
++        const scope = yield* Scope.make()
 +        const runners = new Map<
 +          SessionID,
 +          {
@@ -438,6 +443,7 @@ index 5cefdd0..5f1ae31 100644
 +          control,
 +          guard,
 +          directory: ctx.directory,
++          context: ctx,
 +          retiring: new Set<SessionID>(),
 +          closing: 0,
 +        }
@@ -457,9 +463,10 @@ index 5cefdd0..5f1ae31 100644
                concurrency: "unbounded",
 -              discard: true,
              })
++            const work = yield* Scope.close(scope, Exit.void).pipe(Effect.exit)
 +            for (const end of cleanup) end()
              runners.clear()
-+            const errors = [resources, ...exits, ...tools]
++            const errors = [resources, ...exits, ...tools, work]
 +              .filter(Exit.isFailure)
 +              .map((exit) => Cause.squash(exit.cause))
 +            if (errors.length)
@@ -538,6 +545,9 @@ index 5cefdd0..5f1ae31 100644
 +          )
 +          let interrupt = onInterrupt
 +          const finishIdle = Effect.gen(function* () {
++            // Workspace retirement owns destructive resource cleanup. An idle
++            // callback must not reacquire cache state or publish after revocation.
++            if (!isContextActive(data.context)) return
 +            while (true) {
 +              if (!execution.signal.aborted) {
 +                yield* Effect.promise((signal) => execution.completionCheckpoint(signal, execution.epoch))
@@ -545,6 +555,7 @@ index 5cefdd0..5f1ae31 100644
 +              }
 +              const settled = yield* data.guard.withPermit(
 +                Effect.gen(function* () {
++                  if (!isContextActive(data.context)) return true
 +                  if (data.runners.get(sessionID)?.execution !== execution) return true
 +                  // Pause can acquire the guard after the checkpoint. Retry
 +                  // outside the guard so resume/cancel can still proceed.
@@ -582,6 +593,9 @@ index 5cefdd0..5f1ae31 100644
 +              Effect.catchCause((cause) =>
 +                data.guard.withPermit(
 +                  Effect.gen(function* () {
++                    // A concurrent workspace retirement owns all destructive
++                    // cleanup, including joined tools; it must not reopen caches.
++                    if (!isContextActive(data.context)) return
 +                    // An ordinary completion fault must retire owned resources and
 +                    // quarantine admission before the failed caller is released.
 +                    if (data.control.get(execution.owner)) {
@@ -750,7 +764,7 @@ index 5cefdd0..5f1ae31 100644
      })
  
      const startShell = Effect.fn("SessionRunState.startShell")(function* (
-@@ -98,13 +391,134 @@ const layer = Layer.effect(
+@@ -98,13 +402,134 @@ const layer = Layer.effect(
        onInterrupt: Effect.Effect<SessionV1.WithParts>,
        work: Effect.Effect<SessionV1.WithParts>,
        ready?: Latch.Latch,
@@ -888,7 +902,7 @@ index 5cefdd0..5f1ae31 100644
    }),
  )
  
-@@ -146,6 +560,10 @@ function busyError(sessionID: SessionID) {
+@@ -146,6 +571,10 @@ function busyError(sessionID: SessionID) {
    return new Session.BusyError({ sessionID })
  }
  
