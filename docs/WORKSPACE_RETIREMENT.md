@@ -127,3 +127,37 @@ local typecheck initially saturated cgroup admission (`usedMb=7623`, limit 8192 
 94% ceiling) and prevented process startup; validation was serialized rather than
 changing governor limits. Current repeated Linux stress, CI and Railway remain
 pending; this is not release certification.
+
+## Verified candidate checkpoint (2026-10-03)
+
+Runtime candidate `03f20bd01a0942ad2b4a3b7841a47704b3f84c49` has green
+[cumulative CI run 37138133610](https://github.com/aminsh35322088-ctrl/opencode-telegram-core/actions/runs/37138133610):
+299 native tests, 24 toolchain contracts, 353 upstream tests/two expected skips,
+production-composition regression tests, all original shell repeats, six actual
+compiled surface tests, five actual compiled execution tests and 10 independent
+historical v2 compatibility contracts. Five additional cumulative Linux rounds
+passed 430 tests with five expected platform skips and no failures.
+
+Railway isolated compiled deployment `4cca988f-44a6-4c76-add2-1f12de71097d`
+reached SUCCESS with exact candidate identity, six surface/five execution cases
+and healthcheck successful. Runtime SHA256 is
+`b5b412739bbf8be8f162c9133d2a3f24bb28a34126d140ceea1dd52ecc6370d6`;
+size remains 113,887,360 bytes. The first 18 repeated workloads completed over
+273 seconds without recorded failure, with unchanged PID 112 and zero observed
+post-disposal descendants. RSS ranged 515,920–857,208 KiB, falling to 565,360
+at workload 7 and 588,480 at workload 18. The initial rise was reclaimed; this
+short observation is not a leak-free or concurrent-workload certification.
+
+For comparison, the unchanged pre.9 runtime reached 2,285 repeated workloads
+without recorded failures before this candidate deployment. Its last ten RSS
+samples were 544,388–673,620 KiB. Railway's preceding-hour service metric maximum
+was 0.6028288 GB, limit 0.99999744 GB; that service metric is not process RSS.
+These are baseline observations, not controlled before/after optimization results.
+
+The existing fixture executes its two sessions sequentially and counts runtime
+PPid descendants; it does not detect children reparented to tini. Broader concurrency,
+container crash/restart, orphan detection, rollback/recovery and measured resource
+headroom remain gates. No RC/stable release or Bot mutation occurred. The workspace
+failures above are corrected by this candidate; interrupted raw bootstrap/helper
+acquisition, remote MCP/OAuth and required persistent-browser ownership still need
+their separate production-path audits against the same retirement primitive.
