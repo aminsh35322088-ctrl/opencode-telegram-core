@@ -1,7 +1,7 @@
-import { expect, spyOn } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import path from "node:path"
 import { readFile } from "node:fs/promises"
-import { Effect, Fiber } from "effect"
+import { Effect, Exit, Fiber } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LSP } from "../../src/lsp/lsp"
 import { LSPClient } from "../../src/lsp/client"
@@ -10,10 +10,11 @@ import { spawn as launchLsp } from "../../src/lsp/launch"
 import { Process } from "../../src/util/process"
 import { telegramProcessBudgetSnapshot } from "@opencode-ai/core/telegram-process-budget"
 import { disposeInstance } from "../../src/effect/instance-registry"
-import { TestInstance } from "../fixture/fixture"
+import { TestInstance, withTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(LayerNode.compile(LSP.node))
+const testLayer = LayerNode.compile(LSP.node)
+const it = testEffect(testLayer)
 it.instance("workspace disposal joins an LSP process still initializing", () => Effect.gen(function* () {
   if (process.platform !== "linux") return
   const directory = (yield* TestInstance).directory
@@ -98,66 +99,117 @@ it.instance("workspace disposal retires a late LSP acquisition without publishin
   expect(remaining).toEqual([false, false])
 }), { config: { lsp: true } })
 
-it.instance("workspace disposal bounds stalled startup and owns its pre-handle process", () => Effect.gen(function* () {
-  if (process.platform !== "linux") return
-  const directory = (yield* TestInstance).directory
-  const lsp = yield* LSP.Service
-  const previousFlag = process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
-  process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
-  const count = telegramProcessBudgetSnapshot().activeCount
-  let entered!: () => void
-  let release!: () => void
-  const started = new Promise<void>((resolve) => { entered = resolve })
-  const gate = new Promise<void>((resolve) => { release = resolve })
-  let child: ReturnType<typeof launchLsp> | undefined
-  let launches = 0
-  let lateLaunchRejected = false
-  const root = spyOn(LSPServer.Typescript, "root").mockResolvedValue(directory)
-  const spawn = spyOn(LSPServer.Typescript, "spawn").mockImplementation(async () => {
-    launches++
-    child = launchLsp("/bin/sleep", ["60"])
-    entered()
-    await gate
-    try { launchLsp("/bin/sleep", ["60"]) }
-    catch { lateLaunchRejected = true }
-    return { process: child }
-  })
-  const pending = yield* lsp.touchFile(path.join(directory, "file.ts")).pipe(Effect.forkChild)
-  let bounded = false
-  let alive = false
-  let retainedCount = 0
-  yield* Effect.gen(function* () {
-    yield* Effect.promise(() => started)
-    bounded = yield* Effect.promise(async () => {
-      let deadline: ReturnType<typeof setTimeout> | undefined
-      try {
-        return await Promise.race([
-          disposeInstance(directory).then(() => true),
-          new Promise<false>((resolve) => { deadline = setTimeout(() => resolve(false), 7000) }),
-        ])
-      } finally { clearTimeout(deadline) }
-    })
-    alive = yield* Effect.promise(async () => {
-      try { await readFile(`/proc/${child!.pid}/stat`); return true }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error }
-    })
-    retainedCount = telegramProcessBudgetSnapshot().activeCount
-    // A new workspace cannot start another acquisition while cleanup is uncertain.
-    yield* lsp.touchFile(path.join(directory, "replacement.ts"))
-  }).pipe(Effect.ensuring(Effect.gen(function* () {
-    yield* Effect.sync(release)
-    if (child) yield* Effect.promise(() => Process.stop(child!))
-    yield* Fiber.await(pending)
-    yield* Effect.sync(() => {
-      spawn.mockRestore(); root.mockRestore()
-      if (previousFlag === undefined) delete process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
-      else process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = previousFlag
-    })
-  })))
-  expect(bounded).toBe(true)
-  expect(alive).toBe(false)
-  expect(retainedCount).toBe(count + 1)
-  expect(launches).toBe(1)
-  expect(lateLaunchRejected).toBe(true)
-  expect(telegramProcessBudgetSnapshot().activeCount).toBe(count)
-}), { config: { lsp: true } })
+test("workspace disposal bounds stalled startup and owns its pre-handle process", async () => {
+  if (process.platform !== "linux") return;
+  let asserted = false;
+  const exit = await Effect.runPromise(
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory;
+      const lsp = yield* LSP.Service;
+      const previousFlag = process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET;
+      process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1";
+      const count = telegramProcessBudgetSnapshot().activeCount;
+      let entered!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let child: ReturnType<typeof launchLsp> | undefined;
+      let launches = 0;
+      let lateLaunchRejected = false;
+      const root = spyOn(LSPServer.Typescript, "root").mockResolvedValue(
+        directory,
+      );
+      const spawn = spyOn(LSPServer.Typescript, "spawn").mockImplementation(
+        async () => {
+          launches++;
+          child = launchLsp("/bin/sleep", ["60"]);
+          entered();
+          await gate;
+          try {
+            launchLsp("/bin/sleep", ["60"]);
+          } catch {
+            lateLaunchRejected = true;
+          }
+          return { process: child };
+        },
+      );
+      const pending = yield* lsp
+        .touchFile(path.join(directory, "file.ts"))
+        .pipe(Effect.forkChild);
+      let bounded = false;
+      let alive = false;
+      let retainedCount = 0;
+      yield* Effect.gen(function* () {
+        yield* Effect.promise(() => started);
+        bounded = yield* Effect.promise(async () => {
+          let deadline: ReturnType<typeof setTimeout> | undefined;
+          try {
+            return await Promise.race([
+              disposeInstance(directory).then(
+                () => false,
+                () => true,
+              ),
+              new Promise<false>((resolve) => {
+                deadline = setTimeout(() => resolve(false), 7000);
+              }),
+            ]);
+          } finally {
+            clearTimeout(deadline);
+          }
+        });
+        alive = yield* Effect.promise(async () => {
+          try {
+            await readFile(`/proc/${child!.pid}/stat`);
+            return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT")
+              return false;
+            throw error;
+          }
+        });
+        retainedCount = telegramProcessBudgetSnapshot().activeCount;
+        // A new workspace cannot start another acquisition while cleanup is uncertain.
+        expect(
+          Exit.isFailure(
+            yield* lsp
+              .touchFile(path.join(directory, "replacement.ts"))
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true);
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* Effect.sync(release);
+            if (child) yield* Effect.promise(() => Process.stop(child!));
+            yield* Fiber.await(pending);
+            yield* Effect.sync(() => {
+              spawn.mockRestore();
+              root.mockRestore();
+              if (previousFlag === undefined)
+                delete process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET;
+              else process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = previousFlag;
+            });
+          }),
+        ),
+      );
+      expect(bounded).toBe(true);
+      expect(alive).toBe(false);
+      expect(retainedCount).toBe(count + 1);
+      expect(launches).toBe(1);
+      expect(lateLaunchRejected).toBe(true);
+      expect(telegramProcessBudgetSnapshot().activeCount).toBe(count);
+      asserted = true;
+    }).pipe(
+      withTmpdirInstance({ config: { lsp: true } }),
+      Effect.scoped,
+      Effect.provide(testLayer),
+      Effect.exit,
+    ),
+  );
+  expect(asserted).toBe(true);
+  expect(Exit.isFailure(exit)).toBe(true);
+});

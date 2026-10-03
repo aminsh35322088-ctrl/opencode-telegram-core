@@ -154,3 +154,13 @@ Core release readiness is assessed independently of the frozen Bot migration.
 The final Core report must include tags/commits and release URLs, CI and Railway
 RC soak evidence, measured resource results, ownership audit, documentation and
 remaining non-blocking issues. No stable release is authorized by one green run.
+
+## Shared retirement investigation after PR #25
+
+PR #25 is merged at `e5dd2b1bbebe5287b4621ca35ed07a4b91956234`; pre.9 remains
+the independently verified `28e7527` candidate. A new deterministic investigation
+proved cleanup failure suppression, closing-workspace admission and stale-context
+cache reacquisition in the shared upstream lifecycle. See
+[the evidence and draft correction](WORKSPACE_RETIREMENT.md). These shared failures
+block RC; the earlier green candidate gates do not certify the new correction.
+Bot remains frozen.

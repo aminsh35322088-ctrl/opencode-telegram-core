@@ -20,7 +20,7 @@ rm -f "$tree/packages/sdk/js/tsconfig.tsbuildinfo"
 )
 (
   cd "$tree/packages/opencode"
-  "$BUN" test test/telegram test/effect/runner.test.ts test/tool/task.test.ts test/session/prompt.test.ts test/server/session-actions.test.ts test/lsp test/util/process.test.ts test/mcp --timeout 30000
+  "$BUN" test test/telegram test/effect/runner.test.ts test/effect/instance-state.test.ts test/project/instance.test.ts test/tool/task.test.ts test/session/prompt.test.ts test/server/session-actions.test.ts test/lsp test/util/process.test.ts test/mcp --timeout 30000
   # Exercise the two shell admission/cancellation races observed in Linux CI.
   # A single passing run cannot establish that the intermittent stall is fixed.
   for attempt in {1..5}; do

@@ -14,7 +14,7 @@ bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree" --tests
   # These nine assertions concern retired production APIs/schema export or the
   # OS browser opener. They still run in the full upstream compatibility suite;
   # compiled negative-route and graph checks enforce their production exclusion.
-  "$BUN" test test/telegram test/effect/runner.test.ts test/tool/task.test.ts \
+  "$BUN" test test/telegram test/effect/runner.test.ts test/effect/instance-state.test.ts test/project/instance.test.ts test/tool/task.test.ts \
     test/session/prompt.test.ts test/server/session-actions.test.ts test/lsp \
     test/util/process.test.ts test/mcp --timeout 30000 \
     --test-name-pattern '^(?!.*(?:experimental background route|authenticate\(\)|BrowserOpenFailed|browser launch|generated SDK event schemas)).*'

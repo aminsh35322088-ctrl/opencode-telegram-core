@@ -208,3 +208,13 @@ explicit stable blockers. A passing short soak cannot close them.
 The Railway candidate image uses a child-reaping init. An un-reaping PID 1 leaves
 zombies and correctly causes Core to retain uncertain service admission; cleanup
 assertions/deadlines were not weakened to accommodate that environment.
+
+## Shared retirement investigation after PR #25
+
+PR #25 is merged at `e5dd2b1bbebe5287b4621ca35ed07a4b91956234`; pre.9 remains
+the independently verified `28e7527` candidate. A new deterministic investigation
+proved cleanup failure suppression, closing-workspace admission and stale-context
+cache reacquisition in the shared upstream lifecycle. See
+[the evidence and draft correction](WORKSPACE_RETIREMENT.md). These shared failures
+block RC; the earlier green candidate gates do not certify the new correction.
+Bot remains frozen.
