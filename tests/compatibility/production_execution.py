@@ -116,6 +116,12 @@ class ProductionExecution(unittest.TestCase):
             self.assertEqual(c.request('GET', '/mcp')['compiled-probe']['status'], 'disabled')
 
     def test_physical_pause_resume_abort_and_stale_run_fencing(self):
+        self._exercise_paused_retirement(workspace=False)
+
+    def test_paused_workspace_retirement_joins_group_cleanup_before_replacement(self):
+        self._exercise_paused_retirement(workspace=True)
+
+    def _exercise_paused_retirement(self, workspace):
         provider = ThreadingHTTPServer(('127.0.0.1', 0), Model)
         thread = threading.Thread(target=provider.serve_forever, daemon=True); thread.start()
         pid_file = None
@@ -151,12 +157,20 @@ class ProductionExecution(unittest.TestCase):
                 resumed = c.request('POST', f'/session/{sid}/resume', owner)
                 self.assertFalse(resumed['paused']); self.assertEqual(resumed['runId'], owner['runId'])
                 c.request('POST', f'/session/{sid}/pause', owner)
-                self.assertTrue(c.request('POST', f'/session/{sid}/abort', owner, timeout=15))
+                retire_path = '/global/dispose' if workspace else f'/session/{sid}/abort'
+                self.assertTrue(c.request('POST', retire_path, None if workspace else owner, timeout=15))
                 self.assertFalse(Path(f'/proc/{pid}').exists(), 'cancel returned with owned shell alive')
-                self.assertIsNone(c.request('GET', f'/session/{sid}/execution'))
+                if not workspace:
+                    self.assertIsNone(c.request('GET', f'/session/{sid}/execution'))
                 with self.assertRaises(Exception) as caught:
                     c.request('POST', f'/session/{sid}/resume', owner)
                 self.assertIn('409', str(caught.exception))
+                if workspace:
+                    replacement = c.request('POST', '/session', {})['id']
+                    result = c.request('POST', f'/session/{replacement}/shell',
+                                       {'command': 'printf replacement-owned', 'agent': 'build'}, timeout=15)
+                    self.assertIn('replacement-owned', json.dumps(result))
+                    self.assertTrue(c.request('POST', '/global/dispose'))
         finally:
             provider.shutdown(); provider.server_close(); thread.join(3)
 

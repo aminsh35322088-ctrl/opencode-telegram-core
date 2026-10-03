@@ -333,7 +333,7 @@ index 9f85309..f928d04 100644
            "session.id": input.sessionID,
            messageID: input.assistantMessage.id,
 diff --git a/packages/opencode/src/session/run-state.ts b/packages/opencode/src/session/run-state.ts
-index 5cefdd0..5536557 100644
+index 5cefdd0..6da4250 100644
 --- a/packages/opencode/src/session/run-state.ts
 +++ b/packages/opencode/src/session/run-state.ts
 @@ -1,26 +1,75 @@
@@ -414,7 +414,7 @@ index 5cefdd0..5536557 100644
    ) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
  }
  
-@@ -31,66 +80,319 @@ const layer = Layer.effect(
+@@ -31,66 +80,321 @@ const layer = Layer.effect(
    Effect.gen(function* () {
      const background = yield* BackgroundJob.Service
      const status = yield* SessionStatus.Service
@@ -422,9 +422,11 @@ index 5cefdd0..5536557 100644
  
      const state = yield* InstanceState.make(
 -      Effect.fn("SessionRunState.state")(function* () {
-+      Effect.fn("SessionRunState.state")(function* (ctx) {
-         const scope = yield* Scope.Scope
+-        const scope = yield* Scope.Scope
 -        const runners = new Map<SessionID, Runner.Runner<SessionV1.WithParts>>()
++      Effect.fn("SessionRunState.state")(function* (ctx) {
++        // Join work only after authority has terminated owned stopped groups.
++        const scope = yield* Scope.make()
 +        const runners = new Map<
 +          SessionID,
 +          {
@@ -461,9 +463,10 @@ index 5cefdd0..5536557 100644
                concurrency: "unbounded",
 -              discard: true,
              })
++            const work = yield* Scope.close(scope, Exit.void).pipe(Effect.exit)
 +            for (const end of cleanup) end()
              runners.clear()
-+            const errors = [resources, ...exits, ...tools]
++            const errors = [resources, ...exits, ...tools, work]
 +              .filter(Exit.isFailure)
 +              .map((exit) => Cause.squash(exit.cause))
 +            if (errors.length)
@@ -761,7 +764,7 @@ index 5cefdd0..5536557 100644
      })
  
      const startShell = Effect.fn("SessionRunState.startShell")(function* (
-@@ -98,13 +400,134 @@ const layer = Layer.effect(
+@@ -98,13 +402,134 @@ const layer = Layer.effect(
        onInterrupt: Effect.Effect<SessionV1.WithParts>,
        work: Effect.Effect<SessionV1.WithParts>,
        ready?: Latch.Latch,
@@ -899,7 +902,7 @@ index 5cefdd0..5536557 100644
    }),
  )
  
-@@ -146,6 +569,10 @@ function busyError(sessionID: SessionID) {
+@@ -146,6 +571,10 @@ function busyError(sessionID: SessionID) {
    return new Session.BusyError({ sessionID })
  }
  

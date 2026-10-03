@@ -64,7 +64,8 @@ cleanup. The second was corrected at the captured execution/workspace boundary;
 the existing owned-resource termination regression passes unchanged. The initial
 reload deferred error-path typecheck failure was corrected to the Effect v4 Exit API.
 
-Repeated Linux stress and compiled production verification are the next gates.
+Five cumulative Linux stress rounds passed (425 passes, five expected skips), and
+the original compiled production suite passed (six surface, four execution tests).
 The correction has not yet been certified by cumulative CI or compiled Railway
 execution. It is not an RC-readiness claim. Remote MCP/OAuth global pending flows,
 raw custom-tool/persistent browser ownership, remaining helper/provider subprocess
@@ -87,3 +88,30 @@ The live pre.9 Railway endpoint was independently read on 2026-10-03: exact sour
 failures and zero post-disposal descendants in the last ten samples. Those RSS
 samples were 552512–626816 KiB, threads 7–9. This is a limited existing-fixture baseline,
 not evidence for the new failure paths or a stable-release production soak.
+
+## Compiled validation follow-up
+
+GitHub run `37135625171` passed validate and upstream-runtime. Headless validation
+passed the production artifact's surface/execution tests and the independent CLI's
+10 historical v2 contracts, then failed two duplicated production-execution cases
+against that full upstream CLI. Local diagnostic builds reproduced the failures.
+The rejected disposer was specifically `httpapi/handlers/pty.ts` invalidating its
+`LocationServiceMap`, with the normal run-retirement reason `execution finished`.
+No InstanceState cache disposer rejected. This handler and its PTY/control-plane
+service graph are excluded by the production profile and verified bundle graph;
+production location services contain only Location/PluginInternal/Reference/PluginV2.
+The release gate now tests production execution only on the shipping artifact,
+while retaining the independent historical v2 suite. No cleanup error is suppressed
+and no retired upstream surface is restored for parity.
+
+A new compiled production test then exposed a separate, real blocker: global
+workspace disposal while a model shell was physically paused timed out at the
+existing 15-second request bound. Direct abort-after-pause already passed. The
+shared runner scope joined model fibers before the execution finalizer terminated
+owned processes, so physical close could wait for termination behind its own join.
+A deterministic synthetic resource regression reproduced the same ordering failure
+(0 pass, 1 timeout at 3 seconds) without sleeps. Work now has an explicitly owned
+scope: the existing workspace finalizer revokes execution and terminates resources,
+cancels runners, drains tools, and closes that scope, aggregating failures.
+All 13 run-state tests pass locally after the correction. Cumulative CI, rebuilt
+production execution and Railway evidence for this follow-up remain pending.
