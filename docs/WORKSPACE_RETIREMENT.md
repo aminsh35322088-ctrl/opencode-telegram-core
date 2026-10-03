@@ -115,3 +115,15 @@ scope: the existing workspace finalizer revokes execution and terminates resourc
 cancels runners, drains tools, and closes that scope, aggregating failures.
 All 13 run-state tests pass locally after the correction. Cumulative CI, rebuilt
 production execution and Railway evidence for this follow-up remain pending.
+
+The follow-up cumulative gate at `48edf894` passed upstream typecheck, SDK surface,
+10 Core helpers, 353 upstream tests/two expected skips and all five original
+cancellation/admission repeats. Exact compiled production tests passed all five
+execution cases after correcting the replacement probe to the supported model/tool
+HTTP API (the manual-shell HTTP endpoint is deliberately excluded). The new case
+verifies paused disposal, physical shell death, stale resume rejection and successful
+replacement shell execution. Six compiled surface tests also passed. An overlapping
+local typecheck initially saturated cgroup admission (`usedMb=7623`, limit 8192 MiB,
+94% ceiling) and prevented process startup; validation was serialized rather than
+changing governor limits. Current repeated Linux stress, CI and Railway remain
+pending; this is not release certification.

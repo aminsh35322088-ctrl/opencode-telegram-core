@@ -167,8 +167,11 @@ class ProductionExecution(unittest.TestCase):
                 self.assertIn('409', str(caught.exception))
                 if workspace:
                     replacement = c.request('POST', '/session', {})['id']
-                    result = c.request('POST', f'/session/{replacement}/shell',
-                                       {'command': 'printf replacement-owned', 'agent': 'build'}, timeout=15)
+                    provider.command = 'printf replacement-owned'
+                    result = c.request('POST', f'/session/{replacement}/message',
+                                       {'parts': [{'type': 'text', 'text': 'Run replacement probe'}],
+                                        'model': {'providerID': 'fixture', 'modelID': 'fixture'}}, timeout=30)
+                    result = c.request('GET', f'/session/{replacement}/message')
                     self.assertIn('replacement-owned', json.dumps(result))
                     self.assertTrue(c.request('POST', '/global/dispose'))
         finally:
