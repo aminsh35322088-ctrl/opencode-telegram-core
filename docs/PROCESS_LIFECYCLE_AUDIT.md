@@ -422,3 +422,23 @@ inspection confirms its daemon and browser use separate groups. Existing tests
 called "detached processes" cover an admitted detached group, not descendants that
 create another group. Group-only cleanup must not be described as full process-tree
 ownership. Shared tree retirement and hard-crash containment remain RC blockers.
+
+Actual compiled custom-tool execution also reproduces the escape: a FIFO handshake
+confirms the new session before launcher return; both the successful tool and
+`/global/dispose` acknowledge completion while the same descendant survives.
+See the compiled probe beside the source-level probe. Fixture cleanup is explicit.
+
+Checkpoint `7174ae6` passes all three CI gates (run37191228055) and compiled Railway
+deployment `efab7f70-e746-421e-a34e-7e920ea86249` is healthy on the exact source.
+The first18 sequential workload observations have no failures, with RSS510,040–
+902,556 KiB and subsequent drops toward600,000 KiB. One-hour Railway metrics span
+both old/new deployments and must not be attributed solely to this candidate.
+Neither RSS nor native smoke proves the remaining ownership/resource gates.
+
+The validation harness now records bounded (256-sample) cgroup current/max,
+inactive-file, reclaim-aware working set and CPU counters separately from Bun RSS,
+plus an idle baseline. It reports read-only cgroup freeze/kill presence and write
+permissions to evaluate possible kernel-backed process scopes; permissions alone
+do not prove delegation. The Cloud agent cannot write its cgroup directory.
+No cgroup or production governor is changed by this measurement. Exact successor
+CI/Railway verification is pending, as are realistic concurrent/failure workloads.

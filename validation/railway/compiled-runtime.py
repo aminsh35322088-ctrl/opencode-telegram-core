@@ -31,6 +31,44 @@ evidence = {'build': json.loads(Path('/validation/build-info.json').read_text())
     'sha256': hashlib.sha256(Path(BINARY).read_bytes()).hexdigest(), 'runtimeBytes': Path(BINARY).stat().st_size,
     'runtimePID': server.process.pid, 'completedWorkloads': 0, 'failures': [], 'rssKiB': [], 'descendantCounts': [], 'threadCounts': [], 'started': time.time()}
 lock = threading.Lock()
+def cgroup_sample():
+    """Container accounting, separate from the Bun RSS observation below.
+
+    This reports access capabilities; writable permissions alone are not proof
+    of usable delegation. No cgroup is created or changed by the observation.
+    """
+    try:
+        entries = Path('/proc/self/cgroup').read_text().splitlines()
+        relative = next(line[3:] for line in entries if line.startswith('0::'))
+        mount = Path('/sys/fs/cgroup').resolve()
+        group = (mount / relative.lstrip('/')).resolve()
+        group.relative_to(mount)
+        current = int((group / 'memory.current').read_text())
+        maximum_text = (group / 'memory.max').read_text().strip()
+        maximum = None if maximum_text == 'max' else int(maximum_text)
+        stat = dict(line.split() for line in (group / 'memory.stat').read_text().splitlines())
+        inactive = int(stat.get('inactive_file', '0'))
+        # Match Core: never manufacture a negative/reduced sample from invalid
+        # inactive-file accounting. Raw current remains the hard/OOM observation.
+        working_set = current - inactive if 0 <= inactive <= current else current
+        cpu = dict(line.split() for line in (group / 'cpu.stat').read_text().splitlines())
+        return {'memoryCurrentBytes': current, 'memoryMaxBytes': maximum,
+            'inactiveFileBytes': inactive, 'workingSetBytes': working_set,
+            'cpuUsageUsec': int(cpu['usage_usec']),
+            'processScopeCapabilities': {
+                'directoryWritable': os.access(group, os.W_OK),
+                'procsWritable': os.access(group / 'cgroup.procs', os.W_OK),
+                'freezePresent': (group / 'cgroup.freeze').exists(),
+                'killPresent': (group / 'cgroup.kill').exists()}}
+    except (OSError, ValueError, KeyError, StopIteration) as error:
+        return {'unavailable': type(error).__name__}
+
+def append_observation(name, value):
+    observations = evidence.setdefault(name, [])
+    observations.append(value)
+    # A validation soak must not introduce its own unbounded memory retention.
+    del observations[:-256]
+
 def sample():
     fields = Path(f'/proc/{server.process.pid}/status').read_text().splitlines()
     return int(next(s for s in fields if s.startswith('VmRSS:')).split()[1])
@@ -50,6 +88,8 @@ def process_sample():
     threads = int(next(s for s in fields if s.startswith('Threads:')).split()[1])
     return len(owned) - 1, threads
 
+evidence['idleBaseline'] = {'rssKiB': sample(), 'cgroup': cgroup_sample()}
+
 def workload():
     while True:
         try:
@@ -68,10 +108,11 @@ def workload():
             client.request('POST', '/global/dispose')
             with lock:
                 evidence['completedWorkloads'] += 1
-                evidence['rssKiB'].append(sample())
+                append_observation('rssKiB', sample())
                 descendants, threads = process_sample()
-                evidence['descendantCounts'].append(descendants)
-                evidence['threadCounts'].append(threads)
+                append_observation('descendantCounts', descendants)
+                append_observation('threadCounts', threads)
+                append_observation('cgroupSamples', cgroup_sample())
                 print(json.dumps({'compiledRuntimeSoak': evidence['completedWorkloads'], 'rssKiB': evidence['rssKiB'][-1],
                                   'runtimePID': server.process.pid, 'descendants': descendants, 'threads': threads}), flush=True)
         except Exception as error:
@@ -84,7 +125,8 @@ class Health(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self):
         with lock:
-            response = dict(evidence)
+            response = {key: list(value) if isinstance(value, list) else value
+                for key, value in evidence.items()}
             response['alive'] = server.process.poll() is None
             response['healthy'] = response['alive'] and not response['failures'] and response['completedWorkloads'] > 0
         raw = json.dumps(response).encode()

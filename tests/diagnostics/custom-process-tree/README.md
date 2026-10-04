@@ -11,6 +11,13 @@ invocation cleanup returns. Admission returns from zero to zero, yet the capture
 then kills only that captured identity; the outer subreaper performs reaping.
 This demonstrates successful-release escape, separately from Bun crash containment.
 
+`compiled-detached-descendant.probe.py` reproduces the same boundary through the
+actual compiled model/custom-tool API. A FIFO handshake proves the descendant
+has entered its new session before its launcher can finish. Source `58ce9b2`
+returns a successful custom-tool result and acknowledges `/global/dispose`, yet
+the same captured live descendant identity survives. It then cleans its fixture
+before the subreaper exits. This is a compiled-runtime regression, not native smoke.
+
 The frozen Bot's Playwright CLI dependency is `@playwright/cli@0.1.18`, which pins
 `playwright-core@1.63.0-alpha-2026-08-05`. Read-only package inspection confirms:
 
