@@ -8,7 +8,7 @@ FORBIDDEN = (
     '/core/src/pty.ts', '/core/src/pty/', 'src/server/shared/pty-ticket.ts', '/protocol/src/groups/pty.ts', '/core/src/pty/bun.ts', '/core/src/pty/node.ts',
     'node-pty@', 'bun-pty@', '/codemode/', '/codemode/src/', 'typescript/lib/typescript.js',
     '/fff-bin-', '/fff-core/', '/filesystem/fff.',
-    'credential-provider-process/dist-es/', 'credential-provider-process/dist-cjs/',
+    'src/plugin/azure.ts', 'credential-provider-process/dist-es/', 'credential-provider-process/dist-cjs/',
     'src/mcp/browser.ts', 'src/server/mdns.ts', 'bonjour-service',
     'src/account/account.ts', 'src/account/repo.ts', 'src/share/share-next.ts', 'src/share/session.ts', 'src/installation.ts',
     'src/server/shared/ui.ts', '/server/src/handlers/',

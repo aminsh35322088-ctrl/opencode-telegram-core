@@ -128,3 +128,22 @@ reports exact source `64dfc918108a1ceb193fa9d7ea9fa4b7ce939f51`, and passed the
 compiled surface/execution startup suite. The initial observation is 14 workloads,
 no reported failures, healthy PID218. This is checkpoint evidence, not RC soak.
 The continuing plugin-retirement candidate has not been deployed or released.
+
+## Azure production credential scope correction (2026-10-04)
+
+Actual compiled Core started the builtin Azure CLI token helper and acknowledged
+session abort while that helper remained alive. The read-only Telegram product and
+installation audit found no requirement for implicit Azure CLI credentials; generic
+Azure provider/API-key inference remains required. The production build replaces
+only the builtin `src/plugin/azure.ts` loader. API-key credentials keep their
+original provider transport; stored CLI OAuth credentials fail terminally before
+any helper or network acquisition, without retries or alternate-identity fallback.
+The graph gate excludes the original CLI loader, not the Azure provider SDK. Full
+upstream source is unchanged. Required explicitly governed custom tools may still
+invoke CLI programs; this exclusion is specific to implicit provider acquisition.
+
+Bundle policy regressions pass for terminal rejection and API-key pass-through.
+The pre-fix compiled API-key inference assertion passes; CLI OAuth fails its bounded
+request assertion. Actual post-fix compiled/cumulative/CI/Railway verification is
+pending. Removing this optional mechanism does not prove ownership of required
+raw custom processes, persistent browsers, other helpers or hard-crash survivors.

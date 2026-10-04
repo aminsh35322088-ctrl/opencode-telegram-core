@@ -298,3 +298,18 @@ kills/reaps only its owned fixture process and is preserved as
 `tests/diagnostics/azure-compiled-ownership.probe.py`. This is a confirmed acquisition
 lifetime defect, not merely an import finding. Optional CLI credential scope must
 be decided against Telegram requirements; Azure API-key inference must remain.
+
+### Exact plugin checkpoint and Azure scope correction
+
+Checkpoint `25da66b2582a133f4ff092fda32d4e43d8fb191d` passes all three GitHub gates
+(run 37186470981). Its actual compiled local gate also passes: six surface checks,
+twelve execution checks (including failed plugin retirement fencing replacement)
+and ten independent session-contract checks. The earlier pending compiled statements
+above are superseded for this checkpoint. Railway lifecycle verification of this
+checkpoint is still required; the prior deployed credential candidate is not proof.
+
+The Azure CLI model-time helper is optional upstream functionality with no documented
+Telegram consumer/install requirement. The candidate production resolver removes
+that acquisition path and rejects imported CLI OAuth terminally; Azure API-key
+inference is retained. See [scope and validation](PROVIDER_AUTH_OWNERSHIP.md#azure-production-credential-scope-correction-2026-10-04).
+No required browser/daemon or crash-containment gate is closed by that exclusion.

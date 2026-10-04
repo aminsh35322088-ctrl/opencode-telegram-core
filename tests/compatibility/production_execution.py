@@ -115,6 +115,53 @@ class ProductionExecution(unittest.TestCase):
                 self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
         finally: registry.shutdown(); registry.server_close()
 
+    def test_compiled_azure_cli_credentials_fail_closed_without_launch(self):
+        roots = []
+        def configure(root, env):
+            roots.append(root)
+            binary_dir = root / 'bin'; binary_dir.mkdir()
+            helper = binary_dir / 'az'
+            helper.write_text('#!' + sys.executable + '\nimport pathlib,json\npathlib.Path(' +
+                repr(str(root / 'azure-helper-started')) + ').write_text("started")\n' +
+                'print(json.dumps({"accessToken":"fixture","expires_on":4102444800}))\n')
+            helper.chmod(0o755)
+            env['PATH'] = str(binary_dir) + ':' + env.get('PATH', '')
+            env['OPENCODE_AUTH_CONTENT'] = json.dumps({'azure': {'type': 'oauth',
+                'access': 'fixture', 'refresh': 'fixture', 'expires': 4102444800000}})
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'provider': {'azure': {
+                'options': {'resourceName': 'fixture', 'baseURL': 'http://127.0.0.1:1'},
+                'models': {'fixture': {'name': 'Fixture', 'limit': {'context': 32000, 'output': 1024}}}}}})
+        with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+            c = Client(server.base); sid = c.request('POST', '/session', {})['id']
+            c.request('POST', f'/session/{sid}/message', {'parts': [{'type': 'text', 'text': 'fixture'}],
+                'model': {'providerID': 'azure', 'modelID': 'fixture'}}, timeout=15)
+            history = json.dumps(c.request('GET', f'/session/{sid}/message'))
+            self.assertIn('Azure CLI OAuth is unsupported in Telegram Core', history)
+            self.assertFalse((roots[0] / 'azure-helper-started').exists())
+            self.assertNotIn(sid, c.request('GET', '/session/status'))
+            self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+
+    def test_compiled_azure_api_key_inference_remains_supported(self):
+        provider = ThreadingHTTPServer(('127.0.0.1', 0), Model)
+        thread = threading.Thread(target=provider.serve_forever, daemon=True); thread.start()
+        def configure(root, env):
+            env['OPENCODE_AUTH_CONTENT'] = json.dumps({'azure': {'type': 'api', 'key': 'fixture'}})
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'permission': 'allow', 'provider': {'azure': {
+                'options': {'resourceName': 'fixture', 'baseURL': f'http://127.0.0.1:{provider.server_port}/v1',
+                            'useCompletionUrls': True},
+                'models': {'fixture': {'name': 'Fixture', 'limit': {'context': 32000, 'output': 1024}}}}}})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); sid = c.request('POST', '/session', {})['id']
+                c.request('POST', f'/session/{sid}/message', {'parts': [{'type': 'text', 'text': 'fixture'}],
+                    'model': {'providerID': 'azure', 'modelID': 'fixture'}}, timeout=30)
+                history = json.dumps(c.request('GET', f'/session/{sid}/message'))
+                self.assertIn('Telegram compiled execution complete', history)
+                self.assertNotIn(sid, c.request('GET', '/session/status'))
+                self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+        finally:
+            provider.shutdown(); provider.server_close(); thread.join(3)
+
     def test_compiled_aws_process_credentials_fail_closed_without_launch(self):
         roots = []
         def configure(root, env):

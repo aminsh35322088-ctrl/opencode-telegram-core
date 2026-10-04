@@ -197,3 +197,12 @@ revive the retired context. This governs logical hook resources, not arbitrary r
 Node/Bun children spawned by trusted plugin code. Process/group admission, run
 pause/abort and persistent daemon authority still require their explicit Core
 capabilities; this candidate does not pretend a plugin hook list proves them.
+
+### Optional provider CLI helpers
+
+Production excludes implicit AWS `credential_process` and builtin Azure CLI OAuth
+acquisition. Configured unsupported credentials fail closed before process launch;
+API-key/static and supported HTTP credential transports remain. These two optional
+CLI paths are excluded classes, not proven governed processes. Required helper and
+custom process ownership, persistent services and hard-crash containment remain
+independent release gates. See [provider scope](PROVIDER_AUTH_OWNERSHIP.md).
