@@ -7,6 +7,8 @@ import { processScopeBinary } from "./telegram-process-scope-binary"
 
 export interface ProcessTree {
   signal(value: NodeJS.Signals): void
+  transition(value: "SIGSTOP" | "SIGCONT"): Promise<void>
+  readonly spawnError: NodeJS.ErrnoException | undefined
   cleanup(): Promise<void>
 }
 
@@ -53,6 +55,7 @@ export function spawnProcessTree(command: string, args: readonly string[], optio
   let failure: Error | undefined
   let execErrno = false
   let execFailure: NodeJS.ErrnoException | undefined
+  const transitions: { command: string; resolve: () => void; reject: (error: Error) => void }[] = []
   let resolve!: () => void
   let reject!: (error: Error) => void
   const confirmed = new Promise<void>((ok, no) => { resolve = ok; reject = no })
@@ -61,12 +64,14 @@ export function spawnProcessTree(command: string, args: readonly string[], optio
     if (empty || failure) return
     failure = reason instanceof Error ? reason : new Error(reason)
     reject(failure)
+    for (const pending of transitions.splice(0)) pending.reject(failure)
     listener.close()
     fatal?.(failure)
   }
-  const send = (command: string) => {
+  const send = (command: string, receipt?: { resolve: () => void; reject: (error: Error) => void }) => {
     if (empty) return
     if (failure) throw failure
+    if (command === "P" || command === "R") transitions.push({ command, resolve: receipt?.resolve ?? (() => {}), reject: receipt?.reject ?? (() => {}) })
     if (!control) { pending.push(command); return }
     control.write(command, (error) => { if (error) fail(error) })
   }
@@ -87,9 +92,15 @@ export function spawnProcessTree(command: string, args: readonly string[], optio
         else if (byte === 69) execErrno = true
         else if (byte === 68) {
           empty = true; resolve() // D: waitpid confirmed ECHILD
+          for (const pending of transitions.splice(0)) pending.reject(new Error("process tree retired during transition"))
           if (execFailure) queueMicrotask(() => child.emit("error", execFailure))
         }
-        else if (byte !== 83 && byte !== 80 && byte !== 82) fail("invalid process-tree receipt")
+        else if (byte === 80 || byte === 82) {
+          const pending = transitions.shift()
+          if (!pending || pending.command.charCodeAt(0) !== byte) fail("unexpected process-tree transition receipt")
+          else pending.resolve()
+        }
+        else if (byte !== 83) fail("invalid process-tree receipt")
       }
     })
     socket.on("end", () => {
@@ -97,7 +108,7 @@ export function spawnProcessTree(command: string, args: readonly string[], optio
       socket.destroy()
       rmSync(scopeDirectory, { recursive: true, force: true })
     })
-    for (const command of pending.splice(0)) send(command)
+    for (const command of pending.splice(0)) socket.write(command, (error) => { if (error) fail(error) })
   })
   child.once("error", fail)
   child.once("exit", () => {
@@ -108,6 +119,13 @@ export function spawnProcessTree(command: string, args: readonly string[], optio
   })
   const tree: ProcessTree = {
     signal: (value) => send(value === "SIGSTOP" ? "P" : value === "SIGCONT" ? "R" : "K"),
+    transition: (value) => {
+      if (empty) return Promise.reject(new Error("process tree retired"))
+      return new Promise<void>((resolve, reject) => {
+        try { send(value === "SIGSTOP" ? "P" : "R", { resolve, reject }) } catch (error) { reject(error) }
+      })
+    },
+    get spawnError() { return execFailure },
     cleanup: () => { send("K"); return confirmed },
   }
   trees.set(child, tree)

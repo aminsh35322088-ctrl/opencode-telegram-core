@@ -18,6 +18,7 @@ from production_execution import Model
 BINARY = '/usr/local/bin/opencode'
 for test in ['headless_surface.py', 'production_execution.py']:
     subprocess.run([sys.executable, '/validation/tests/' + test, '--binary', BINARY], check=True)
+subprocess.run([sys.executable, '/validation/diagnostics/linux-process-scope/compiled_browser.py', '--binary', BINARY], check=True)
 provider = ThreadingHTTPServer(('127.0.0.1', 0), Model)
 threading.Thread(target=provider.serve_forever, daemon=True).start()
 def configure(root, env):

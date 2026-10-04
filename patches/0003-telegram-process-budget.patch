@@ -11,7 +11,6 @@ index 5488a1d..c51ea2e 100644
    },
    "imports": {
 diff --git a/packages/core/src/cross-spawn-spawner.ts b/packages/core/src/cross-spawn-spawner.ts
-index 6ea9022..556c55d 100644
 --- a/packages/core/src/cross-spawn-spawner.ts
 +++ b/packages/core/src/cross-spawn-spawner.ts
 @@ -1,6 +1,7 @@
@@ -22,7 +21,7 @@ index 6ea9022..556c55d 100644
  import * as Deferred from "effect/Deferred"
  import * as Effect from "effect/Effect"
  import * as Exit from "effect/Exit"
-@@ -26,6 +27,11 @@ import { PassThrough } from "node:stream"
+@@ -26,6 +27,12 @@
  import launch from "cross-spawn"
  import { makeGlobalNode } from "./effect/app-node"
  import { filesystem, path } from "./effect/app-node-platform"
@@ -30,14 +29,16 @@ index 6ea9022..556c55d 100644
 +import { CurrentTelegramExecution, CurrentTelegramEpoch } from "./telegram-execution-context"
 +import type { SessionExecutionLease } from "./session-execution-control"
 +import { ownShellProcess } from "./telegram-owned-process"
++import { ownServiceProcess } from "./telegram-service-process"
 +import { spawnProcessTree } from "./telegram-process-tree"
  
  const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
  
-@@ -76,6 +82,18 @@ const flatten = (command: ChildProcess.Command) => {
+@@ -75,6 +82,18 @@
+     opts,
    }
  }
- 
++
 +const toBudgetPlatformError = (
 +  err: unknown,
 +  command: ChildProcess.StandardCommand,
@@ -49,11 +50,10 @@ index 6ea9022..556c55d 100644
 +    pathOrDescriptor: command.command,
 +    cause: err,
 +  })
-+
+ 
  const toPlatformError = (
    method: string,
-   err: NodeJS.ErrnoException,
-@@ -202,10 +220,7 @@ export const make = Effect.gen(function* () {
+@@ -202,10 +221,7 @@
              const tap = new PassThrough()
              node.on("error", (err) => tap.destroy(toError(err)))
              node.pipe(tap)
@@ -65,7 +65,7 @@ index 6ea9022..556c55d 100644
            }
            if (x.config.sink) stream = Stream.transduce(stream, x.config.sink)
            outs.set(x.fd, stream)
-@@ -239,6 +254,23 @@ export const make = Effect.gen(function* () {
+@@ -239,6 +255,23 @@
        return Effect.succeed(sink)
      })
  
@@ -89,7 +89,7 @@ index 6ea9022..556c55d 100644
    const setupOutput = (
      command: ChildProcess.StandardCommand,
      proc: NodeChildProcess.ChildProcess,
-@@ -246,16 +278,10 @@ export const make = Effect.gen(function* () {
+@@ -246,16 +279,10 @@
      err: ChildProcess.StderrConfig,
    ) => {
      let stdout = proc.stdout
@@ -108,11 +108,12 @@ index 6ea9022..556c55d 100644
        : Stream.empty
  
      if (Sink.isSink(out.stream)) stdout = Stream.transduce(stdout, out.stream)
-@@ -264,13 +290,74 @@ export const make = Effect.gen(function* () {
+@@ -264,13 +291,77 @@
      return { stdout, stderr, all: Stream.merge(stdout, stderr) }
    }
  
 -  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
++  const helperScopes = new WeakMap<NodeChildProcess.ChildProcess, ReturnType<typeof ownServiceProcess>>()
 +  const owned = new WeakMap<NodeChildProcess.ChildProcess, ReturnType<typeof ownShellProcess>>()
 +  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions, execution?: SessionExecutionLease, epoch?: number) =>
      Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
@@ -164,7 +165,7 @@ index 6ea9022..556c55d 100644
 +      let proc: NodeChildProcess.ChildProcess
 +      try {
 +        if (controlled) execution.assertOwned(epoch)
-+        proc = controlled ? spawnProcessTree(command.command, command.args, opts) : launch(command.command, command.args, opts)
++        proc = process.platform === "linux" ? spawnProcessTree(command.command, command.args, opts) : launch(command.command, command.args, opts)
 +      } catch (error) {
 +        lease?.release()
 +        throw error
@@ -172,8 +173,10 @@ index 6ea9022..556c55d 100644
 +
 +      const ownership = controlled && proc.pid ? ownShellProcess(proc, execution, epoch, lease!) : undefined
 +      if (ownership) owned.set(proc, ownership)
++      const helper = !ownership && process.platform === "linux" && proc.pid ? ownServiceProcess(proc, lease) : undefined
++      if (helper) helperScopes.set(proc, helper)
 +      const releaseLease = () => {
-+        if (!ownership) { lease?.release(); return }
++        if (!ownership) { if (!helper) lease?.release(); return }
 +        ownership.closed()
 +        void ownership.cleanup().catch(() => {}) // The scope joins this same failure.
 +      }
@@ -181,14 +184,21 @@ index 6ea9022..556c55d 100644
 +      let spawned = false
        let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
        proc.on("error", (err) => {
-+        if (!spawned) lease?.release()
++        if (!spawned && !ownership && !helper) lease?.release()
          resume(Effect.fail(toPlatformError("spawn", err, command)))
        })
        proc.on("exit", (...args) => {
-@@ -280,9 +367,19 @@ export const make = Effect.gen(function* () {
+@@ -279,10 +370,25 @@
+       proc.on("close", (...args) => {
          if (end) return
          end = true
-         Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
+-        Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
++        if (helper) {
++          void helper.cleanup().then(
++            () => Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args)),
++            (error) => Deferred.doneUnsafe(signal, Exit.die(toPlatformError("release", toError(error), command))),
++          )
++        } else Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
 +        releaseLease()
        })
        proc.on("spawn", () => {
@@ -206,7 +216,7 @@ index 6ea9022..556c55d 100644
        })
        return Effect.sync(() => {
          proc.kill("SIGTERM")
-@@ -342,6 +439,37 @@ export const make = Effect.gen(function* () {
+@@ -342,6 +448,37 @@
        })
      }
  
@@ -244,7 +254,7 @@ index 6ea9022..556c55d 100644
    const source = (handle: ChildProcessHandle, from: ChildProcess.PipeFromOption | undefined) => {
      const opt = from ?? "stdout"
      switch (opt) {
-@@ -370,16 +498,30 @@ export const make = Effect.gen(function* () {
+@@ -370,16 +507,30 @@
            const extra = fds(command.options)
            const dir = yield* cwd(command.options)
  
@@ -270,7 +280,7 @@ index 6ea9022..556c55d 100644
 -            Effect.fnUntraced(function* ([proc, signal]) {
 +            }, execution, epoch),
 +            Effect.fn("CrossSpawnSpawner.release")(function* ([proc, signal]) {
-+              const ownership = owned.get(proc)
++              const ownership = owned.get(proc) ?? helperScopes.get(proc)
 +              if (ownership) return yield* Effect.tryPromise({
 +                try: () => ownership.cleanup(),
 +                catch: (error) => toPlatformError("release", toError(error), command),
@@ -278,7 +288,7 @@ index 6ea9022..556c55d 100644
                const done = yield* Deferred.isDone(signal)
                const kill = timeout(proc, command, command.options)
                if (done) {
-@@ -388,17 +530,7 @@ export const make = Effect.gen(function* () {
+@@ -388,17 +539,7 @@
                  if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
                  return yield* Effect.void
                }
@@ -297,7 +307,7 @@ index 6ea9022..556c55d 100644
              }),
            )
  
-@@ -425,15 +557,13 @@ export const make = Effect.gen(function* () {
+@@ -425,15 +566,13 @@
                )
              }),
              kill: (opts?: ChildProcess.KillOptions) => {
@@ -354,15 +364,16 @@ index e5be4d4..82b8aa4 100644
          title: input.title || `Terminal ${id.slice(-4)}`,
 diff --git a/packages/core/src/telegram-process-budget.ts b/packages/core/src/telegram-process-budget.ts
 new file mode 100644
+index 0000000..fdb517b
 --- /dev/null
 +++ b/packages/core/src/telegram-process-budget.ts
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,288 @@
 +import { readFileSync } from "node:fs"
 +import path from "node:path"
 +
 +const MiB = 1024 * 1024
 +
-+export type TelegramProcessKind = "shell" | "mcp" | "lsp" | "pty" | "utility" | "helper"
++export type TelegramProcessKind = "shell" | "mcp" | "lsp" | "pty" | "utility" | "helper" | "browser"
 +
 +export interface TelegramProcessRule {
 +  readonly maxConcurrent: number
@@ -401,6 +412,7 @@ new file mode 100644
 +  pty: { maxConcurrent: 1, reserveBytes: 96 * MiB, pressureCeiling: 0.94 },
 +  utility: { maxConcurrent: 2, reserveBytes: 32 * MiB, pressureCeiling: 0.97 },
 +  helper: { maxConcurrent: 1, reserveBytes: 64 * MiB, pressureCeiling: 0.95 },
++  browser: { maxConcurrent: 2, reserveBytes: 256 * MiB, pressureCeiling: 0.94 },
 +})
 +
 +const RESERVATION_WARMUP_MS = 5_000
@@ -1680,21 +1692,20 @@ index 1e4423e..a9cd836 100644
            const exit = yield* Effect.raceAll([
              handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
 diff --git a/packages/opencode/src/util/process.ts b/packages/opencode/src/util/process.ts
-index 173210f..1e49e2b 100644
 --- a/packages/opencode/src/util/process.ts
 +++ b/packages/opencode/src/util/process.ts
-@@ -3,6 +3,10 @@ import type { Stream } from "node:stream"
+@@ -3,6 +3,10 @@
  import launch from "cross-spawn"
  import { buffer } from "node:stream/consumers"
  import { errorMessage } from "./error"
 +import { ownServiceProcess } from "@opencode-ai/core/telegram-service-process"
-+import { spawnProcessTree } from "@opencode-ai/core/telegram-process-tree"
++import { processTree, spawnProcessTree } from "@opencode-ai/core/telegram-process-tree"
 +import { currentServiceProcessOwner } from "@opencode-ai/core/telegram-service-acquisition"
-+import { acquireTelegramProcessBudget, classifyTelegramProcess } from "@opencode-ai/core/telegram-process-budget"
++import { acquireTelegramProcessBudget, classifyTelegramProcess, isTelegramProcessBudgetEnabled } from "@opencode-ai/core/telegram-process-budget"
  
  export type Stdio = "inherit" | "pipe" | "ignore" | number | Stream
  export type Shell = boolean | string
-@@ -56,22 +60,51 @@ export class RunFailedError extends Error {
+@@ -56,22 +60,51 @@
  
  export type Child = ChildProcess & { exited: Promise<number> }
  
@@ -1721,7 +1732,7 @@ index 173210f..1e49e2b 100644
 +  const kind = classifyTelegramProcess(cmd[0], env, undefined, Boolean(opts.shell))
 +  // Admission may be disabled in generic upstream tests, but service cleanup
 +  // still owns the POSIX group rather than returning an unbounded leader wait.
-+  const service = Boolean(serviceOwner) || (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
++  const service = (process.platform === "linux" && isTelegramProcessBudgetEnabled()) || Boolean(serviceOwner) || (process.platform !== "win32" && (kind === "lsp" || kind === "mcp")) ||
 +    lease?.kind === "lsp" || lease?.kind === "mcp"
 +  if (service && process.platform === "win32") {
 +    lease?.release()
@@ -1753,7 +1764,7 @@ index 173210f..1e49e2b 100644
      if (closed) return
      if (proc.exitCode !== null || proc.signalCode !== null) return
      closed = true
-@@ -87,16 +120,19 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+@@ -87,16 +120,23 @@
      const done = () => {
        opts.abort?.removeEventListener("abort", abort)
        if (timer) clearTimeout(timer)
@@ -1763,7 +1774,11 @@ index 173210f..1e49e2b 100644
      proc.once("exit", (code, signal) => {
        done()
 -      resolve(code ?? (signal ? 1 : 0))
-+      if (owned) owned.cleanup().then(() => resolve(code ?? (signal ? 1 : 0)), reject)
++      if (owned) owned.cleanup().then(() => {
++        const error = processTree(proc)?.spawnError
++        if (error) reject(error)
++        else resolve(code ?? (signal ? 1 : 0))
++      }, reject)
 +      else resolve(code ?? (signal ? 1 : 0))
      })
  
@@ -1775,7 +1790,7 @@ index 173210f..1e49e2b 100644
      })
    })
    void exited.catch(() => undefined)
-@@ -108,6 +144,7 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
+@@ -108,6 +148,7 @@
  
    const child = proc as Child
    child.exited = exited
@@ -1783,7 +1798,7 @@ index 173210f..1e49e2b 100644
    return child
  }
  
-@@ -147,6 +184,8 @@ export async function run(cmd: string[], opts: RunOptions = {}): Promise<Result>
+@@ -147,6 +188,8 @@
  // Duplicated in `packages/sdk/js/src/process.ts` because the SDK cannot import
  // `opencode` without creating a cycle. Keep both copies in sync.
  export async function stop(proc: ChildProcess) {

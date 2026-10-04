@@ -13,6 +13,7 @@ cp "$CORE_ROOT/runtime/upstream/telegram-service-process.ts" "$tree/packages/cor
 cp "$CORE_ROOT/runtime/upstream/telegram-service-acquisition.ts" "$tree/packages/core/src/telegram-service-acquisition.ts"
 cp "$CORE_ROOT/runtime/upstream/telegram-owned-process.ts" "$tree/packages/core/src/telegram-owned-process.ts"
 cp "$CORE_ROOT/runtime/upstream/telegram-process-tree.ts" "$tree/packages/core/src/telegram-process-tree.ts"
+cp "$CORE_ROOT/runtime/upstream/telegram-browser-process.ts" "$tree/packages/core/src/telegram-browser-process.ts"
 scope_binary="$(mktemp)"
 trap 'rm -f "$scope_binary"' EXIT
 cc -std=c11 -O2 -Wall -Wextra -Werror "$CORE_ROOT/runtime/linux/process-scope.c" -o "$scope_binary"

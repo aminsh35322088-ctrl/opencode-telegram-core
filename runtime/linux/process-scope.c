@@ -172,7 +172,8 @@ int main(int argc, char **argv) {
       else if (n == 1) {
         if (command == 'K') retiring = 1;
         else if (command == 'R') { resume(); paused = 0; receipt('R'); }
-        else if (command == 'P' && !paused) {
+        else if (command == 'P') {
+          if (!paused) {
           int previous; long until = now()+1000;
           do {
             previous = nfrozen;
@@ -182,6 +183,7 @@ int main(int argc, char **argv) {
               freeze(pids[i], fd, until, 0);
             }
           } while (previous != nfrozen);
+          }
           paused = 1; receipt('P');
         } else if (command != 'P') fail("invalid command");
       }

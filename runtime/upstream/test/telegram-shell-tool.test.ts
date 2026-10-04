@@ -75,6 +75,7 @@ it.instance("actual ShellTool abort after parent pause terminates the same owned
   const control = new SessionExecutionControl()
   const parent = control.start({ sessionId: "parent", runId: "pause-parent", directory: instance.directory })
   const execution = control.start({ sessionId: "child", runId: "pause-tool", directory: instance.directory }, parent.owner)
+  const marker = `${instance.directory}/actual-shell-pid`
   const spawner = yield* ProcessSpawner.ChildProcessSpawner
   const spawned = Deferred.makeUnsafe<number>()
   const observing = ProcessSpawner.make((command) => spawner.spawn(command).pipe(
@@ -86,7 +87,7 @@ it.instance("actual ShellTool abort after parent pause terminates the same owned
     () => Effect.gen(function* () {
       const work = Effect.gen(function* () {
         const initialized = yield* (yield* ShellTool).init()
-        return yield* initialized.execute({ command: "trap '' TERM; sleep 60", timeout: 10_000 }, {
+        return yield* initialized.execute({ command: `printf '%s' "$$" > '${marker.replaceAll("'", "'\\''")}'; trap '' TERM; sleep 60`, timeout: 10_000 }, {
           sessionID: SessionID.make("ses_shell_abort_pause"), messageID: MessageID.make("msg_shell_abort_pause"),
           agent: "build", abort: execution.signal, messages: [],
           metadata: () => Effect.void, ask: () => Effect.void,
@@ -96,7 +97,17 @@ it.instance("actual ShellTool abort after parent pause terminates the same owned
         Effect.provideService(CurrentTelegramExecution, execution),
       )
       const fiber = yield* work.pipe(Effect.forkChild)
-      const pid = yield* Deferred.await(spawned)
+      yield* Deferred.await(spawned)
+      const pid = yield* Effect.promise(async () => {
+        const { readFile } = await import("node:fs/promises")
+        const end = Date.now() + 1000
+        for (;;) {
+          try { return Number(await readFile(marker, "utf8")) } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT" || Date.now() >= end) throw error
+            await Bun.sleep(5)
+          }
+        }
+      })
       control.pause(parent.owner)
       yield* Effect.promise(async () => {
         const { readFile } = await import("node:fs/promises")

@@ -253,3 +253,22 @@ This classifies a transport-dependent fixture anomaly, not a token retry fix.
 The earlier HTTP500 body was not captured; do not rewrite it as directly proven
 identical. The next compiled checkpoint must validate repeated authorization and
 failure fencing with retained logs. Evidence: `validation/containment/continuation-scope-local.json`.
+
+### Persistent browser and required helper implementation checkpoint
+
+The continuation now adds a captured workspace/session browser capability. It uses
+the deployment's existing @playwright/cli0.1.18 / playwright-core1.63.0-alpha-2026-08-05
+foreground daemon, fresh private daemon identity/config/cache, exclusive topic
+ownership, serialized calls and physical idle parking. New execution generations
+can delegate to the same browser; an old invocation cannot acquire it. Workspace
+retirement joins the daemon/Chromium/crashpad tree. No session discovery file grants
+authority and no shared browser is stopped for a foreign topic. Required budgeted
+Linux helpers now use the same transient tree retirement as shells/custom tools.
+
+Focused source tests:40 pass,1 unsupported-platform skip,0 fail. They include actual
+setsid/double-fork helper retirement, missing-executable error transport, physical
+shell pause/cancellation and browser authority rejection. A local actual-browser
+source experiment confirms repeated calls/new-generation handoff. The compiled
+browser diagnostic and exact-head Railway verification are pending; this checkpoint
+does not claim their results or close the Bot adoption/container crash prerequisite.
+The validation image now includes the Bot's exact pinned browser dependencies.

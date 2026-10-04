@@ -591,6 +591,8 @@ it.instance("manual shell pause resumes the same process and cancellation joins 
   if (process.platform !== "linux") return
   const { ChildProcess, ChildProcessSpawner } = yield* Effect.promise(() => import("effect/unstable/process"))
   const { readFile } = yield* Effect.promise(() => import("node:fs/promises"))
+  const instance = yield* TestInstance
+  const marker = `${instance.directory}/manual-shell-pid`
   const sessions = yield* Session.Service
   const state = yield* SessionRunState.Service
   const session = yield* sessions.create()
@@ -602,10 +604,19 @@ it.instance("manual shell pause resumes the same process and cancellation joins 
     Effect.sync(() => { process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1" }),
     () => Effect.gen(function* () {
       const fiber = yield* state.startShell(session.id, Effect.die(new Error("cancelled shell")), Effect.gen(function* () {
-        const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", ["-c", "trap '' TERM; sleep 60"], {
+        const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", ["-c", `printf '%s' "$$" > '${marker.replaceAll("'", "'\\''")}'; trap '' TERM; sleep 60`], {
           stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true,
         }))
-        yield* Deferred.succeed(ready, Number(handle.pid))
+        const pid = yield* Effect.promise(async () => {
+          const end = Date.now() + 1000
+          for (;;) {
+            try { return Number(await readFile(marker, "utf8")) } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT" || Date.now() >= end) throw error
+              await Bun.sleep(5)
+            }
+          }
+        })
+        yield* Deferred.succeed(ready, pid)
         yield* latch.open
         return yield* Effect.never
       }).pipe(Effect.scoped, Effect.orDie), latch, "manual-pause-run").pipe(Effect.forkChild)
