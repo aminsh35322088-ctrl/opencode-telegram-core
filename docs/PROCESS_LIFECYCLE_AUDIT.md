@@ -376,3 +376,29 @@ coverage checks the failure report, both attempted disposers and continued owner
 liveness. Final exact-source cumulative/CI/Railway verification remains pending.
 This truthful failure boundary is not hard-crash containment or cross-process
 replacement fencing; both remain release blockers.
+
+### Reproducible scoped build dependency candidate
+
+At `e56feba`, GitHub validate and the full compiled headless gate pass; the
+upstream-runtime job fails before tests because the unused Console/Web SolidJS
+preview URL `pkg.pr.new/@solidjs/start@dfb2020` returns404. This is a build gate
+failure, not a tested lifecycle regression. The continuing candidate installs only
+runtime and SDK workspace closures from the existing patched frozen lock, using
+hoisted resolution for ambient SDK/type/build-tool imports required by the pinned
+source. No dependency version or upstream identity is changed. The compatibility
+builder also uses its existing `--skip-install` flag, preventing three downstream
+unfiltered/non-frozen installs from bypassing the initial contract.
+
+A clean real-Bun fixture reproduces original installation failure on an expired
+unused preview. Scoped installation passes with fresh cache, unchanged lock bytes,
+no unused fetch and working transitive runtime/ambient SDK/own SDK dependencies.
+The actual serialized common gate passes typecheck, SDK generation/formatting and
+surface checks, helper10, cumulative371/two expected skips/zero failures, and all
+five shell race repeats. Full binary/linker/CI/Railway verification remains required.
+
+An earlier local production gate ran while a large diagnostic typecheck overlapped:
+MCP roots timed out, shell/LSP fixtures timed out and unretired mocks caused later
+LSP failures. The four initial categories pass under isolated idle execution and
+exact-source headless CI is green. The new common gate is serialized and green;
+actual production cumulative verification must still be repeated without that
+resource overlap. This records failed evidence rather than treating reruns as proof.

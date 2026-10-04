@@ -12,7 +12,7 @@ expected="$(json_get commit)"
 "$CORE_ROOT/scripts/materialize-upstream.sh" "$tree"
 "$CORE_ROOT/scripts/apply-patches.sh" "$tree"
 bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree"
-"$BUN" install --cwd "$tree" --frozen-lockfile
+install_upstream_dependencies "$tree" "$BUN"
 actual="$(git -C "$tree" rev-parse HEAD)"
 [[ "$actual" == "$expected" ]] || die "SDK source mismatch: expected $expected, got $actual"
 
