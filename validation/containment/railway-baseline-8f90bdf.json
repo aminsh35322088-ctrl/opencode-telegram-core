@@ -1,0 +1,50 @@
+{
+  "build": {
+    "embeddedWebUi": false,
+    "runtimeBytes": 114669696,
+    "runtimeMaxBytes": 120000000,
+    "runtimeProfile": "telegram-headless",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreCommit": "8f90bdff019335e2e2500b33fa07598b786bffc3",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "upstreamVersion": "1.18.33"
+  },
+  "sha256": "15556672ad7579b13abf25b186cf5711aae147d4e8003cc0c069521a58355104",
+  "runtimePID": 274,
+  "runtimeBytes": 114669696,
+  "completedWorkloads": 1066,
+  "failures": [],
+  "alive": true,
+  "healthy": true,
+  "idleBaseline": {
+    "rssKiB": 252792,
+    "cgroup": {
+      "memoryCurrentBytes": 223711232,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 6569984,
+      "workingSetBytes": 217141248,
+      "cpuUsageUsec": 47170421,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    }
+  },
+  "latestCgroup": {
+    "memoryCurrentBytes": 691339264,
+    "memoryMaxBytes": 999997440,
+    "inactiveFileBytes": 21110784,
+    "workingSetBytes": 670228480,
+    "cpuUsageUsec": 1040510895,
+    "processScopeCapabilities": {
+      "directoryWritable": false,
+      "procsWritable": false,
+      "freezePresent": true,
+      "killPresent": true
+    }
+  },
+  "deployment": "b7a0f971-c1c9-4ace-9b83-a64bfefdbebb"
+}
