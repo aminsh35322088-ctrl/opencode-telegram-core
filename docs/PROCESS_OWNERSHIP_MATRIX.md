@@ -206,3 +206,21 @@ API-key/static and supported HTTP credential transports remain. These two option
 CLI paths are excluded classes, not proven governed processes. Required helper and
 custom process ownership, persistent services and hard-crash containment remain
 independent release gates. See [provider scope](PROVIDER_AUTH_OWNERSHIP.md).
+
+
+### Railway containment boundary continuation (2026-10-04)
+
+[The compiled/Railway investigation](RAILWAY_CONTAINMENT_BOUNDARY.md) separates
+normal escaped-tree retirement from runtime/container failure. Actual Railway
+primary-Bun SIGKILL and platform restart demonstrate namespace teardown, while
+child-Bun replacement beneath a live parent and normal successful custom-tool
+double-fork retirement still strand processes. Runtime cgroup delegation is denied.
+Hard-crash containment belongs to a proven essential-child container contract; the
+frozen Bot currently respawns Bun inside its surviving Node container, so adoption
+is a separate deployment/integration prerequisite. No Core supervisor was shipped,
+no Bot change was made, and no current process RC blocker is declared closed.
+Persistent browser lifetime still requires a durable workspace service authority
+and actual pinned-browser validation; a launcher lease is insufficient. The report
+records remaining epoch/overlap fencing and the classified/unfinished test evidence.
+This supersedes earlier pending/blanket in-Core crash-gate statements, not previously
+verified credential/plugin/shutdown/MCP/shell invariants or removed-surface scope.

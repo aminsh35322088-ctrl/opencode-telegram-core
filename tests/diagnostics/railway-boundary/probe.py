@@ -1,7 +1,7 @@
 """Unshipped boundary experiment. Only run in the disposable validation container.
 
 HTTP crash actions require the experiment token and never select an arbitrary PID.
-The heartbeat double-fork is bounded to 120s. No production supervision is added.
+The heartbeat double-fork is bounded to 300s. No production supervision is added.
 """
 import ctypes
 import hashlib
@@ -67,7 +67,7 @@ def clean(captured):
 
 def environment():
     observed = {'self': identity(os.getpid()), 'init': identity(1),
-        'initCmdline': Path('/proc/1/cmdline').read_bytes().replace(b'\0', b' ').decode(),
+        'initCmdline': b' '.join(Path('/proc/1/cmdline').read_bytes().split(b'\0')[:3]).decode(),
         'status': [line for line in Path('/proc/self/status').read_text().splitlines()
                    if line.startswith(('Cap', 'Seccomp', 'NoNewPrivs', 'NSpid'))],
         'cgroup': Path('/proc/self/cgroup').read_text(),
@@ -199,7 +199,7 @@ def cases():
             # Independent, bounded, double-fork heartbeat survives launcher and Bun.
             child = ('import json,os,time,urllib.request; os.setsid(); p=os.fork(); '
                 '\nif p: os._exit(0)\n'
-                f'url={WITNESS!r}; token={TOKEN!r}; boot={BOOT!r}; end=time.monotonic()+120\n'
+                f'url={WITNESS!r}; token={TOKEN!r}; boot={BOOT!r}; end=time.monotonic()+300\n'
                 'while time.monotonic()<end:\n'
                 ' try:\n'
                 '  data=json.dumps({"kind":"heartbeat","boot":boot,"pid":os.getpid(),"namespace":os.readlink("/proc/self/ns/pid")}).encode()\n'
@@ -219,13 +219,14 @@ def cases():
 class HTTP(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
     def do_GET(self):
-        raw = json.dumps(EVIDENCE).encode()
+        payload = EVIDENCE if self.headers.get('authorization') == TOKEN else {'ready': EVIDENCE.get('ready', False)}
+        raw = json.dumps(payload).encode()
         self.send_response(200 if EVIDENCE.get('ready') else 503)
         self.end_headers(); self.wfile.write(raw)
     def do_POST(self):
         if self.headers.get('authorization') != TOKEN:
             self.send_error(403); return
-        if self.path not in ('/kill-init', '/exit-wrapper', '/kill-bun') or not EVIDENCE.get('ready'):
+        if self.path not in ('/kill-init', '/exit-wrapper', '/kill-bun', '/primary-bun') or not EVIDENCE.get('ready'):
             self.send_error(409); return
         # Refuse destructive container actions outside the known validation image.
         if self.path != '/kill-bun' and 'tini' not in EVIDENCE['environment']['initCmdline']:
@@ -234,6 +235,31 @@ class HTTP(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b'{}'); self.wfile.flush()
         if self.path == '/kill-init': os.kill(1, signal.SIGKILL)
         elif self.path == '/exit-wrapper': os._exit(73)
+        elif self.path == '/primary-bun':
+            # Replace the validation wrapper with actual compiled Bun as tini's
+            # direct child. A bounded fixture helper confirms its HTTP readiness,
+            # reports its identity externally, then kills that exact primary PID.
+            # There is no production monitor or cleanup implementation here.
+            from session_contract import free_port, isolated_environment
+            port = free_port(); target = identity(os.getpid())
+            helper = ('import json,os,signal,time,urllib.request,pathlib; '
+                f'target={target!r}; token={TOKEN!r}; witness={WITNESS!r}; boot={BOOT!r}; '
+                f'url="http://127.0.0.1:{port}/global/health"; end=time.monotonic()+15\n'
+                'while time.monotonic()<end:\n'
+                ' try:\n'
+                '  urllib.request.urlopen(url,timeout=.5).close(); break\n'
+                ' except Exception: time.sleep(.05)\n'
+                'else: raise RuntimeError("primary Bun did not become ready")\n'
+                'fields=pathlib.Path("/proc/"+str(target["pid"])+"/stat").read_text().rsplit(")",1)[1].split()\n'
+                'assert fields[19]==target["started"] and int(fields[1])==1\n'
+                'event={"kind":"primaryBunKill","boot":boot,"identity":target,"ppid":int(fields[1])}\n'
+                'urllib.request.urlopen(urllib.request.Request(witness,data=json.dumps(event).encode(),headers={"content-type":"application/json","authorization":token}),timeout=3).close()\n'
+                'os.kill(target["pid"],signal.SIGKILL)\n')
+            assert WITNESS, 'external observer required'
+            subprocess.Popen([sys.executable, '-c', helper], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env = isolated_environment(roots[-1] / 'primary')
+            os.execve(BINARY, [BINARY, 'serve', '--hostname', '127.0.0.1', '--port', str(port)], env)
         else:
             LIVE.process.kill(); LIVE.process.wait(timeout=5)
             EVIDENCE['afterKillBun'] = identity(CAPTURED['pid'])

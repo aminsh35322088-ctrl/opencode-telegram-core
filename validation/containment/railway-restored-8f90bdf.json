@@ -1,0 +1,34 @@
+{
+  "build": {
+    "embeddedWebUi": false,
+    "runtimeBytes": 114669696,
+    "runtimeMaxBytes": 120000000,
+    "runtimeProfile": "telegram-headless",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreCommit": "8f90bdff019335e2e2500b33fa07598b786bffc3",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "upstreamVersion": "1.18.33"
+  },
+  "sha256": "15556672ad7579b13abf25b186cf5711aae147d4e8003cc0c069521a58355104",
+  "healthy": true,
+  "failures": [],
+  "completedWorkloads": 16,
+  "idleBaseline": {
+    "rssKiB": 274036,
+    "cgroup": {
+      "memoryCurrentBytes": 247341056,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 6148096,
+      "workingSetBytes": 241192960,
+      "cpuUsageUsec": 47561894,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    }
+  },
+  "deployment": "a3e988c5-5701-4f43-ad9d-c62ea0748bbf"
+}

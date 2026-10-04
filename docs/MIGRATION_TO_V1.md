@@ -195,3 +195,21 @@ block Telegram RC. A shared credential-store concurrency defect is confirmed on
 a retained path and its existing-lock fix is under verification. Model-time helper
 and plugin acquisition remain audit gates. No callback lifecycle feature, RC/stable
 publication or Bot change is included.
+
+
+### Railway containment boundary continuation (2026-10-04)
+
+[The compiled/Railway investigation](RAILWAY_CONTAINMENT_BOUNDARY.md) separates
+normal escaped-tree retirement from runtime/container failure. Actual Railway
+primary-Bun SIGKILL and platform restart demonstrate namespace teardown, while
+child-Bun replacement beneath a live parent and normal successful custom-tool
+double-fork retirement still strand processes. Runtime cgroup delegation is denied.
+Hard-crash containment belongs to a proven essential-child container contract; the
+frozen Bot currently respawns Bun inside its surviving Node container, so adoption
+is a separate deployment/integration prerequisite. No Core supervisor was shipped,
+no Bot change was made, and no current process RC blocker is declared closed.
+Persistent browser lifetime still requires a durable workspace service authority
+and actual pinned-browser validation; a launcher lease is insufficient. The report
+records remaining epoch/overlap fencing and the classified/unfinished test evidence.
+This supersedes earlier pending/blanket in-Core crash-gate statements, not previously
+verified credential/plugin/shutdown/MCP/shell invariants or removed-surface scope.
