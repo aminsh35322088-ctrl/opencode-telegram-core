@@ -334,3 +334,22 @@ process admission while paused and cancels cleanly. An in-flight explicit resume
 also checks pause intent again and re-parks before continuing if pause won the
 race. This changes the new browser path, not the previously verified shell/service
 pause architecture. Source tests4/4 and production typechecking pass.
+
+
+### Release artifact libc boundary
+
+The Cloud/release-like build's native scope runner requires GLIBC_2.38, whereas
+the supported Bookworm image supplies2.36. The actual newer-host runner fails
+inside `python:3.11-slim-bookworm` with that missing version. A static build of
+the same C source passes all five real Linux process probes in that container
+and has no ELF interpreter. The embedded runner is now statically linked. Its
+945,496-byte local artifact still requires the final compiled size/graph gates;
+no dependency or supervisor is added to the running Bot image.
+
+Latest recovered sourceb5cd4b1 is preserved remotely. CI37227720715 passes all
+three jobs. The latest local compiled browser probe passes the same native
+44-identity lifecycle/isolation cases, including private profile retirement.
+Railway67500f0 andb5cd4b1 both pass6 surface/15 execution cases, then reject a
+concurrent browser client at the existing memory-pressure fence. This is preserved
+as a capacity failure, never rerun into a successful claim. A smaller diagnostic
+log is being used to capture physical cgroup counters before teardown.

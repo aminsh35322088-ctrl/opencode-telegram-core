@@ -71,6 +71,18 @@ def same_alive(captured):
     current = processes()
     return [p for p in captured if current.get(p['pid'], {}).get('start') == p['start']]
 
+def memory_observation():
+    # Preserve the capacity failure's physical accounting before fixture teardown.
+    group = Path('/sys/fs/cgroup')
+    try:
+        stat = dict(line.split() for line in (group / 'memory.stat').read_text().splitlines())
+        current = int((group / 'memory.current').read_text())
+        inactive = int(stat.get('inactive_file', '0'))
+        return {'current': current, 'maximum': (group / 'memory.max').read_text().strip(),
+            'inactiveFile': inactive, 'workingSet': current - inactive if 0 <= inactive < current else current,
+            'anon': int(stat.get('anon', '0')), 'file': int(stat.get('file', '0'))}
+    except (OSError, ValueError): return {'unavailable': True}
+
 def run(binary):
     provider = ThreadingHTTPServer(('127.0.0.1', 0), CurrentTurnModel); provider.tool = 'core_probe'
     page = ThreadingHTTPServer(('127.0.0.1', 0), BarrierPage)
@@ -112,6 +124,9 @@ def run(binary):
                     if expected_error:
                         assert state['status']=='error' and expected_error in state['error'],json.dumps(state)
                         return state['error']
+                    if state['status'] != 'completed':
+                        print(json.dumps({'browserFailure': state, 'memory': memory_observation(),
+                            'trees': {pid: len(children) for pid, children in browser_tree().items()}}), flush=True)
                     assert state['status'] == 'completed', json.dumps(state)
                     return state['output']
             assert 'topic-a' in prompt(a, {'action':'open','args':['data:text/html,<title>topic-a</title><h1>A</h1>']})
@@ -169,7 +184,7 @@ def run(binary):
             print(json.dumps({'build':json.loads(os.popen(binary+' debug build-info').read()),
                 'persistentGenerationHandoff':True,'idleParked':True,'exclusiveTopicPause':True,
                 'activeResumeSameDaemon':True,'pausedAbortConfirmedEmpty':True,'workspaceRetirementConfirmedEmpty':True,
-                'privateProfilesRetired':True,'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'capturedProcesses':len(captured)},indent=2),flush=True)
+                'privateProfilesRetired':True,'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'capturedProcesses':len(captured),'memory':memory_observation()},indent=2),flush=True)
     finally:
         release.set()
         for server in (provider,page,registry): server.shutdown(); server.server_close()

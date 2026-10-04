@@ -16,7 +16,9 @@ cp "$CORE_ROOT/runtime/upstream/telegram-process-tree.ts" "$tree/packages/core/s
 cp "$CORE_ROOT/runtime/upstream/telegram-browser-process.ts" "$tree/packages/core/src/telegram-browser-process.ts"
 scope_binary="$(mktemp)"
 trap 'rm -f "$scope_binary"' EXIT
-cc -std=c11 -O2 -Wall -Wextra -Werror "$CORE_ROOT/runtime/linux/process-scope.c" -o "$scope_binary"
+# The release builder can have newer glibc than the supported Bookworm image.
+# Embed a self-contained runner without a host libc dependency.
+cc -static -std=c11 -O2 -Wall -Wextra -Werror "$CORE_ROOT/runtime/linux/process-scope.c" -o "$scope_binary"
 python3 - "$scope_binary" "$tree/packages/core/src/telegram-process-scope-binary.ts" <<'PY'
 import base64, pathlib, sys
 encoded = base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode('ascii')
