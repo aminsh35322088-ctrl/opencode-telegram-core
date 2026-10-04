@@ -7,9 +7,14 @@ correctness boundary, not upstream feature parity or a new Core supervisor.
 
 ## Exact source evidence
 
-The running Bot deployment is `4c21d27a-6a1f-4d8e-8864-8f70686bec29`, source
-`b66e96fa521793e0d020f27852b2bb1a9c30b3d4`. The read-only source checkout at
-`471f644aefe44950f07c2e11effced4ffca7d525` has the same relevant behavior.
+The unchanged running Bot deployment is `4c21d27a-6a1f-4d8e-8864-8f70686bec29`.
+Its deployment metadata records `a0a0f4d0910659b9732da8650b2b3cab156f5eb6`; the
+current service configuration is pinned to `b66e96fa521793e0d020f27852b2bb1a9c30b3d4`.
+A configured pin is not proof of the running artifact source. Both revisions and
+the read-only checkout `471f644aefe44950f07c2e11effced4ffca7d525` were inspected:
+the relevant auto-restart, process launcher, browser tool and Dockerfile are identical
+between the two Railway-recorded revisions. The integration conclusion therefore
+does not depend on choosing one ambiguous source record.
 `src/opencode/auto-restart.ts` handles a managed child exit by starting another
 Core beneath surviving Node. `src/opencode/process.ts` detaches that child.
 `.opencode/tools/browser.ts` runs a short-lived raw Playwright CLI that creates

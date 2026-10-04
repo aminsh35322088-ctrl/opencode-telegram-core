@@ -496,3 +496,17 @@ service, not a launcher. The frozen Bot still respawns its managed Bun and launc
 raw Playwright/custom tools: [the narrow adoption prerequisite](BOT_CONTAINMENT_PREREQUISITE.md)
 is the remaining production integration gate. No Bot source/pin/deployment or
 release is changed by these experiments.
+
+
+### Restored cumulative candidate checkpoint
+
+[Exact sourceb6e5bb2 compiled evidence](../validation/containment/railway-compiled-b6e5bb2.json)
+is healthy in deployment3e7f1c61 after surface6/execution15 and the persistent
+browser gate. Binary SHA256 is54cf0111e7a03c62a38359c27b5db61b9159ccc29c7e41f5d22cc03ae12891e6,
+size115,886,208 bytes. The validation start override is cleared, temporary boundary
+variables are blanked, and the disposable witness service/50MB volume are removed.
+The production Bot deployment/500MB volume and source checkout are unchanged.
+Its current configured source pin and running deployment metadata differ; both
+recorded revisions have identical relevant process/browser/container files. See
+the prerequisite for those exact identities rather than treating a pin as running
+artifact proof. No process implementation change is needed for this clarification.

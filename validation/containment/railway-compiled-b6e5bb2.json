@@ -1,0 +1,143 @@
+{
+  "browser": {
+    "build": {
+      "upstreamVersion": "1.18.33",
+      "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+      "telegramCoreCommit": "b6e5bb2750d58735fa673cdf17ceb2b006385681",
+      "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "runtimeProfile": "telegram-headless",
+      "embeddedWebUi": false
+    },
+    "persistentGenerationHandoff": true,
+    "idleParked": true,
+    "exclusiveTopicPause": true,
+    "activeResumeSameDaemon": true,
+    "pausedAbortConfirmedEmpty": true,
+    "workspaceRetirementConfirmedEmpty": true,
+    "privateProfilesRetired": true,
+    "replacementDoesNotAdoptOldBrowser": true,
+    "browserTrees": 1,
+    "requestedResidentBrowserTrees": 1,
+    "foreignTopicWorkWhilePaused": true,
+    "capturedProcesses": 44,
+    "memory": {
+      "current": 489521152,
+      "maximum": "999997440",
+      "inactiveFile": 22437888,
+      "workingSet": 467083264,
+      "anon": 442064896,
+      "file": 35975168
+    },
+    "resourceObservations": {
+      "parked": {
+        "current": 654757888,
+        "maximum": "999997440",
+        "inactiveFile": 21450752,
+        "workingSet": 633307136,
+        "anon": 591818752,
+        "file": 41058304
+      },
+      "pausedBeforeForeignWork": {
+        "current": 664117248,
+        "maximum": "999997440",
+        "inactiveFile": 21762048,
+        "workingSet": 642355200,
+        "anon": 597549056,
+        "file": 41943040
+      }
+    }
+  },
+  "build": {
+    "embeddedWebUi": false,
+    "runtimeBytes": 115886208,
+    "runtimeMaxBytes": 120000000,
+    "runtimeProfile": "telegram-headless",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreCommit": "b6e5bb2750d58735fa673cdf17ceb2b006385681",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "upstreamVersion": "1.18.33"
+  },
+  "sha256": "54cf0111e7a03c62a38359c27b5db61b9159ccc29c7e41f5d22cc03ae12891e6",
+  "runtimeBytes": 115886208,
+  "runtimePID": 688,
+  "completedWorkloads": 3,
+  "failures": [],
+  "rssKiB": [
+    506840,
+    702756,
+    734836
+  ],
+  "descendantCounts": [
+    0,
+    0,
+    0
+  ],
+  "threadCounts": [
+    9,
+    9,
+    9
+  ],
+  "started": 1791146191.9245203,
+  "idleBaseline": {
+    "rssKiB": 278244,
+    "cgroup": {
+      "memoryCurrentBytes": 273334272,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 17477632,
+      "workingSetBytes": 255856640,
+      "cpuUsageUsec": 61800888,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    }
+  },
+  "cgroupSamples": [
+    {
+      "memoryCurrentBytes": 509505536,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 24424448,
+      "workingSetBytes": 485081088,
+      "cpuUsageUsec": 64479449,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    },
+    {
+      "memoryCurrentBytes": 891084800,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 187584512,
+      "workingSetBytes": 703500288,
+      "cpuUsageUsec": 70168360,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    },
+    {
+      "memoryCurrentBytes": 909193216,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 174927872,
+      "workingSetBytes": 734265344,
+      "cpuUsageUsec": 71302722,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    }
+  ],
+  "alive": true,
+  "healthy": true,
+  "deployment": "3e7f1c61-535f-498e-8a3e-93fad92d5259"
+}
