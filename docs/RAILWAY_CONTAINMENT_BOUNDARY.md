@@ -438,3 +438,61 @@ Serving immutable bytes for each fixture URL fixes the cause: the same fixed-clo
 locked-install test passes, including unchanged lock bytes and unavailable retired
 package rejection. All25 toolchain/release tests pass. No dependency-integrity check,
 lock, installation policy or product dependency is weakened. Successor CI is pending.
+
+
+### Unprivileged init, mounted volume and durable recovery
+
+CI37231081562 is green in all three jobs at bebfb152. Its immutable archive fixture
+fix preserves lock/integrity policy. [Dumb-init runner-loss evidence](../validation/containment/railway-dumbinit-runner-loss-cbe49f5.json)
+uses sourcecbe49f5/binarye13128b6 under UID/GID1000, empty effective capabilities,
+real PID1dumb-init and su node. Normal SIGTERM empties a physically paused shell;
+compiled successful double-fork completion/global.dispose empties its escaped
+child. Killing the captured runner causes Core75 and2,196ms independent heartbeat
+silence. [Bun SIGKILL with the mounted volume](../validation/containment/railway-dumbinit-bun-loss-cbe49f5.json)
+causes exit-9 and2,300ms independent silence with11 parked browser processes.
+
+[The persistent-volume experiment](../validation/containment/railway-volume-fencing-cbe49f5.json)
+uses a disposable50MB Railway volume, one replica and the same unprivileged init
+layout. A bounded double-fork writer physically appends/fsyncs to the mounted
+journal and sends an external heartbeat; it is outside every Core scope and is
+never explicitly killed by the fixture. A fresh writer was observed86ms before
+the replacement preparation. Deploymentd0ea4c73 is replaced by8c96b201 while that
+writer is live. The new boot records its start before Core opens persisted state.
+The journal confirms old writes exist before index376 and zero old writes after
+that new marker. Bun SIGKILL at8c96b201 followed by replacementf8ed4abb gives the
+same result at index507. The receiver stays alive. This proves the tested
+single-container-volume transition, not HA/multi-replica storage semantics.
+
+The second replacement opens the prior real compiled session database from that
+volume. Persisted pause intent reports the old run as paused/continuation-unavailable;
+stale resume returns409, and an explicit owner-matched abort clears the intent.
+[The local compiled recovery diagnostic](../validation/containment/compiled-persistent-recovery-cbe49f5.json)
+also rejects stale pause/foreign abort, proves no implicit model replay, admits a
+fresh owner only after abort, and rejects old abort against the fresh live run.
+Existing durable pause and captured epoch fences suffice; no new authority journal
+is introduced into production. Browser endpoints remain captured live receipts;
+filesystem discovery is never restart authority.
+
+Two unprivileged fixture errors are retained and classified: reading root init's
+namespace link was denied, so the diagnostic records that link as unavailable and
+uses its own namespace for setns testing. A generated volume-writer string had an
+unescaped newline, producing no writes; those first two journal start records are
+invalid containment evidence. The corrected fixture compiles its child command
+and requires a causal write before readiness. Neither failed experiment is called
+a production regression. Local recovery initially expected a completed execution
+to stay live; the real contract releases it, so stale-owner protection is now
+checked against a physically running fresh invocation. Public health reads during
+replacement timed out; deployment readiness and exact authenticated evidence were
+checked after routing switched, without rerunning a failed workload.
+
+The selected architecture is a combination: Core owns admission, captured
+execution/workspace epochs, persistent service identity and joined retirement;
+a small mechanical scope runner handles live descendant topology; Railway's PID
+namespace/init boundary handles loss of Core or cleanup authority. Read-only
+cgroups and denied unshare/setns rule out delegated/nested containment here. A
+larger supervisor adds failure authority without solving essential-parent loss.
+Persistent Playwright uses the same scopes/container boundary with a workspace
+service, not a launcher. The frozen Bot still respawns its managed Bun and launches
+raw Playwright/custom tools: [the narrow adoption prerequisite](BOT_CONTAINMENT_PREREQUISITE.md)
+is the remaining production integration gate. No Bot source/pin/deployment or
+release is changed by these experiments.

@@ -37,3 +37,13 @@ process capability with pinned CLI on PATH and PLAYWRIGHT_BROWSERS_PATH set. It 
 HTTP barriers for active pause/resume/abort, concurrent foreign-topic calls, physical
 idle parking, execution-generation reuse and workspace replacement. It does not
 substitute a mocked launcher or infer browser ownership from CLI exit alone.
+
+
+`persistent_recovery.py --binary <compiled-runtime> --data <disposable-directory>`
+checks persisted pause after SIGKILL, unavailable continuation/stale controls,
+explicit abort, no replay and fresh-owner fencing. Same-container restart here
+proves durable metadata semantics only. Actual container loss, mounted-volume
+replacement and unprivileged init evidence are under `validation/containment/`.
+Production uses the Unix-control native scope runner, not the historical FD3/4
+prototype. Adoption requires the essential-child contract documented in
+`docs/BOT_CONTAINMENT_PREREQUISITE.md`.

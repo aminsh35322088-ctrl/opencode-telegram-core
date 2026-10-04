@@ -1,0 +1,290 @@
+{
+  "before": {
+    "boot": "1ac13846-5c10-46b3-b9f0-4266995272ab",
+    "binarySha256": "e13128b66031384cd5fb2789d47ef435b2610ec0645711496a3774934a999887",
+    "build": {
+      "upstreamVersion": "1.18.33",
+      "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+      "telegramCoreCommit": "cbe49f5c6e2ca8e411b10b8a08638e951abb7a64",
+      "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "runtimeProfile": "telegram-headless",
+      "embeddedWebUi": false
+    },
+    "cases": {
+      "normalPausedShutdown": {
+        "before": {
+          "pid": 36,
+          "state": "T",
+          "ppid": 35,
+          "group": 36,
+          "session": 36,
+          "started": "1114308500",
+          "namespace": "pid:[4026603058]"
+        },
+        "after": null,
+        "exit": 0
+      },
+      "joinedDoubleFork": {
+        "causalReady": true,
+        "pid": 61,
+        "afterCompletion": null,
+        "dispose": true
+      }
+    },
+    "errors": [],
+    "environment": {
+      "uid": 1000,
+      "gid": 1000,
+      "self": {
+        "pid": 3,
+        "state": "R",
+        "ppid": 2,
+        "group": 3,
+        "session": 3,
+        "started": "1114308250",
+        "namespace": "pid:[4026603058]"
+      },
+      "init": {
+        "pid": 1,
+        "state": "S",
+        "ppid": 0,
+        "group": 1,
+        "session": 1,
+        "started": "1114308235",
+        "namespace": null
+      },
+      "initCmdline": "/usr/bin/dumb-init -- python3",
+      "status": [
+        "NSpid:\t3",
+        "CapInh:\t0000000000000000",
+        "CapPrm:\t0000000000000000",
+        "CapEff:\t0000000000000000",
+        "CapBnd:\t00000000800405fb",
+        "CapAmb:\t0000000000000000",
+        "NoNewPrivs:\t0",
+        "Seccomp:\t2",
+        "Seccomp_filters:\t3"
+      ],
+      "cgroup": "0::/\n",
+      "cgroupMounts": [
+        "91501 91118 0:27 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot"
+      ],
+      "cgroupAccess": {
+        "cgroup.procs": {
+          "exists": true,
+          "writable": false
+        },
+        "cgroup.freeze": {
+          "exists": true,
+          "writable": false
+        },
+        "cgroup.kill": {
+          "exists": true,
+          "writable": false
+        }
+      },
+      "delegationMkdir": {
+        "errno": 30,
+        "type": "OSError"
+      },
+      "namespaceOperations": {
+        "unshareUserPidMount": "-1 13",
+        "setnsOwnPid": "-1 1"
+      }
+    },
+    "browserTree": [
+      {
+        "pid": 86,
+        "state": "T",
+        "ppid": 85,
+        "group": 86,
+        "session": 86,
+        "started": "1114309044",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 153,
+        "state": "T",
+        "ppid": 97,
+        "group": 97,
+        "session": 97,
+        "started": "1114309078",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 154,
+        "state": "T",
+        "ppid": 105,
+        "group": 97,
+        "session": 97,
+        "started": "1114309080",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 97,
+        "state": "T",
+        "ppid": 86,
+        "group": 97,
+        "session": 97,
+        "started": "1114309068",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 99,
+        "state": "T",
+        "ppid": 85,
+        "group": 98,
+        "session": 98,
+        "started": "1114309070",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 101,
+        "state": "T",
+        "ppid": 85,
+        "group": 100,
+        "session": 100,
+        "started": "1114309070",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 104,
+        "state": "T",
+        "ppid": 97,
+        "group": 97,
+        "session": 97,
+        "started": "1114309071",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 105,
+        "state": "T",
+        "ppid": 97,
+        "group": 97,
+        "session": 97,
+        "started": "1114309071",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 127,
+        "state": "T",
+        "ppid": 104,
+        "group": 97,
+        "session": 97,
+        "started": "1114309074",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 189,
+        "state": "T",
+        "ppid": 105,
+        "group": 97,
+        "session": 97,
+        "started": "1114309089",
+        "namespace": "pid:[4026603058]"
+      },
+      {
+        "pid": 191,
+        "state": "T",
+        "ppid": 105,
+        "group": 97,
+        "session": 97,
+        "started": "1114309089",
+        "namespace": "pid:[4026603058]"
+      }
+    ],
+    "armed": {
+      "runtime": {
+        "pid": 62,
+        "state": "S",
+        "ppid": 3,
+        "group": 3,
+        "session": 3,
+        "started": "1114308794",
+        "namespace": "pid:[4026603058]"
+      },
+      "pausedShell": {
+        "pid": 84,
+        "state": "T",
+        "ppid": 83,
+        "group": 84,
+        "session": 84,
+        "started": "1114309019",
+        "namespace": "pid:[4026603058]"
+      },
+      "runner": {
+        "pid": 83,
+        "state": "S",
+        "ppid": 62,
+        "group": 83,
+        "session": 83,
+        "started": "1114309019",
+        "namespace": "pid:[4026603058]"
+      }
+    },
+    "ready": true
+  },
+  "action": "/kill-runner",
+  "actionStartedNs": 1791145244655682712,
+  "observerNow": 1791145246916,
+  "lastHeartbeat": 1791145244720,
+  "quietMs": 2196,
+  "essentialLoss": [
+    {
+      "receivedAt": 1791145244921,
+      "event": {
+        "kind": "essentialLoss",
+        "boot": "1ac13846-5c10-46b3-b9f0-4266995272ab",
+        "exitCode": 75
+      }
+    }
+  ],
+  "events": [
+    {
+      "receivedAt": 1791145244720,
+      "event": {
+        "kind": "heartbeat",
+        "boot": "1ac13846-5c10-46b3-b9f0-4266995272ab",
+        "pid": 210,
+        "namespace": "pid:[4026603058]"
+      }
+    },
+    {
+      "receivedAt": 1791145244845,
+      "event": {
+        "kind": "action",
+        "boot": "1ac13846-5c10-46b3-b9f0-4266995272ab",
+        "action": "/kill-runner",
+        "target": {
+          "pid": 83,
+          "state": "S",
+          "ppid": 62,
+          "group": 83,
+          "session": 83,
+          "started": "1114309019",
+          "namespace": "pid:[4026603058]"
+        },
+        "pausedShell": {
+          "pid": 84,
+          "state": "T",
+          "ppid": 83,
+          "group": 84,
+          "session": 84,
+          "started": "1114309019",
+          "namespace": "pid:[4026603058]"
+        }
+      }
+    },
+    {
+      "receivedAt": 1791145244921,
+      "event": {
+        "kind": "essentialLoss",
+        "boot": "1ac13846-5c10-46b3-b9f0-4266995272ab",
+        "exitCode": 75
+      }
+    }
+  ],
+  "deployment": "0e6bf35c-5568-4ccd-9a2e-99b4c5aff6ef",
+  "contract": "dumb-init PID1 -> su node -> essential parent; uid/gid1000; no managed Bun respawn"
+}

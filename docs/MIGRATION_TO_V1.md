@@ -213,3 +213,41 @@ and actual pinned-browser validation; a launcher lease is insufficient. The repo
 records remaining epoch/overlap fencing and the classified/unfinished test evidence.
 This supersedes earlier pending/blanket in-Core crash-gate statements, not previously
 verified credential/plugin/shutdown/MCP/shell invariants or removed-surface scope.
+
+
+### Current containment gate status (2026-10-04)
+
+This supersedes the earlier pending browser/group-only/crash statements and
+checklist percentages. Credential serialization, joined plugin retirement,
+uncertain shutdown propagation, required credential HTTP transport, MCP OAuth,
+optional AWS/Azure fail-closed policy and previous isolation/pause gates remain
+verified; they are not reopened.
+
+The cumulative Core candidate implements a bounded external native scope runner
+under the existing lease and a captured persistent foreground browser service.
+Actual compiled Linux and Railway tests prove ordinary escaped/double-fork tree
+retirement, physical pause/resume/abort, workspace replacement, same-browser reuse
+and joined Chromium/crashpad/private-file cleanup. Static runner packaging works
+in the Bot's Bookworm libc environment. Direct owned-daemon IPC avoids per-call
+Node launchers. The 1GB Railway fixture uses one resident browser plus foreign-topic
+governed work; a second browser may be correctly rejected by admission. Local
+higher-capacity two-browser isolation remains verified.
+
+Runtime/runner loss belongs to the essential-container boundary. Actual Railway
+UID1000/dumb-init tests prove Core75 on runner loss, Bun SIGKILL, independent
+namespace witness termination, mounted-volume old-writer fencing, and persisted
+pause recovery as continuation-unavailable with stale resume rejected. No larger
+Core supervisor or recursively guarded authority is needed. The supported contract
+is one container/replica with its volume, essential Core loss ending the container,
+and no replacement Bun below a surviving parent. Cgroup delegation/nested namespace
+operations are unavailable in the actual candidate.
+
+The frozen Bot does not yet adopt that contract or the browser/custom-process
+capabilities. These remain real production integration blockers, separately scoped
+in [the concrete prerequisite](BOT_CONTAINMENT_PREREQUISITE.md). Candidate evidence
+cannot certify unchanged Bot code. PR28 remains Draft; no RC/stable, Bot pin,
+deployment or migration is changed. After adoption, the shortest justified rc.1
+path is the combined required Telegram workload/failure gate and aligned exact
+source/artifact/CI/Railway verification. Stable additionally requires its soak and
+operator rollback evidence. See [the boundary report](RAILWAY_CONTAINMENT_BOUNDARY.md)
+and its retained physical experiments for exact source/digest/deployment details.

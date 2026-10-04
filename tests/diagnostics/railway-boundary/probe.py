@@ -42,8 +42,14 @@ def emit(kind, **data):
 def identity(pid):
     try:
         fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        try:
+            namespace = os.readlink(f'/proc/{pid}/ns/pid')
+        except PermissionError:
+            # Unprivileged production UID can read init's stat but cannot ptrace
+            # its namespace link. Controlled workload identities remain readable.
+            namespace = None
         return {'pid': pid, 'state': fields[0], 'ppid': int(fields[1]), 'group': int(fields[2]),
-                'session': int(fields[3]), 'started': fields[19], 'namespace': os.readlink(f'/proc/{pid}/ns/pid')}
+                'session': int(fields[3]), 'started': fields[19], 'namespace': namespace}
     except (FileNotFoundError, ProcessLookupError):
         return None
 
@@ -66,7 +72,7 @@ def clean(captured):
     wait_for(lambda: not same(identity(captured['pid']), captured))
 
 def environment():
-    observed = {'self': identity(os.getpid()), 'init': identity(1),
+    observed = {'uid': os.getuid(), 'gid': os.getgid(), 'self': identity(os.getpid()), 'init': identity(1),
         'initCmdline': b' '.join(Path('/proc/1/cmdline').read_bytes().split(b'\0')[:3]).decode(),
         'status': [line for line in Path('/proc/self/status').read_text().splitlines()
                    if line.startswith(('Cap', 'Seccomp', 'NoNewPrivs', 'NSpid'))],
@@ -87,7 +93,7 @@ def environment():
     # In forked helpers only. Never attempt to join a foreign namespace or escape.
     helpers = {
         'unshareUserPidMount': 'import ctypes; c=ctypes.CDLL(None,use_errno=True); r=c.unshare(0x10000000|0x20000000|0x20000); print(r,ctypes.get_errno())',
-        'setnsOwnPid': 'import ctypes,os; c=ctypes.CDLL(None,use_errno=True); fd=os.open("/proc/1/ns/pid",os.O_RDONLY); r=c.setns(fd,0x20000000); print(r,ctypes.get_errno())'}
+        'setnsOwnPid': 'import ctypes,os; c=ctypes.CDLL(None,use_errno=True); fd=os.open("/proc/self/ns/pid",os.O_RDONLY); r=c.setns(fd,0x20000000); print(r,ctypes.get_errno())'}
     observed['namespaceOperations'] = {key: subprocess.check_output([sys.executable, '-c', value], text=True).strip()
                                        for key, value in helpers.items()}
     return observed
