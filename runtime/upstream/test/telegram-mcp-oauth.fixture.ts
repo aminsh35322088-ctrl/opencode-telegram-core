@@ -10,6 +10,7 @@ export function oauthPeer() {
     await protocol.connect(transport)
     const challenges = new Map<string, string>()
     const exchanges: string[] = []
+    const registrations: string[] = []
     let registrationGate: Promise<void> | undefined
     let tokenGate: Promise<void> | undefined
     let onRegistration = () => {}
@@ -19,6 +20,7 @@ export function oauthPeer() {
       if (pathname.startsWith("/.well-known/oauth-protected-resource")) return Response.json({ resource: origin + "/mcp", authorization_servers: [origin] })
       if (pathname === "/.well-known/oauth-authorization-server") return Response.json({ issuer: origin, authorization_endpoint: origin + "/authorize", token_endpoint: origin + "/token", registration_endpoint: origin + "/register", response_types_supported: ["code"], grant_types_supported: ["authorization_code"], token_endpoint_auth_methods_supported: ["none"], code_challenge_methods_supported: ["S256"] })
       if (pathname === "/register") {
+        registrations.push(request.url)
         onRegistration(); await registrationGate
         return Response.json({ ...await request.json() as object, client_id: "fixture-client" }, { status: 201 })
       }
@@ -36,7 +38,7 @@ export function oauthPeer() {
       return transport.handleRequest(request)
     } })
     return {
-      url: new URL("/mcp", http.url).toString(), exchanges,
+      url: new URL("/mcp", http.url).toString(), exchanges, registrations,
       authorize(url: string, code: string) { challenges.set(code, new URL(url).searchParams.get("code_challenge")!) },
       blockRegistration(gate: Promise<void>, entered: () => void) { registrationGate = gate; onRegistration = entered },
       blockToken(gate: Promise<void>, entered: () => void) { tokenGate = gate; onToken = entered },

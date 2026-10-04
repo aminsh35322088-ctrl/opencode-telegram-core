@@ -24,7 +24,9 @@ These are required production ownership boundaries, not upstream parity work.
   per-server operation serialization also covers auth start, callback and removal.
 - Each handshake keeps its PKCE verifier and random nonce privately in memory.
   A callback requires the exact `oauthState` returned by `auth.start`; absent,
-  replaced or cross-workspace identities fail before token exchange.
+  replaced or cross-workspace identities fail before token exchange. An orphan
+  callback is rejected before service-cache acquisition, so it cannot bootstrap
+  configured remote services after retirement or restart.
 - Remote requests compose the SDK signal with the captured workspace owner's
   abort signal. Underlying connect, fetch and credential operations stay tracked
   until their actual promise settles, even if their Effect observer is interrupted.
@@ -64,6 +66,16 @@ included here. Restarted clients must start a new flow, not reuse a saved nonce.
   that boundary without releasing transport/request cleanup early. The existing
   real HTTP timeout regression and seven OAuth tests then passed together:
   28 pass, zero failures. The previous cumulative run is not a green gate.
+
+Additional regression: an orphan callback bootstrapped enabled remote services
+and performed dynamic registration before rejecting its state. This reproduced
+red, then passed after checking for an existing service cache before acquisition.
+The full MCP-focused suite now passes 74 tests, including eight OAuth ownership
+cases. Cumulative/CI evidence for earlier `1fe6a5b` is green (361 upstream plus
+five shell repeats, 299 native and 24 toolchain); final-tree checks must be repeated
+after the orphan-callback correction. Local actual compiled `1fe6a5b` passed seven
+execution tests, including two new HTTP callback/late-token tests; a third compiled
+orphan-callback regression is now mandatory.
 
 Remaining before integration: cumulative validation of the final exact tree,
 repeated Linux stress, production build/typecheck and graph exclusion, actual

@@ -127,3 +127,13 @@ it.instance("interrupted OAuth startup is retired before same-name replacement s
     expect((yield* auth.get(name))?.tokens?.accessToken).toBe("fixture-token")
   }).pipe(Effect.ensuring(Effect.sync(release)))
 }))
+
+it.instance("callback without a live flow cannot bootstrap configured remote services", () => Effect.gen(function* () {
+  const peer = yield* oauthPeer(); const mcp = yield* MCP.Service; const store = yield* InstanceStore.Service
+  const name = crypto.randomUUID()
+  const directory = yield* tmpdirScoped({ config: { mcp: { [name]: { ...remote(peer.url), enabled: true } } } })
+  const result = yield* store.provide({ directory }, mcp.finishAuth(name, "orphaned-code", "orphaned-state"))
+  expect(result.status).toBe("failed")
+  expect(peer.registrations).toEqual([])
+  expect(peer.exchanges).toEqual([])
+}))

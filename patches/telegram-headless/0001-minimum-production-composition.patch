@@ -106,9 +106,9 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
 -    })
 -
      const finishAuth = Effect.fn("MCP.finishAuth")(function* (mcpName: string, authorizationCode: string, oauthState?: string) {
-       const s = yield* InstanceState.get(state)
-       return yield* withOperation(s, mcpName, Effect.gen(function* () {
-@@ -1069,7 +1043,7 @@
+       // An orphan callback must not bootstrap a new workspace service owner.
+       if (!oauthState || !(yield* InstanceState.has(state)))
+@@ -1072,7 +1046,7 @@
        getPrompt,
        readResource,
        startAuth,
@@ -117,7 +117,7 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
        finishAuth,
        removeAuth,
        supportsOAuth,
-@@ -1084,7 +1058,7 @@
+@@ -1087,7 +1061,7 @@
  export const node = LayerNode.make({
    service: Service,
    layer: layer,
