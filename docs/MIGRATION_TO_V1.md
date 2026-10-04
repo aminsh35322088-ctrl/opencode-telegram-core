@@ -179,3 +179,18 @@ compiled Railway six surface/eight execution tests are green. The duplicate
 cancelled Railway commit context is documented separately; it is not a live
 runtime failure. Broader crash/concurrency/resource gates remain open. Bot and
 releases remain frozen.
+
+
+### 2026-10-04 integration and provider-auth checkpoint
+
+PR27 merged as `884ae87d47f96ddbe670d4abcd4088dc2ae832da`; its source candidate
+`e6bbabe` has actual compiled Railway verification. This supersedes earlier
+statements that the reproduced remote MCP OAuth defects remain open. Pre.9 is
+unchanged and does not contain PR26/27.
+
+[Provider authentication probes](PROVIDER_AUTH_OWNERSHIP.md) now reproduce late
+credential publication after workspace disposal and callback replay on current
+main. This is an unfixed release blocker, not native smoke or real-runtime closure
+evidence. Retained provider listener/device polling lifetimes need targeted tests
+and the same shared retirement invariants. No provider production fix, RC/stable
+publication or Bot change is included.

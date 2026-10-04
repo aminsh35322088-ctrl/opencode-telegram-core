@@ -127,9 +127,13 @@ Genuine remaining blockers:
    session/daemon ownership cannot be inferred from a short-lived governed launcher.
    Core's invocation capability exists, but current tools have not adopted it.
    This task preserves browser capability and performs no Bot migration.
-2. Remote MCP/OAuth pending transport/callback ownership is not yet consolidated
-   under workspace closing/retirement. Module-level pending OAuth state and remote
-   acquisition need isolation, late-publication/replacement/cleanup tests and fixes.
+2. PR27, merged as `884ae87d47f96ddbe670d4abcd4088dc2ae832da`, closes the
+   reproduced remote MCP/OAuth flow/retirement defects; see
+   [verified evidence](MCP_OAUTH_OWNERSHIP.md). Provider/plugin OAuth ownership is
+   still a blocker: real-service probes reproduce credential writes after workspace
+   retirement and repeated exchange after completion. See
+   [provider investigation](PROVIDER_AUTH_OWNERSHIP.md). The excluded OS browser
+   opener does not exclude the retained provider loopback listener/device polling.
 3. Actual hard-crash containment/reaping and restart safety for all remaining
    process classes require fault-injection evidence, beyond ordinary joined cleanup
    or an init process. Required provider credential/plugin helper subprocesses also
