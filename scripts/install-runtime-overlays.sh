@@ -14,6 +14,7 @@ cp "$CORE_ROOT/runtime/upstream/telegram-service-acquisition.ts" "$tree/packages
 cp "$CORE_ROOT/runtime/upstream/telegram-owned-process.ts" "$tree/packages/core/src/telegram-owned-process.ts"
 cp "$CORE_ROOT/runtime/upstream/telegram-process-tree.ts" "$tree/packages/core/src/telegram-process-tree.ts"
 cp "$CORE_ROOT/runtime/upstream/telegram-browser-process.ts" "$tree/packages/core/src/telegram-browser-process.ts"
+cp "$CORE_ROOT/runtime/upstream/telegram-browser-client.ts" "$tree/packages/core/src/telegram-browser-client.ts"
 scope_binary="$(mktemp)"
 trap 'rm -f "$scope_binary"' EXIT
 # The release builder can have newer glibc than the supported Bookworm image.

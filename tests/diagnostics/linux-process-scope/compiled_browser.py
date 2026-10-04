@@ -125,7 +125,7 @@ def run(binary):
                         assert state['status']=='error' and expected_error in state['error'],json.dumps(state)
                         return state['error']
                     if state['status'] != 'completed':
-                        print(json.dumps({'browserFailure': state, 'memory': memory_observation(),
+                        print('BROWSER_CAPACITY ' + json.dumps({'browserFailure': state, 'memory': memory_observation(),
                             'trees': {pid: len(children) for pid, children in browser_tree().items()}}), flush=True)
                     assert state['status'] == 'completed', json.dumps(state)
                     return state['output']

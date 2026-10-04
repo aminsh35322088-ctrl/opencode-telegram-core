@@ -353,3 +353,27 @@ Railway67500f0 andb5cd4b1 both pass6 surface/15 execution cases, then reject a
 concurrent browser client at the existing memory-pressure fence. This is preserved
 as a capacity failure, never rerun into a successful claim. A smaller diagnostic
 log is being used to capture physical cgroup counters before teardown.
+
+
+### One-gigabyte concurrent browser admission
+
+Exact compileddda0dcc has CI37228360600 green, a115,943,552-byte runtime,
+and passes6 surface/15 execution cases inside Bookworm when built on the newer
+Cloud libc. Railway's native two-browser test remains red: a paused request retains
+a large CLI-client Node process and its warm reservation, so another client is
+correctly rejected by the existing95% pressure ceiling. The focused diagnostic
+records used870MiB/reserve64MiB/predicted104.7%; after the rejected browser's joined
+cleanup, physical memory is709,242,880 bytes, with only11,493,376 inactive-file bytes.
+That later observation is not the exact admission sample. It does not justify
+blaming file cache or relaxing the pressure guard.
+
+The pinned daemon already implements a newline-delimited private Unix-socket
+`run` request. The candidate now captures its endpoint from that owned daemon's
+startup receipt and sends the same parsed command directly from Core. There is no
+per-call Node launcher, filesystem discovery/adoption, reconnect, retry or command
+replay. The unused browser-client admission category is removed. Service leases
+and physical pause/abort/retirement remain authoritative; request bytes, response
+bytes, timeout and cancellation are bounded. Real Unix-socket tests pass7 across
+transport/ownership/preparation, production typechecking passes, and the actual
+pinned native browser source experiment retains the same daemon across generations.
+Compiled and Railway validation of this simplification is pending.

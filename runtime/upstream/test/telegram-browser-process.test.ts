@@ -38,11 +38,9 @@ test("browser requests cannot select a foreign topic or unavailable workspace ow
   const scope = createToolProcessScope(execution, execution.epoch, "topic-a", directory, new AbortController().signal)
   try {
     await expect(scope.port.browser({ action: "open" })).rejects.toThrow()
-    await expect(browsers.execute(execution, execution.epoch, "topic-b", { action: "close" }, execution.signal,
-      async () => { throw new Error("unexpected process launch") })).rejects.toThrow("owner mismatch")
+    await expect(browsers.execute(execution, execution.epoch, "topic-b", { action: "close" }, execution.signal)).rejects.toThrow("owner mismatch")
     await browsers.close()
-    await expect(browsers.execute(execution, execution.epoch, "topic-a", { action: "close" }, execution.signal,
-      async () => { throw new Error("unexpected process launch") })).rejects.toThrow("workspace retired")
+    await expect(browsers.execute(execution, execution.epoch, "topic-a", { action: "close" }, execution.signal)).rejects.toThrow("workspace retired")
   } finally { await scope.close(); control.finish(execution.owner); await browsers.close(); await rm(directory, { recursive: true, force: true }) }
 })
 
@@ -54,10 +52,10 @@ test("confirmed browser startup settles its reservation without releasing its se
     memoryLimitBytes: 1_000_000_000, memoryPressure: used / 1_000_000_000 }), () => true)
   const browser = governor.acquire("browser", undefined, "browser")!
   used = 600 * MiB // actual full daemon/Chromium startup is now accounted
-  expect(() => governor.acquire("node", undefined, "browser-client")).toThrow("ceiling=95.0%")
+  expect(() => governor.acquire("node", undefined, "helper")).toThrow("ceiling=95.0%")
   browser.settleStartup!()
   expect(governor.snapshot().activeCount).toBe(1)
-  const client = governor.acquire("node", undefined, "browser-client")!
+  const client = governor.acquire("node", undefined, "helper")!
   expect(governor.snapshot().activeCount).toBe(2)
   client.release()
   expect(governor.snapshot().activeCount).toBe(1)

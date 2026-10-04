@@ -11,6 +11,7 @@ import { acquireTelegramProcessBudget } from "./telegram-process-budget"
 import { ownServiceProcess } from "./telegram-service-process"
 import { processTree, spawnProcessTree } from "./telegram-process-tree"
 import { withDeadline } from "./telegram-deadline"
+import { runBrowserCommand } from "./telegram-browser-client"
 
 const actions = new Set([
   "open", "goto", "back", "forward", "reload", "snapshot", "screenshot", "click", "fill", "type", "press",
@@ -21,11 +22,8 @@ type BrowserRequest = Parameters<ToolProcessPort["browser"]>[0]
 interface Browser {
   readonly identity: string
   readonly directory: string
-  readonly node: string
-  readonly cli: string
-  readonly env: NodeJS.ProcessEnv
   readonly process: ChildProcess
-  readonly ready: Promise<void>
+  readonly ready: Promise<string>
   readonly cleanup: () => Promise<void>
   dead: boolean
 }
@@ -60,7 +58,6 @@ export class WorkspaceBrowsers {
     sessionId: string,
     request: BrowserRequest,
     cancellation: AbortSignal,
-    execFile: ToolProcessPort["execFile"],
   ): ReturnType<ToolProcessPort["browser"]> {
     if (this.#closing) return Promise.reject(new Error("browser workspace retired"))
     if (this.#pending.size >= 16) return Promise.reject(new Error("browser request admission limit exceeded"))
@@ -84,7 +81,7 @@ export class WorkspaceBrowsers {
       assert()
       const timeout = request.timeout ?? 120_000
       if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 600_000) throw new Error("invalid browser timeout")
-      if ((request.args ?? []).some(argument => typeof argument !== "string" || argument.length > 16_384))
+      if ((request.args ?? []).length > 64 || (request.args ?? []).some(argument => typeof argument !== "string" || argument.length > 16_384))
         throw new Error("invalid browser arguments")
       let browser = this.#browsers.get(key)
       if (request.action === "close" || request.action === "open") {
@@ -103,7 +100,7 @@ export class WorkspaceBrowsers {
           resume: () => tree.signal("SIGCONT"),
           terminate: () => tree.signal("SIGKILL"),
         })
-        await withDeadline(() => owned.ready, { timeoutMs: timeout, label: "browser startup", parentSignal: signal, activity: execution })
+        const endpoint = await withDeadline(() => owned.ready, { timeoutMs: timeout, label: "browser startup", parentSignal: signal, activity: execution })
         await execution.checkpoint(signal, epoch)
         assert()
         for (;;) {
@@ -116,7 +113,7 @@ export class WorkspaceBrowsers {
         }
         assert()
         const command = request.action === "open" ? "goto" : request.action
-        const args = [`-s=${owned.identity}`]
+        const args: { _: string[]; filename?: string } = { _: [command, ...request.args ?? []] }
         if (request.filename) {
           if (command !== "screenshot" && command !== "pdf") throw new Error("filename requires screenshot or pdf")
           const root = await realpath(this.directory)
@@ -139,12 +136,14 @@ export class WorkspaceBrowsers {
           })
           if (stat?.isSymbolicLink()) throw new Error("browser output must not be a symlink")
           assert()
-          args.push(`--filename=${output}`)
+          args.filename = output
         }
-        args.push(command, "--", ...request.args ?? [])
-        const result = await execFile(owned.node, [owned.cli, ...args], {
-          cwd: this.directory, env: owned.env, timeout, maxBuffer: request.maxBuffer ?? 2 * 1024 * 1024, signal,
-        })
+        const result = await withDeadline(deadline => runBrowserCommand(endpoint, args, this.directory,
+          deadline, request.maxBuffer ?? 2 * 1024 * 1024, async () => {
+            await execution.checkpoint(deadline, epoch)
+            assert()
+          }), { timeoutMs: timeout, label: "browser request", parentSignal: signal, activity: execution })
+        await execution.checkpoint(signal, epoch)
         assert()
         if (owned.dead || this.#browsers.get(key) !== owned) throw new Error("browser authority retired during request")
         return result
@@ -213,14 +212,14 @@ export class WorkspaceBrowsers {
       throw error
     }
     const ownership = ownServiceProcess(proc, lease)
-    let ready!: () => void
+    let ready!: (endpoint: string) => void
     let reject!: (error: Error) => void
-    const started = new Promise<void>((ok, no) => { ready = ok; reject = no })
+    const started = new Promise<string>((ok, no) => { ready = ok; reject = no })
     void started.catch(() => {})
     let bytes = 0, output = ""
     let retirement: Promise<void> | undefined
     const browser: Browser = {
-      identity, directory, node, cli, env, process: proc, ready: started, dead: false,
+      identity, directory, process: proc, ready: started, dead: false,
       cleanup: () => retirement ??= (async () => {
         await ownership.cleanup()
         browser.dead = true
@@ -235,7 +234,20 @@ export class WorkspaceBrowsers {
         void browser.cleanup().catch(() => {})
         return
       }
-      if (stdout) { output += data.toString(); if (output.includes("Daemon listening on ")) { lease?.settleStartup?.(); ready() } }
+      if (stdout) {
+        output += data.toString()
+        const receipt = /Daemon listening on ([^\r\n]+)\r?\n/.exec(output)
+        if (receipt) {
+          const endpoint = receipt[1]
+          if (!path.isAbsolute(endpoint) || !inside(directory, endpoint)) {
+            reject(new Error("browser daemon endpoint escaped private authority"))
+            void browser.cleanup().catch(() => {})
+            return
+          }
+          lease?.settleStartup?.()
+          ready(endpoint)
+        }
+      }
     }
     proc.stdout?.on("data", (data: Buffer) => collect(data, true))
     proc.stderr?.on("data", (data: Buffer) => collect(data, false))
