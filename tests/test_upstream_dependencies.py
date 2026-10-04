@@ -1,5 +1,6 @@
 """Locked runtime installs must not fetch retired workspace preview packages."""
 import io
+from unittest.mock import patch
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class UpstreamDependencyTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('bun'), 'Bun is required')
     def test_locked_install_retains_transitive_runtime_and_sdk_without_unused_preview(self):
-        requests = []; expired = False
+        requests = []; expired = False; archives = {}
         class Peer(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
             def do_GET(self):
@@ -25,13 +26,19 @@ class UpstreamDependencyTests(unittest.TestCase):
                     self.send_error(404); return
                 name = {'/unused.tgz': 'fixture-unused', '/retained.tgz': 'fixture-retained',
                         '/sdk.tgz': 'fixture-sdk-dependency'}[self.path]
+                if self.path in archives:
+                    raw = archives[self.path]
+                    self.send_response(200); self.send_header('content-length', str(len(raw)))
+                    self.end_headers(); self.wfile.write(raw); return
                 blob = io.BytesIO()
-                with tarfile.open(fileobj=blob, mode='w:gz') as archive:
+                # Force the second download into another gzip-header timestamp.
+                # A locked package URL must still return exactly the same bytes.
+                with patch('gzip.time.time', return_value=1_700_000_000 + int(expired)), tarfile.open(fileobj=blob, mode='w:gz') as archive:
                     for file, content in {'package/package.json': json.dumps({'name': name, 'version': '1.0.0',
                             'type': 'module', 'exports': './index.js'}), 'package/index.js': 'export const value=42'}.items():
                         raw = content.encode(); info = tarfile.TarInfo(file); info.size = len(raw)
                         archive.addfile(info, io.BytesIO(raw))
-                raw = blob.getvalue(); self.send_response(200)
+                raw = archives.setdefault(self.path, blob.getvalue()); self.send_response(200)
                 self.send_header('content-length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
         peer = HTTPServer(('127.0.0.1', 0), Peer)
         thread = threading.Thread(target=peer.serve_forever, daemon=True); thread.start()

@@ -399,3 +399,42 @@ the higher-capacity isolation test. Both profiles pass locally on the exacta2e13
 compiled runtime. Railway verification of the bounded profile is pending; no
 pressure ceiling/reservation/production capability has been weakened. Browser
 evidence and physical resource counters will be retained in candidate health.
+
+
+### Exact compiled Railway crash fallback:cbe49f5
+
+Deployment0f1bb68a succeeds with compiled surface6/execution15 and the bounded
+persistent-browser gate. Its binary SHA256 is
+`e13128b66031384cd5fb2789d47ef435b2610ec0645711496a3774934a999887`
+and size115,886,208 bytes. Preserved [browser evidence](../validation/containment/railway-browser-cbe49f5.json)
+includes actual resource observations: paused-browser working set636,882,944 bytes
+under memory.max999,997,440, foreign-topic work succeeds, and disposal removes all
+44 captured/churn identities plus private profiles. This is a bounded gate, not
+a concurrent two-browser capacity claim or long soak.
+
+[Runner loss](../validation/containment/railway-runner-loss-cbe49f5.json) at3a9ab745
+kills the captured runner of a physically stopped shell. Core exits75 because
+confirmed-empty authority is lost; the essential wrapper exits and the independent
+live namespace heartbeat stops (2,150ms observed silence while receiver stays live).
+The namespace also contains11 parked daemon/Chromium/crashpad processes.
+[Bun SIGKILL](../validation/containment/railway-bun-crash-cbe49f5.json) at48b89c27
+produces runtime exit-9 and2,247ms independent silence under the same contract.
+The replacement uses a new PID namespace and boot identity. Normal SIGTERM retires
+the physically paused shell and exits0; successful double-fork execution retires
+the grandchild before completion/global disposal.
+
+No second guardian is added. The bounded runner can fail; its existing Core owner
+fences uncertainty, and the already-proven essential-container boundary retires
+that failure. Ordinary service/execution retirement has a scoped joined receipt;
+hard runtime/cleanup-authority loss has a whole-container receipt. The frozen Bot
+source still does not adopt that essential-child contract or browser capability.
+Dumb-init/unprivileged and persistent-volume overlap checks are the next boundary
+experiments, not claims inferred from these tini results.
+
+CI37230057880 passes upstream-runtime/headless but validate fails a fixture integrity
+check. The package fixture regenerated gzip tarballs on every request; a controlled
+header-clock advance reproduces both retained-package hash failures deterministically.
+Serving immutable bytes for each fixture URL fixes the cause: the same fixed-clock
+locked-install test passes, including unchanged lock bytes and unavailable retired
+package rejection. All25 toolchain/release tests pass. No dependency-integrity check,
+lock, installation policy or product dependency is weakened. Successor CI is pending.
