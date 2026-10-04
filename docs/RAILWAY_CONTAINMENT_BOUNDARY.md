@@ -304,3 +304,11 @@ The ordinary Core escaped-tree and persistent browser implementations now have
 compiled/source evidence. Their outer crash fallback remains a release prerequisite
 until exact-head Railway runner loss/Bun SIGKILL and the essential Bot integration
 are validated. No current frozen Bot deployment is declared contained.
+
+The next inspection found forced Chromium retirement leaves temporary profiles
+outside the daemon authority's directory. This is a real bounded-disk cleanup
+problem, despite confirmed process death. The browser now supplies private HOME,
+TMPDIR and XDG paths; joined retirement removes the profiles/crash reports with
+that private directory. Failed startup/admission also removes its unpublished
+private files. The compiled probe now asserts profile placement and file removal;
+its verification at the new implementation checkpoint is pending.

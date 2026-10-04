@@ -91,7 +91,7 @@ def run(binary):
             'provider':{'fixture':{'npm':'@ai-sdk/openai-compatible','name':'Fixture','options':{
                 'baseURL':f'http://127.0.0.1:{provider.server_port}/v1','apiKey':'fixture'},'models':{'fixture':{
                 'name':'Fixture','limit':{'context':32000,'output':2048}}}}}}))
-    captured = []
+    captured = []; private_directories = set()
     try:
         with Server(binary, readiness_path='/global/health', configure=configure) as runtime:
             class WorkspaceClient(Client):
@@ -122,6 +122,15 @@ def run(binary):
             assert 'topic-b' in prompt(b, {'action':'open','args':['data:text/html,<title>topic-b</title><h1>B</h1>']})
             both=browser_tree(); assert len(both)==2, both
             captured=[p for group in both.values() for p in group]
+            for daemon in both:
+                environment=dict(entry.split(b'=',1) for entry in Path(f'/proc/{daemon}/environ').read_bytes().split(b'\0') if b'=' in entry)
+                private=Path(environment[b'TMPDIR'].decode());private_directories.add(private)
+                assert private.name.startswith('oc-browser-')
+                for child in both[daemon]:
+                    for argument in child['cmd'].split():
+                        if argument.startswith('--user-data-dir='):
+                            assert Path(argument.split('=',1)[1]).is_relative_to(private),child
+
             prompt(a, {'action':'goto','args':[f'http://127.0.0.1:{page.server_port}/']}, True)
             assert entered.wait(15), 'active navigation did not reach barrier'
             owner=client.request('GET',f'/session/{a}/execution')
@@ -150,6 +159,7 @@ def run(binary):
             assert 'topic-b' in prompt(b, {'action':'snapshot'})
             assert client.request('POST','/global/dispose',timeout=15)
             wait(lambda: not same_alive(captured))
+            assert all(not directory.exists() for directory in private_directories), 'retirement leaked private browser files'
             prompt(b, {'action':'snapshot'}, expected_error='Browser is not open')
             assert 'replacement-workspace' in prompt(b, {'action':'open','args':['data:text/html,<title>replacement-workspace</title>']})
             replacement=browser_tree(); assert len(replacement)==1 and not set(replacement)&set(both)
@@ -159,7 +169,7 @@ def run(binary):
             print(json.dumps({'build':json.loads(os.popen(binary+' debug build-info').read()),
                 'persistentGenerationHandoff':True,'idleParked':True,'exclusiveTopicPause':True,
                 'activeResumeSameDaemon':True,'pausedAbortConfirmedEmpty':True,'workspaceRetirementConfirmedEmpty':True,
-                'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'capturedProcesses':len(captured)},indent=2),flush=True)
+                'privateProfilesRetired':True,'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'capturedProcesses':len(captured)},indent=2),flush=True)
     finally:
         release.set()
         for server in (provider,page,registry): server.shutdown(); server.server_close()

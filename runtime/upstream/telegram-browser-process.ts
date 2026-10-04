@@ -176,22 +176,35 @@ export class WorkspaceBrowsers {
     assert()
     const directory = await mkdtemp(path.join(tmpdir(), "oc-browser-"))
     const identity = "core-" + randomUUID()
-    const config = path.join(directory, "browser.json")
-    await writeFile(config, JSON.stringify({ browser: { browserName: "chromium", launchOptions: { channel: "chromium", headless: true } } }))
     const env = { ...process.env }
-    for (const name of Object.keys(env)) if (name.startsWith("PLAYWRIGHT_MCP_") || name.startsWith("PWTEST_")) delete env[name]
-    env.XDG_CACHE_HOME = directory
-    env.PWTEST_CLI_GLOBAL_CONFIG = directory
-    env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
-    env.OPENCODE_TELEGRAM_PROCESS_KIND = "browser"
-    assert()
-    const lease = acquireTelegramProcessBudget("browser", env, "browser")
-    if (!lease) throw new Error("browser admission unavailable")
+    let lease: ReturnType<typeof acquireTelegramProcessBudget> = null
     let proc: ChildProcess
     try {
+      const config = path.join(directory, "browser.json")
+      await writeFile(config, JSON.stringify({ browser: { browserName: "chromium", launchOptions: { channel: "chromium", headless: true } } }))
+      for (const name of Object.keys(env)) if (name.startsWith("PLAYWRIGHT_MCP_") || name.startsWith("PWTEST_")) delete env[name]
+      // Forced retirement cannot run Playwright's own temporary-profile cleanup.
+      // Every profile, crash report and registry must live under this authority's
+      // private directory so joined tree death can be followed by one deletion.
+      env.TMPDIR = directory
+      env.HOME = path.join(directory, "home")
+      env.XDG_CACHE_HOME = directory
+      env.XDG_CONFIG_HOME = path.join(directory, "config")
+      env.XDG_DATA_HOME = path.join(directory, "data")
+      env.XDG_STATE_HOME = path.join(directory, "state")
+      env.PWTEST_CLI_GLOBAL_CONFIG = directory
+      env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
+      env.OPENCODE_TELEGRAM_PROCESS_KIND = "browser"
+      assert()
+      lease = acquireTelegramProcessBudget("browser", env, "browser")
+      if (!lease) throw new Error("browser admission unavailable")
       proc = spawnProcessTree(node, [path.join(path.dirname(corePackage), "lib/entry/cliDaemon.js"), identity,
         "--browser", "chromium", "--config", config], { cwd: this.directory, env, stdio: ["ignore", "pipe", "pipe"] })
-    } catch (error) { lease.release(); await rm(directory, { recursive: true, force: true }); throw error }
+    } catch (error) {
+      lease?.release()
+      await rm(directory, { recursive: true, force: true })
+      throw error
+    }
     const ownership = ownServiceProcess(proc, lease)
     let ready!: () => void
     let reject!: (error: Error) => void
