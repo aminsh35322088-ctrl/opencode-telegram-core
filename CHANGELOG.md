@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct the minimal production profile to retain authenticated credential PUT/DELETE required by internal provider refresh plugins; provider sign-in and logging/control-plane APIs remain excluded.
+
 - Production rejects optional AWS `credential_process` rather than launching an SDK-owned ungoverned shell; static profiles and non-process credential links remain supported. Exact compiled validation remains pending.
 
 - Credential-store stabilization candidate: serialize shared provider credential reads and mutations with the existing file lock; retain provider/MCP mutation locks through admitted filesystem writes during cancellation. Fence excluded provider sign-in services in graph/compiled-route checks. Verification is in progress.

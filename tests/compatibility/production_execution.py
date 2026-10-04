@@ -74,6 +74,26 @@ def plugin_registry():
     return registry
 
 class ProductionExecution(unittest.TestCase):
+    def test_retained_plugin_sdk_can_persist_provider_credentials(self):
+        roots = []; registry = plugin_registry()
+        def configure(root, env):
+            roots.append(root)
+            config_dir = root / 'plugin-config'; config_dir.mkdir()
+            plugin = config_dir / 'credential-plugin.js'
+            plugin.write_text("export default async ({client}) => { const result = await client.auth.set({path:{id:'plugin-fixture'},body:{type:'api',key:'fixture'}}); if(result.error) throw Error('credential publication failed'); return {} };\n")
+            (config_dir / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+            env['NPM_CONFIG_REGISTRY'] = f'http://127.0.0.1:{registry.server_port}/'
+            env['OPENCODE_CONFIG_DIR'] = str(config_dir)
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': [plugin.as_uri()]})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); c.request('GET', '/agent', timeout=30)
+                paths = list((roots[0] / 'data').rglob('auth.json'))
+                self.assertEqual(len(paths), 1, 'retained plugin SDK could not publish credentials')
+                self.assertIn('plugin-fixture', json.loads(paths[0].read_text()))
+                self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+        finally: registry.shutdown(); registry.server_close()
+
     def test_compiled_aws_process_credentials_fail_closed_without_launch(self):
         roots = []
         def configure(root, env):

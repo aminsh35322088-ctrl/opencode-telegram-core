@@ -8,7 +8,7 @@ import { Auth } from "../../src/auth"
 
 function credentialFile(fileName = "auth.json") {
   let data: Record<string, unknown> = {}
-  let gate: Promise<void> | undefined; let entered: (() => void) | undefined
+  let writeFailure: Error | undefined
   let writeGate: Promise<void> | undefined; let writeEntered: (() => void) | undefined; let writeSettled: (() => void) | undefined
   let writeAborted = false
   const fsLayer = Layer.effect(FSUtil.Service, Effect.gen(function* () {
@@ -16,10 +16,10 @@ function credentialFile(fileName = "auth.json") {
     return FSUtil.Service.of({ ...fs,
       readJson: (file) => file.endsWith("/" + fileName) ? Effect.promise(async () => {
         const snapshot = structuredClone(data)
-        entered?.(); await gate
+        await Promise.resolve()
         return snapshot
       }) : fs.readJson(file),
-      writeJson: (file, value, mode) => file.endsWith("/" + fileName) ? Effect.promise(async signal => {
+      writeJson: (file, value, mode) => file.endsWith("/" + fileName) ? writeFailure ? Effect.fail(writeFailure) : Effect.promise(async signal => {
         writeEntered?.(); signal.addEventListener("abort", () => { writeAborted = true }, { once: true })
         await writeGate
         data = structuredClone(value) as Record<string, unknown>
@@ -28,7 +28,7 @@ function credentialFile(fileName = "auth.json") {
     })
   })).pipe(Layer.provide(AppNodeBuilder.build(FSUtil.node)))
   const layer = AppNodeBuilder.build(LayerNode.group([Auth.node, McpAuth.node]), [[FSUtil.node, fsLayer]])
-  return { layer, data: () => data, writeAborted: () => writeAborted, blockRead(value: Promise<void>, onRead: () => void) { gate = value; entered = onRead }, blockWrite(value: Promise<void>, onWrite: () => void, onSettled: () => void) { writeGate = value; writeEntered = onWrite; writeSettled = onSettled } }
+  return { layer, data: () => data, writeAborted: () => writeAborted, failWrite(error: Error) { writeFailure = error }, blockWrite(value: Promise<void>, onWrite: () => void, onSettled: () => void) { writeGate = value; writeEntered = onWrite; writeSettled = onSettled } }
 }
 test("concurrent provider credential writes preserve both accounts", async () => {
   const file = credentialFile()
@@ -92,4 +92,15 @@ test("MCP credential cancellation cannot release a lock before admitted write se
     release(); yield* Fiber.join(stopping); yield* Effect.promise(() => complete)
     expect(Object.keys(file.data())).toEqual(["first"])
   }).pipe(Effect.provide(file.layer), Effect.ensuring(Effect.sync(release))))
+})
+
+test("provider write failures remain recoverable AuthError values", async () => {
+  const file = credentialFile(); file.failWrite(new Error("fixture filesystem failure"))
+  await Effect.runPromise(Effect.gen(function* () {
+    const auth = yield* Auth.Service
+    for (const operation of [auth.set("first", {type:"api",key:"fixture"}), auth.remove("first")]) {
+      const message = yield* operation.pipe(Effect.catchTag("AuthError", error => Effect.succeed(error.message)))
+      expect(message).toBe("Failed to write auth data")
+    }
+  }).pipe(Effect.provide(file.layer)))
 })

@@ -38,8 +38,14 @@ and still require their own ownership audit.
 
 ## Confirmed production defect: shared credential mutation
 
-The retained `/auth/:providerID` control endpoints and model-time plugin refreshes
-use `Auth.Service`. Its `set/remove` previously performed an unlocked asynchronous
+Model-time plugin refreshes use `Auth.Service` through their internal SDK client.
+Compiled validation exposed a minimum-profile contradiction: the entire control
+group, including `/auth/:providerID`, had been excluded. Codex and xAI retained
+model-time refresh hooks call `input.client.auth.set`; rotated credentials could
+therefore never be persisted through that client. The production profile now
+retains only authenticated credential PUT/DELETE handlers; `/log`, provider sign-in,
+CLI/control-plane and other excluded surfaces remain excluded. A real compiled
+plugin-SDK credential publication regression covers this internal consumer. Its `set/remove` previously performed an unlocked asynchronous
 read/modify/write of the same credential JSON file. Two real-service tests with a
 controlled filesystem dependency reproduce:
 
@@ -78,8 +84,9 @@ helper. The SDK probe observed Core governor activeCount=0 while it ran. The opt
 AWS CLI credential_process mechanism has no documented Telegram consumer/target;
 it is now rejected at production bundle resolution, without echoing the command.
 A selected process profile fails terminally instead of silently changing identity.
-Static profiles and non-process credential-chain links remain supported; three
-bundled-SDK policy regressions pass. A compiled negative-acquisition regression and
+Static profiles and non-process credential-chain links remain supported; five
+bundled-SDK policy regressions pass, including actual HTTP container credential
+acquisition and terminal process-backed source_profile rejection. A compiled negative-acquisition regression and
 graph exclusion guard are added; candidate build verification is pending.
 Azure CLI model-time acquisition still needs its own production scope/ownership
 assessment. They are more relevant than excluded sign-in
@@ -93,3 +100,17 @@ parity. Keep supported providers, account credentials and inference intact.
 Raw custom/persistent browser ownership, required helper/plugin acquisition,
 hard-crash/restart containment, realistic concurrent resource measurements, final
 ownership audit, aligned RC artifacts and RC soak remain open. Bot stays frozen.
+
+## Corrected credential transport checkpoint
+
+The initial `79718a7` candidate's common/native/Python gates passed, but its compiled
+concurrent-account regression failed with twelve credential PUT 404 responses,
+locally and in GitHub CI 37177808269. This is not ignored or rerun away. The shared
+credential implementation was present but its required internal transport was
+excluded. The narrowed profile corrects that consumer contract. Local actual
+compiled execution now passes all eleven tests, including a real plugin SDK
+publication, concurrent account mutations, AWS fail-closed acquisition, MCP and
+physical pause/resume/abort/workspace retirement. The six compiled surface tests
+pass, including unauthenticated credential rejection and excluded logging/sign-in.
+The new recoverable AuthError regression passes alongside four credential race tests.
+The corrected exact-commit cumulative/CI and Railway gates remain pending.

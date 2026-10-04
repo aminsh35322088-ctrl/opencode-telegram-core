@@ -39,7 +39,9 @@ Core stable in a separately authorized phase; no Bot behavior changes occur here
 - Full v2 server, control-plane/remote workspace routing, workspace proxy/sync and
   experimental worktree/workspace management. Reject workspace routing/config.
 - File/find/provider-auth/config-mutation HTTP APIs; actual file tools, inference,
-  provider credentials and plugin hooks remain supported.
+  provider credentials and plugin hooks remain supported. Authenticated credential
+  PUT/DELETE remain required internally by model-time OAuth refresh plugins; their
+  two thin handlers are retained without provider sign-in or logging/control-plane APIs.
 - TUI/control routes, UI fallback/proxy, documentation route, embedded/frontend
   composition and interactive CLI graph. The previous runtime already embedded no
   frontend assets; this additionally removes their server composition.
@@ -53,7 +55,9 @@ Core stable in a separately authorized phase; no Bot behavior changes occur here
 - Native v2 session client/event pump production exports and emitted Node modules.
   They remain in the independent debug entrypoint. Unused native JSON-line transport, run reconciliation adapter and conformance helper also move there; the internally used worker outbound gate remains.
 
-The legacy composed endpoint count falls from 130 to 44; the separate v2 server is
+The original slim legacy composed endpoint count fell from 130 to 44; retained
+plugin credential persistence requires two authenticated PUT/DELETE endpoints,
+bringing the corrected composition to 46; the separate v2 server is
 also excluded entirely. This count excludes duplicate public schema-only aliases.
 Unsupported production routes return non-success responses. Enable flags for
 removed behavior fail explicitly; persisted Console organization selection returns
