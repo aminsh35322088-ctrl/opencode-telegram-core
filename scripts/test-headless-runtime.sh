@@ -8,6 +8,7 @@ tree="$CORE_ROOT/.work/opencode"
 [[ -f "$tree/packages/opencode/tsconfig.telegram.json" ]] || die "build the production runtime first"
 python3 "$CORE_ROOT/scripts/verify-production-graph.py" "$CORE_ROOT/dist/runtime/opencode.metafile.json"
 bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree" --tests
+OPENCODE_PACKAGE_DIR="$tree/packages/opencode" "$BUN" test "$CORE_ROOT/tests/compatibility/aws-credential-policy.test.ts" --timeout 30000
 (
   cd "$tree/packages/opencode"
   "$BUN" x tsc -p tsconfig.telegram.json --noEmit

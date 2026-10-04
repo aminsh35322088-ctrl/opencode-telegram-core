@@ -1,5 +1,5 @@
 diff --git a/packages/opencode/src/mcp/auth.ts b/packages/opencode/src/mcp/auth.ts
-index 808aa30..ba04b60 100644
+index 808aa30..944ef6a 100644
 --- a/packages/opencode/src/mcp/auth.ts
 +++ b/packages/opencode/src/mcp/auth.ts
 @@ -41,10 +41,10 @@ export interface Interface {
@@ -17,7 +17,7 @@ index 808aa30..ba04b60 100644
    readonly updateCodeVerifier: (mcpName: string, codeVerifier: string) => Effect.Effect<void>
    readonly clearCodeVerifier: (mcpName: string) => Effect.Effect<void>
    readonly updateOAuthState: (mcpName: string, oauthState: string) => Effect.Effect<void>
-@@ -73,10 +73,12 @@ const layer = Layer.effect(
+@@ -73,12 +73,14 @@ const layer = Layer.effect(
        return yield* read().pipe(flock.withLock(lockKey), Effect.orDie)
      })
  
@@ -29,8 +29,11 @@ index 808aa30..ba04b60 100644
          if (!next) return
 +        assertAuthorized?.()
          yield* fs.writeJson(filepath, next, 0o600).pipe(Effect.orDie)
-       }).pipe(flock.withLock(lockKey), Effect.orDie)
+-      }).pipe(flock.withLock(lockKey), Effect.orDie)
++      }).pipe(Effect.uninterruptible, flock.withLock(lockKey), Effect.orDie)
      })
+ 
+     const get = Effect.fn("McpAuth.get")(function* (mcpName: string) {
 @@ -94,29 +96,29 @@ const layer = Layer.effect(
        return entry
      })

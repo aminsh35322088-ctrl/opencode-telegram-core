@@ -74,6 +74,51 @@ def plugin_registry():
     return registry
 
 class ProductionExecution(unittest.TestCase):
+    def test_compiled_aws_process_credentials_fail_closed_without_launch(self):
+        roots = []
+        def configure(root, env):
+            roots.append(root)
+            helper = root / 'aws-helper.py'
+            helper.write_text('import pathlib,json\npathlib.Path(' + repr(str(root / 'aws-helper-started')) + ').write_text("started")\nprint(json.dumps({"Version":1,"AccessKeyId":"fixture","SecretAccessKey":"fixture"}))\n')
+            config = root / 'aws-config'
+            config.write_text('[profile core-fixture]\ncredential_process = ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(helper)) + '\n')
+            credentials = root / 'aws-credentials'; credentials.write_text('')
+            env.update(AWS_CONFIG_FILE=str(config), AWS_SHARED_CREDENTIALS_FILE=str(credentials),
+                AWS_PROFILE='core-fixture', AWS_EC2_METADATA_DISABLED='true', OPENCODE_TELEGRAM_PROCESS_BUDGET='1')
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'permission': 'allow', 'provider': {
+                'amazon-bedrock': {'options': {'profile': 'core-fixture', 'region': 'us-east-1',
+                'endpoint': 'http://127.0.0.1:1'}, 'models': {'fixture': {'name': 'Fixture',
+                'limit': {'context': 32000, 'output': 1024}}}}}})
+        with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+            c = Client(server.base); sid = c.request('POST', '/session', {})['id']
+            c.request('POST', f'/session/{sid}/message', {'parts': [{'type': 'text', 'text': 'fixture'}],
+                'model': {'providerID': 'amazon-bedrock', 'modelID': 'fixture'}}, timeout=15)
+            history = json.dumps(c.request('GET', f'/session/{sid}/message'))
+            self.assertIn('credential_process is unsupported in Telegram Core', history)
+            self.assertFalse((roots[0] / 'aws-helper-started').exists())
+            self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+
+    def test_compiled_concurrent_credential_updates_preserve_all_accounts(self):
+        roots = []
+        with Server(BINARY, readiness_path='/global/health', configure=lambda root, env: roots.append(root)) as server:
+            c = Client(server.base); failures = queue.Queue(); barrier = threading.Barrier(12)
+            def update(index):
+                try:
+                    barrier.wait(5)
+                    self.assertTrue(c.request('PUT', '/auth/compiled-fixture-' + str(index),
+                        {'type': 'api', 'key': 'compiled-fixture-key'}, timeout=15))
+                except Exception as error: failures.put(error)
+            threads = [threading.Thread(target=update, args=(index,), daemon=True) for index in range(12)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join(20)
+            self.assertFalse(any(thread.is_alive() for thread in threads), 'credential request did not settle')
+            self.assertTrue(failures.empty(), list(failures.queue))
+            paths = list((roots[0] / 'data').rglob('auth.json'))
+            self.assertEqual(len(paths), 1)
+            self.assertEqual(set(json.loads(paths[0].read_text())), {'compiled-fixture-' + str(i) for i in range(12)})
+            self.assertTrue(c.request('DELETE', '/auth/compiled-fixture-0', timeout=15))
+            self.assertEqual(len(json.loads(paths[0].read_text())), 11)
+
     def test_compiled_orphan_oauth_callback_does_not_bootstrap_services(self):
         with OAuthPeer() as peer:
             def configure(root, env):

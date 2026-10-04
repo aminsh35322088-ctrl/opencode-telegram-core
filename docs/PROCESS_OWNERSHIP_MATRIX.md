@@ -177,9 +177,10 @@ PR27 merged as `884ae87d47f96ddbe670d4abcd4088dc2ae832da`; its source candidate
 statements that the reproduced remote MCP OAuth defects remain open. Pre.9 is
 unchanged and does not contain PR26/27.
 
-[Provider authentication probes](PROVIDER_AUTH_OWNERSHIP.md) now reproduce late
-credential publication after workspace disposal and callback replay on current
-main. This is an unfixed release blocker, not native smoke or real-runtime closure
-evidence. Retained provider listener/device polling lifetimes need targeted tests
-and the same shared retirement invariants. No provider production fix, RC/stable
+[Corrected production reachability](PROVIDER_AUTH_OWNERSHIP.md): provider-auth
+HTTP routes and the ProviderAuth service are excluded from the actual compiled
+Telegram graph. The full-upstream callback probes reproduce defects but do not
+block Telegram RC. A shared credential-store concurrency defect is confirmed on
+a retained path and its existing-lock fix is under verification. Model-time helper
+and plugin acquisition remain audit gates. No callback lifecycle feature, RC/stable
 publication or Bot change is included.

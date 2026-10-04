@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Production rejects optional AWS `credential_process` rather than launching an SDK-owned ungoverned shell; static profiles and non-process credential links remain supported. Exact compiled validation remains pending.
+
+- Credential-store stabilization candidate: serialize shared provider credential reads and mutations with the existing file lock; retain provider/MCP mutation locks through admitted filesystem writes during cancellation. Fence excluded provider sign-in services in graph/compiled-route checks. Verification is in progress.
+
 - Candidate remote MCP/OAuth ownership: scope handshakes to the original workspace, keep PKCE/nonce private, require callback state, abort and join remote requests before replacement, and fence credential writes inside the file lock. See `docs/MCP_OAUTH_OWNERSHIP.md` for validation and remaining gates; not yet published.
 
 - Correct Telegram Core to the audited current Bot contract: 41 production endpoints, no full upstream parity. Exclude PTY, v2/workspace/control/UI routes, sharing, mDNS, Console integration, Code Mode/TypeScript and FFF native search; preserve required agent/MCP/LSP/files/plugin/native capabilities and all closed invariants.

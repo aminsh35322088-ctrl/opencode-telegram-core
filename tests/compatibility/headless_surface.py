@@ -71,7 +71,9 @@ class TelegramSurface(unittest.TestCase):
             ('GET', '/tui/control/next', None), ('POST', '/tui/append-prompt', {'text': 'x'}),
             ('GET', '/experimental/worktree', None), ('GET', '/experimental/workspace', None),
             ('GET', '/file?path=.', None), ('GET', '/find/file?query=x', None),
-            ('GET', '/provider', None), ('POST', '/global/upgrade', {}),
+            ('GET', '/provider', None), ('GET', '/provider/auth', None),
+            ('POST', '/provider/openai/oauth/authorize', {'method': 0}),
+            ('POST', '/provider/openai/oauth/callback', {'method': 0, 'oauthState': 'stale'}), ('POST', '/global/upgrade', {}),
             ('GET', '/doc', None), ('GET', '/', None), ('GET', '/lsp', None),
             ('POST', '/mcp/nonexistent/auth/authenticate', {}),
         ]:

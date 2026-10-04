@@ -1,4 +1,5 @@
 import path from "node:path"
+import { telegramAwsCredentialPolicy } from "./telegram-aws-credential-policy"
 
 const packageDir = process.env.OPENCODE_PACKAGE_DIR
 const output = process.env.OPENCODE_HEADLESS_OUTPUT
@@ -18,6 +19,7 @@ const required = (name: string): string => {
 
 const result = await Bun.build({
   conditions: ["bun", "node"],
+  plugins: [telegramAwsCredentialPolicy],
   tsconfig: "./tsconfig.json",
   external: ["node-gyp"],
   format: "esm",

@@ -129,11 +129,12 @@ Genuine remaining blockers:
    This task preserves browser capability and performs no Bot migration.
 2. PR27, merged as `884ae87d47f96ddbe670d4abcd4088dc2ae832da`, closes the
    reproduced remote MCP/OAuth flow/retirement defects; see
-   [verified evidence](MCP_OAUTH_OWNERSHIP.md). Provider/plugin OAuth ownership is
-   still a blocker: real-service probes reproduce credential writes after workspace
-   retirement and repeated exchange after completion. See
-   [provider investigation](PROVIDER_AUTH_OWNERSHIP.md). The excluded OS browser
-   opener does not exclude the retained provider loopback listener/device polling.
+   [verified evidence](MCP_OAUTH_OWNERSHIP.md). Provider-auth HTTP routes and its
+   service were already excluded by the minimal composition: diagnostic callback
+   defects are not production gates. The retained shared credential store has a
+   reproduced concurrent read/modify/write defect under verification. Model-time
+   provider/plugin/helper acquisition still needs its production audit. See
+   [corrected reachability evidence](PROVIDER_AUTH_OWNERSHIP.md).
 3. Actual hard-crash containment/reaping and restart safety for all remaining
    process classes require fault-injection evidence, beyond ordinary joined cleanup
    or an init process. Required provider credential/plugin helper subprocesses also
