@@ -1,0 +1,198 @@
+{
+  "sourceCandidate": "e6bbabe993607997fbcff39eb9d47812f6fc5b93",
+  "pr": 27,
+  "githubRun": 37169090937,
+  "railwayDeployment": "c5843490-b2a2-425f-b8d4-c7913049ba42",
+  "railwayStatus": "SUCCESS",
+  "compiledSurfaceTests": 6,
+  "compiledExecutionTests": 8,
+  "upstreamPass": 362,
+  "upstreamExpectedSkips": 2,
+  "nativePass": 299,
+  "toolchainPass": 24,
+  "linuxRounds": [
+    {
+      "round": 1,
+      "seconds": 58.3,
+      "results": [
+        [
+          [
+            "218",
+            "pass"
+          ],
+          [
+            "1",
+            "skip"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ],
+        [
+          [
+            "2",
+            "pass"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ]
+      ]
+    },
+    {
+      "round": 2,
+      "seconds": 57.03,
+      "results": [
+        [
+          [
+            "218",
+            "pass"
+          ],
+          [
+            "1",
+            "skip"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ],
+        [
+          [
+            "2",
+            "pass"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ]
+      ]
+    },
+    {
+      "round": 3,
+      "seconds": 57.1,
+      "results": [
+        [
+          [
+            "218",
+            "pass"
+          ],
+          [
+            "1",
+            "skip"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ],
+        [
+          [
+            "2",
+            "pass"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ]
+      ]
+    },
+    {
+      "round": 4,
+      "seconds": 57.36,
+      "results": [
+        [
+          [
+            "218",
+            "pass"
+          ],
+          [
+            "1",
+            "skip"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ],
+        [
+          [
+            "2",
+            "pass"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ]
+      ]
+    },
+    {
+      "round": 5,
+      "seconds": 58.88,
+      "results": [
+        [
+          [
+            "218",
+            "pass"
+          ],
+          [
+            "1",
+            "skip"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ],
+        [
+          [
+            "2",
+            "pass"
+          ],
+          [
+            "0",
+            "fail"
+          ]
+        ]
+      ]
+    }
+  ],
+  "observation": {
+    "durationSeconds": 512,
+    "workloadRounds": 33,
+    "runtimePID": 171,
+    "failures": [],
+    "rssKiBMin": 508476,
+    "rssKiBMax": 721612,
+    "recentRssKiB": [
+      685792,
+      599508,
+      583216,
+      608216,
+      642980
+    ],
+    "maxObservedPPidDescendants": 0,
+    "threads": [
+      7,
+      8,
+      9
+    ]
+  },
+  "resourceLimits": {
+    "platformMemoryGB": 1,
+    "cpus": 2
+  },
+  "limitations": [
+    "sequential two-session workload",
+    "RSS is not cgroup working set",
+    "PPid ancestry misses reparented orphans",
+    "one-hour platform metrics include deployment overlap",
+    "not crash/restart/concurrent resource proof",
+    "not RC/stable soak"
+  ]
+}

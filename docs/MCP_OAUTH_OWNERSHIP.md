@@ -51,35 +51,71 @@ The frozen Bot already retains and checks callback state locally, but its later
 stable migration must forward that state to Core. No Bot source/pin change is
 included here. Restarted clients must start a new flow, not reuse a saved nonce.
 
-## Validation recorded so far
+## Exact-candidate validation
 
-- Five original isolation/late-credential cases reproduced failures before their
-  fixes. Interrupted token-exchange reuse also failed before its retirement fix.
-- Seven real SDK/HTTP workspace tests pass individually/in focused runs, including
-  interrupted registration and replacement; nine existing OAuth compatibility
-  tests pass after explicit private-nonce and callback-state contract updates.
-- A deterministic credential-file-lock test proves retirement while reading
-  prevents the delayed write; original concurrent-write coverage remains intact.
-- Production exclusion patch applies cleanly to the updated common patches.
-- The first cumulative run found one real regression: SDK SSE startup can remain
-  unresolved after EventSource close. The owner-cancellable startup adapter fixes
-  that boundary without releasing transport/request cleanup early. The existing
-  real HTTP timeout regression and seven OAuth tests then passed together:
-  28 pass, zero failures. The previous cumulative run is not a green gate.
+Source candidate: `e6bbabe993607997fbcff39eb9d47812f6fc5b93`, PR27.
 
-Additional regression: an orphan callback bootstrapped enabled remote services
-and performed dynamic registration before rejecting its state. This reproduced
-red, then passed after checking for an existing service cache before acquisition.
-The full MCP-focused suite now passes 74 tests, including eight OAuth ownership
-cases. Cumulative/CI evidence for earlier `1fe6a5b` is green (361 upstream plus
-five shell repeats, 299 native and 24 toolchain); final-tree checks must be repeated
-after the orphan-callback correction. Local actual compiled `1fe6a5b` passed seven
-execution tests, including two new HTTP callback/late-token tests; a third compiled
-orphan-callback regression is now mandatory.
+- Red/green: original cross-workspace/private-handshake, late credential write,
+  interrupted exchange reuse and orphan callback bootstrap cases. Removing the
+  post-read credential-file guard deterministically makes its regression fail.
+- Existing real HTTP timeout exposed an SDK SSE startup promise that never rejects
+  when EventSource closes. Captured-owner cancellation settles the adapter handshake;
+  confirmed transport/request cleanup remains mandatory. The regression stays intact.
+- Focused MCP: 74 pass, including eight workspace OAuth cases.
+- `scripts/test-upstream-runtime.sh`: typecheck, SDK/consumer contract, ten Core
+  helper tests, 362 upstream passes/two expected skips and five shell race repeats.
+- Native: typecheck/299 passes. Python toolchain: 24 passes.
+- GitHub CI [37169090937](https://github.com/aminsh35322088-ctrl/opencode-telegram-core/actions/runs/37169090937): all three jobs pass, including production graph/typecheck, actual compiled execution and independent compatibility CLI.
+- Local exact-candidate production binary: eight execution tests pass, including
+  three HTTP OAuth cases, physical pause/resume/abort, paused workspace replacement,
+  custom tools, MCP stdio descendant cleanup and original event provenance.
+- Repeated Linux production process gate: five rounds, 1,100 passes, five expected
+  platform skips and zero failures across 36 files per round. This runs
+  all production Telegram/LSP/MCP/process tests together, then the two original
+  shell cancellation/admission cases in each round. The nine excluded CLI/UI tests
+  remain in the independent upstream compatibility suite, not production.
 
-Remaining before integration: cumulative validation of the final exact tree,
-repeated Linux stress, production build/typecheck and graph exclusion, actual
-compiled callback/lifecycle coverage, isolated Railway candidate verification,
-review and artifact identity checks. This checkpoint does not close raw custom
-process/browser ownership, provider/plugin/helper acquisition, crash containment
-or realistic concurrent resource/soak gates. No RC or stable publication.
+### Actual compiled Railway
+
+Deployment `c5843490-b2a2-425f-b8d4-c7913049ba42` reached SUCCESS, health passed,
+and `/validation` reports exact candidate `e6bbabe`, not the native smoke server.
+Six compiled surface tests and eight compiled execution tests pass, including
+all three new OAuth HTTP cases. Binary size is 113,891,456 bytes; no size
+optimization was attempted.
+
+The candidate recorded 33 workload rounds over 512 seconds on the same
+PID171, no failures and zero observed PPid descendants. RSS ranged
+508,476–721,612 KiB, most recently 642,980 KiB. See the bounded
+[checkpoint measurements](validation/mcp-ownership-checkpoint.json). RSS is process RSS,
+not cgroup working set. The exposed harness does not separately sample
+`memory.current`, `inactive_file` or page cache; a full resource gate is still open.
+Platform service metrics showed a one-hour peak of 1.3727 GB during rollout, covering
+multiple deployment lifetimes. It cannot be attributed to one candidate's working
+set. Do not use that aggregate window as evidence of either an individual leak or
+compliance with the one-GB envelope. Platform limits report 1 GB memory/two CPUs.
+
+Before replacement, previous candidate `03f20bd` recorded 2,074 workload rounds over
+32,268 seconds, same PID112, no failures and zero observed PPid descendants.
+RSS ranged 515,920–857,208 KiB and continued reclaiming (latest 552,308 KiB).
+That nine-hour observation belongs to the previous workspace fix, not OAuth.
+Neither observation detects descendants reparented outside the PPid tree or proves
+real concurrent fan-out, abrupt crash containment, container restart or full soak.
+
+### Deployment-status distinction
+
+Staging/committing the Railway source change created deployment `f357ffcd`; a
+second explicit deploy created `c5843490`. The first was later removed and posted
+GitHub's “Deployment cancelled” context after the second had succeeded. The
+GitHub CI jobs are green, while that external context is stale/cancelled. Do not
+call the combined status green or spoof the Railway context. Future candidate
+configuration must trigger only one deployment; a staged commit already deploys.
+
+### Remaining release gates
+
+This closes the reproduced OAuth ownership defects, not every production lifetime.
+Raw custom process/persistent-browser ownership, provider/plugin/helper acquisition,
+independent crash containment/recovery, realistic concurrent resource measurements,
+final ownership audit and aligned RC artifact/soak gates remain open. Bot is frozen;
+pre.9 does not contain PR26 or this source correction. No RC or stable publication.
+
+Production binary SHA256: `d60072ba949bc5dfe9cfd186364aaa9dfe51fe37da529ae1054be5a37aa159b0`.
