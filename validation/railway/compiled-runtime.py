@@ -18,7 +18,15 @@ from production_execution import Model
 BINARY = '/usr/local/bin/opencode'
 for test in ['headless_surface.py', 'production_execution.py']:
     subprocess.run([sys.executable, '/validation/tests/' + test, '--binary', BINARY], check=True)
-subprocess.run([sys.executable, '/validation/diagnostics/linux-process-scope/compiled_browser.py', '--binary', BINARY], check=True)
+# One resident browser is the 1GB candidate capacity contract. Foreign-topic work
+# must still complete while it is paused. Two-tree isolation runs in the compiled
+# local probe; pressure rejection cannot be converted into a leak or false success.
+browser_probe = subprocess.run([sys.executable, '/validation/diagnostics/linux-process-scope/compiled_browser.py',
+    '--binary', BINARY, '--browser-trees', '1'], capture_output=True, text=True)
+print(browser_probe.stdout, end='', flush=True)
+print(browser_probe.stderr, end='', file=sys.stderr, flush=True)
+browser_probe.check_returncode()
+browser_evidence = json.loads(browser_probe.stdout)
 provider = ThreadingHTTPServer(('127.0.0.1', 0), Model)
 threading.Thread(target=provider.serve_forever, daemon=True).start()
 def configure(root, env):
@@ -39,7 +47,7 @@ def essential_runtime():
     os._exit(75)
 threading.Thread(target=essential_runtime, daemon=True).start()
 client = Client(server.base)
-evidence = {'build': json.loads(Path('/validation/build-info.json').read_text()),
+evidence = {'browser': browser_evidence, 'build': json.loads(Path('/validation/build-info.json').read_text()),
     'sha256': hashlib.sha256(Path(BINARY).read_bytes()).hexdigest(), 'runtimeBytes': Path(BINARY).stat().st_size,
     'runtimePID': server.process.pid, 'completedWorkloads': 0, 'failures': [], 'rssKiB': [], 'descendantCounts': [], 'threadCounts': [], 'started': time.time()}
 lock = threading.Lock()

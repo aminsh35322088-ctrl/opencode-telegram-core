@@ -83,7 +83,7 @@ def memory_observation():
             'anon': int(stat.get('anon', '0')), 'file': int(stat.get('file', '0'))}
     except (OSError, ValueError): return {'unavailable': True}
 
-def run(binary):
+def run(binary, browser_trees=2):
     provider = ThreadingHTTPServer(('127.0.0.1', 0), CurrentTurnModel); provider.tool = 'core_probe'
     page = ThreadingHTTPServer(('127.0.0.1', 0), BarrierPage)
     for server in (provider, page): threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -96,14 +96,14 @@ def run(binary):
         config = root / '.opencode'; tools = config / 'tools'; tools.mkdir(parents=True)
         (tools / 'core_probe.ts').write_text('export default {description:"Owned browser diagnostic",args:{},async execute(args,context){'+
             'const request=await Bun.file('+json.dumps(str(root))+'+"/"+context.sessionID+".json").json();'+
-            'const result=await context.process.browser(request); return result.stdout}}')
+            'if(request.action==="foreign-work")return (await context.process.execFile("/bin/echo",["foreign-topic-owned"])).stdout;const result=await context.process.browser(request); return result.stdout}}')
         (config / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
         env.update(OPENCODE_TELEGRAM_PROCESS_BUDGET='1', NPM_CONFIG_REGISTRY=f'http://127.0.0.1:{registry.server_port}/',
             OPENCODE_CONFIG_DIR=str(config), OPENCODE_CONFIG_CONTENT=json.dumps({'model':'fixture/fixture','permission':'allow',
             'provider':{'fixture':{'npm':'@ai-sdk/openai-compatible','name':'Fixture','options':{
                 'baseURL':f'http://127.0.0.1:{provider.server_port}/v1','apiKey':'fixture'},'models':{'fixture':{
                 'name':'Fixture','limit':{'context':32000,'output':2048}}}}}}))
-    captured = []; private_directories = set()
+    captured = []; private_directories = set(); resource_observations = {}
     try:
         with Server(binary, readiness_path='/global/health', configure=configure) as runtime:
             class WorkspaceClient(Client):
@@ -134,8 +134,13 @@ def run(binary):
             assert all(p['state']=='T' for group in first.values() for p in group), first
             assert 'topic-a' in prompt(a, {'action':'snapshot'})
             assert set(browser_tree())==set(first), 'new generation changed persistent browser identity'
-            assert 'topic-b' in prompt(b, {'action':'open','args':['data:text/html,<title>topic-b</title><h1>B</h1>']})
-            both=browser_tree(); assert len(both)==2, both
+            if browser_trees == 2:
+                assert 'topic-b' in prompt(b, {'action':'open','args':['data:text/html,<title>topic-b</title><h1>B</h1>']})
+            else:
+                prompt(b, {'action':'snapshot'}, expected_error='Browser is not open')
+                assert set(browser_tree()) == set(first), 'foreign topic adopted or retired the browser'
+            both=browser_tree(); assert len(both)==browser_trees, both
+            resource_observations['parked'] = memory_observation()
             captured=[p for group in both.values() for p in group]
             for daemon in both:
                 environment=dict(entry.split(b'=',1) for entry in Path(f'/proc/{daemon}/environ').read_bytes().split(b'\0') if b'=' in entry)
@@ -152,7 +157,10 @@ def run(binary):
             pause=client.request('POST',f'/session/{a}/pause',{key:owner[key] for key in ('runId','generation') if key in owner})
             assert pause['paused'], pause
             wait(lambda: all(p['state']=='T' for group in browser_tree().values() for p in group))
-            assert 'topic-b' in prompt(b, {'action':'snapshot'}), 'topic A pause blocked foreign browser'
+            resource_observations['pausedBeforeForeignWork'] = memory_observation()
+            foreign = {'action':'snapshot'} if browser_trees == 2 else {'action':'foreign-work'}
+            expected = 'topic-b' if browser_trees == 2 else 'foreign-topic-owned'
+            assert expected in prompt(b, foreign), 'topic A pause blocked foreign topic work'
             owner_keys = {key:owner[key] for key in ('runId','generation') if key in owner}
             release.set()
             assert client.request('POST',f'/session/{a}/resume',owner_keys)['paused'] is False
@@ -170,7 +178,16 @@ def run(binary):
             captured += a_ids
             client.request('POST',f'/session/{a}/abort',owner_keys)
             wait(lambda: not same_alive(a_ids))
-            remaining=browser_tree(); assert len(remaining)==1 and not set(remaining)&set(first), remaining
+            remaining=browser_tree()
+            if browser_trees == 1:
+                assert not remaining, remaining
+                assert 'topic-b' in prompt(b, {'action':'open','args':['data:text/html,<title>topic-b</title>']})
+                remaining=browser_tree()
+                captured += [p for group in remaining.values() for p in group]
+                for daemon in remaining:
+                    environment=dict(entry.split(b'=',1) for entry in Path(f'/proc/{daemon}/environ').read_bytes().split(b'\0') if b'=' in entry)
+                    private_directories.add(Path(environment[b'TMPDIR'].decode()))
+            assert len(remaining)==1 and not set(remaining)&set(first), remaining
             assert 'topic-b' in prompt(b, {'action':'snapshot'})
             assert client.request('POST','/global/dispose',timeout=15)
             wait(lambda: not same_alive(captured))
@@ -184,7 +201,7 @@ def run(binary):
             print(json.dumps({'build':json.loads(os.popen(binary+' debug build-info').read()),
                 'persistentGenerationHandoff':True,'idleParked':True,'exclusiveTopicPause':True,
                 'activeResumeSameDaemon':True,'pausedAbortConfirmedEmpty':True,'workspaceRetirementConfirmedEmpty':True,
-                'privateProfilesRetired':True,'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'capturedProcesses':len(captured),'memory':memory_observation()},indent=2),flush=True)
+                'privateProfilesRetired':True,'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'requestedResidentBrowserTrees':browser_trees,'foreignTopicWorkWhilePaused':True,'capturedProcesses':len(captured),'memory':memory_observation(),'resourceObservations':resource_observations},indent=2),flush=True)
     finally:
         release.set()
         for server in (provider,page,registry): server.shutdown(); server.server_close()
@@ -195,4 +212,4 @@ def run(binary):
         assert not alive, 'diagnostic had to clean browser survivors'
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--binary',required=True);args=parser.parse_args();run(str(Path(args.binary).resolve()))
+    parser=argparse.ArgumentParser();parser.add_argument('--binary',required=True);parser.add_argument('--browser-trees',type=int,choices=[1,2],default=2);args=parser.parse_args();run(str(Path(args.binary).resolve()),args.browser_trees)

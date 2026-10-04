@@ -377,3 +377,25 @@ bytes, timeout and cancellation are bounded. Real Unix-socket tests pass7 across
 transport/ownership/preparation, production typechecking passes, and the actual
 pinned native browser source experiment retains the same daemon across generations.
 Compiled and Railway validation of this simplification is pending.
+
+
+### Capacity is distinct from retirement correctness
+
+Sourcea2e1365 has all three CI37229278688 jobs green and passes the actual
+compiled two-tree browser probe. Its direct transport removes both per-call
+Node processes and the private client-admission class. Railway5a7dd24f correctly
+rejects the second browser's256MiB startup reservation at used694MiB under its
+954MiB/1GB limit (predicted99.6%, ceiling94%). The preserved failure confirms
+that no second browser authority was published and the first remains owned.
+This is a supported resource rejection, not a process-leak/ownership RC blocker.
+A maxConcurrent ceiling never guarantees that every slot fits available memory.
+
+The prior fixture incorrectly required two resident browsers on the1GB candidate.
+The explicit Railway profile now tests one persistent browser, rejection of foreign
+adoption, foreign-topic governed work during its physical pause, same-daemon resume,
+paused abort, a different topic's subsequent browser, joined workspace retirement
+and replacement authority. The compiled local two-tree test remains unchanged as
+the higher-capacity isolation test. Both profiles pass locally on the exacta2e1365
+compiled runtime. Railway verification of the bounded profile is pending; no
+pressure ceiling/reservation/production capability has been weakened. Browser
+evidence and physical resource counters will be retained in candidate health.
