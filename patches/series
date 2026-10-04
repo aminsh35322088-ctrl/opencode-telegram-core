@@ -9,3 +9,4 @@
 0009-telegram-mcp-oauth-ownership.patch
 0010-telegram-credential-store-serialization.patch
 0011-telegram-plugin-retirement.patch
+0012-telegram-shutdown-uncertainty.patch

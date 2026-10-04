@@ -357,3 +357,22 @@ Effect to Exit and discards it; `makeStop` also ignores scope-close failure. Thi
 hides previously propagated workspace retirement failures at the outer runtime
 boundary. Root propagation and compiled failure-exit regression are required; they
 do not alone establish crash containment or durable replacement fencing.
+
+### Shutdown failure propagation candidate
+
+Common patch 0012 removes listener `runPromiseExit` result discard and preserves
+scope-close failures through the cached stop operation. The compiled fixture proves
+its plugin disposer was attempted but the original runtime reported exit0. In this
+Effect version, `ignore` suppresses typed failures, not defects: discarded Exit is
+the decisive demonstrated suppression for the rejecting plugin fixture; the same
+probe does not separately prove the typed scope-close case. Scope closing still
+attempts every registered finalizer before aggregating failures.
+
+Headless stop now catches failure explicitly, emits a fixed non-sensitive failure
+report, retains `stopping` and sets eventual exitCode1 without force exit. A referenced
+idle quarantine handle keeps the failed authority alive even if closure removed all
+other event-loop handles; it performs no cleanup polling or retry. Controlled compiled
+coverage checks the failure report, both attempted disposers and continued owner
+liveness. Final exact-source cumulative/CI/Railway verification remains pending.
+This truthful failure boundary is not hard-crash containment or cross-process
+replacement fencing; both remain release blockers.

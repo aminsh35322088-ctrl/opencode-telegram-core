@@ -74,6 +74,38 @@ def plugin_registry():
     return registry
 
 class ProductionExecution(unittest.TestCase):
+    def test_compiled_shutdown_reports_uncertain_retirement(self):
+        roots = []; registry = plugin_registry()
+        def configure(root, env):
+            roots.append(root)
+            directory = root / 'plugin-config'; directory.mkdir()
+            plugin = directory / 'shutdown-plugin.js'
+            plugin.write_text("export const first = async () => ({async dispose(){await Bun.write(" +
+                json.dumps(str(root / 'first-retired')) + ", 'attempted');throw Error('fixture shutdown uncertainty')}});\n" +
+                "export const second = async () => ({async dispose(){await Bun.write(" +
+                json.dumps(str(root / 'second-retired')) + ", 'retired')}});\n")
+            (directory / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+            env['NPM_CONFIG_REGISTRY'] = f'http://127.0.0.1:{registry.server_port}/'
+            env['OPENCODE_CONFIG_DIR'] = str(directory)
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': [plugin.as_uri()]})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                Client(server.base).request('GET', '/agent', timeout=30)
+                reports = queue.Queue()
+                def observe_shutdown():
+                    for line in server.process.stderr:
+                        if 'Core shutdown incomplete; retirement authority retained' in line:
+                            reports.put(line); return
+                observer = threading.Thread(target=observe_shutdown, daemon=True); observer.start()
+                server.process.terminate()
+                self.assertIn('retirement authority retained', reports.get(timeout=15))
+                observer.join(3); self.assertFalse(observer.is_alive())
+                self.assertIsNone(server.process.poll(), 'uncertain owner exited before confirmed cleanup')
+                self.assertTrue((roots[0] / 'first-retired').exists(), 'shutdown skipped failing cleanup')
+                self.assertTrue((roots[0] / 'second-retired').exists(), 'shutdown skipped another disposer')
+        finally:
+            registry.shutdown(); registry.server_close()
+
     def test_compiled_failed_plugin_retirement_fences_replacement(self):
         roots = []; registry = plugin_registry()
         def configure(root, env):

@@ -111,8 +111,17 @@ async function main(): Promise<void> {
     await server.stop(true)
     process.exit(0)
   }
-  process.on("SIGTERM", () => void stop())
-  process.on("SIGINT", () => void stop())
+  const requestStop = () => void stop().catch(() => {
+    // Failed retirement is not successful shutdown. Keep this owner alive and
+    // fenced; an outer crash-containment boundary must confirm physical cleanup.
+    process.exitCode = 1
+    // Retain a referenced handle even if failed scope closure removed all other
+    // handles. This idle quarantine does no cleanup polling or teardown retries.
+    setInterval(() => {}, 2_147_483_647)
+    console.error("Core shutdown incomplete; retirement authority retained")
+  })
+  process.on("SIGTERM", requestStop)
+  process.on("SIGINT", requestStop)
   await new Promise<void>(() => {})
 }
 
