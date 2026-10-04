@@ -313,3 +313,47 @@ Telegram consumer/install requirement. The candidate production resolver removes
 that acquisition path and rejects imported CLI OAuth terminally; Azure API-key
 inference is retained. See [scope and validation](PROVIDER_AUTH_OWNERSHIP.md#azure-production-credential-scope-correction-2026-10-04).
 No required browser/daemon or crash-containment gate is closed by that exclusion.
+
+### Hard crash: confirmed required process survivor (2026-10-04)
+
+At source `32f2437ede3a0e4e87cce489d119e0d9308548a9`, the actual compiled runtime
+was killed with SIGKILL after its model shell acknowledged pause and Linux `/proc`
+confirmed state T. The same PID/start-time/group survived, still stopped, reparented
+to the test subreaper. This is a required production crash-containment blocker, not
+an optional dead graph. The bounded diagnostic owns and kills its fixture group;
+`tests/diagnostics/compiled-crash-containment.probe.py` preserves the reproduction.
+The test subreaper is test hygiene, not shipped crash containment.
+
+A classified, unshipped Linux supervisor prototype uses PR_SET_CHILD_SUBREAPER and
+pidfds outside Bun. Killing the same compiled Bun child then retires/reaps the paused
+shell before supervisor completion. It is diagnostic evidence, not a production
+fix. This environment lacks `/proc/self/task/PID/children`; adopted child discovery
+must not assume that optional kernel interface. The corrected prototype enumerates
+`/proc/*/stat` and holds un-reaped direct-child identity until pidfd acquisition.
+
+Open design gates include supervisor death itself, durable replacement fencing,
+packaging/consumer compatibility and behavior for detached/double-fork descendants,
+MCP/LSP/helper classes, concurrent work and uncertain cleanup. An ancestor guard
+cannot be claimed to survive its own SIGKILL. No RC gate is closed by this spike.
+Linux references: PR_SET_CHILD_SUBREAPER(2const) and pidfd_send_signal(2) on man7.org.
+
+The exact Azure/plugin candidate is now independently verified on Railway:
+deployment `a3c4c50e-9c33-4329-9648-9c302552e6f4` SUCCESS, health endpoint reports
+source `32f2437`, PID260, startup six surface/fourteen execution checks pass. The
+first two sequential observation workloads complete without failures. This is
+short candidate verification, not RC soak or resource/crash closure. Local
+production cumulative totals are 362 pass, two expected skips and zero failures,
+plus all five two-case shell race repeats, helper15 and independent session10.
+
+The supervisor-death counterexample also reproduces: killing the prototype guard
+kills Bun but leaves the same paused shell reparented to the test subreaper. A single
+guard with destructive PDEATHSIG is insufficient. The prototype remains explicitly
+unshipped while the surviving-authority/restart boundary is investigated.
+
+The compiled shutdown diagnostic also confirms an independent false-success edge:
+a plugin disposer writes its attempted marker and throws, yet headless SIGTERM exits
+zero and reports no uncertainty. Source `Server.listen().stop` converts the stop
+Effect to Exit and discards it; `makeStop` also ignores scope-close failure. This
+hides previously propagated workspace retirement failures at the outer runtime
+boundary. Root propagation and compiled failure-exit regression are required; they
+do not alone establish crash containment or durable replacement fencing.

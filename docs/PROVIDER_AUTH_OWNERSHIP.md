@@ -147,3 +147,10 @@ The pre-fix compiled API-key inference assertion passes; CLI OAuth fails its bou
 request assertion. Actual post-fix compiled/cumulative/CI/Railway verification is
 pending. Removing this optional mechanism does not prove ownership of required
 raw custom processes, persistent browsers, other helpers or hard-crash survivors.
+
+Exact Azure checkpoint `32f2437ede3a0e4e87cce489d119e0d9308548a9` passes all three
+GitHub gates (run 37187110574). Actual compiled verification passes CLI rejection
+without helper launch and API-key model/tool inference. The cumulative production
+gate passes, including all five shell race repeats, six surface checks, fourteen
+execution checks and ten independent session-contract checks. Isolated Railway
+candidate verification is in progress; no broader crash/daemon closure is implied.
