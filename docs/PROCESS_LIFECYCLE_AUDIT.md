@@ -259,3 +259,42 @@ uncertain cleanup. The diagnostic is preserved in
 passing release assertion. Registration before async startup, joined late startup,
 attempt-all cleanup and bounded uncertainty still require implementation and
 cumulative verification. This required extension boundary remains an RC blocker.
+
+Candidate common patch 0011 replaces ignored plugin cleanup with the existing
+bounded deadline and shared workspace quarantine path. It registers before startup
+and retains actual initialization promises through late hook publication; all hook
+disposers start even when another fails. Three focused lifecycle assertions pass:
+failed retirement fences replacement; interrupted startup retires its returned
+hook; uncertain disposal reaches the existing five-second bound, attempts every
+hook, and never clears quarantine after late settlement. A premature registration
+experiment regressed late-hook disposal; that experiment was replaced before any
+checkpoint/merge and the raw-promise ownership regression remains in the gate.
+The unchanged pre-fix startup case itself passed, so this is not claimed as proof
+of an additional original startup defect. The original ignored-cleanup defect is
+also reproduced in the actual compiled runtime: global.dispose incorrectly succeeds.
+Compiled green and cumulative verification of 0011 are pending. No browser/raw
+process/helper or crash-containment gate is inferred closed by these hook tests.
+
+Review identified that joining every initializer before cleanup can strand an
+already loaded hook behind a permanently stuck later initializer. The corrected
+candidate starts known hook disposal immediately, memoizes each disposer, and
+starts late hook cleanup as soon as ownership is returned. The controlled blocked-
+initializer regression fails on the prior candidate (loaded disposer count zero)
+and passes after correction; loaded and late disposer counts remain exactly one.
+Four focused lifecycle assertions now pass. The prior full cumulative 370-pass run
+preceded this correction and is not final-candidate closure evidence. Final
+cumulative and compiled/Railway verification remain required.
+
+Final reviewed common-source candidate: 371 pass, two expected skips, zero failures,
+ten helper assertions and all five shell admission/cancellation race repeats pass.
+This gate includes all four plugin lifecycle regressions. Compiled pre-fix Plugin
+retirement fails its new assertion (global.dispose succeeds after a hook throws),
+so actual compiled green verification remains required after checkpoint build.
+
+The required helper audit reproduced retained Azure CLI model-time acquisition in
+the actual compiled runtime: fake `az` PID22106 was started by Core PID22089;
+session abort acknowledged true while the helper remained alive. The diagnostic
+kills/reaps only its owned fixture process and is preserved as
+`tests/diagnostics/azure-compiled-ownership.probe.py`. This is a confirmed acquisition
+lifetime defect, not merely an import finding. Optional CLI credential scope must
+be decided against Telegram requirements; Azure API-key inference must remain.

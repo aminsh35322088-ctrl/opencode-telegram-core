@@ -121,3 +121,10 @@ declared error type. The fixture now uses FSUtil.FileSystemError and a void fail
 effect. Local full upstream typechecking and focused credential regressions pass;
 new exact-source CI is still required. This is a test typing correction, not a
 runtime retry or waived failure.
+
+The exact credential checkpoint `64dfc91` passes all GitHub gates in run37178606141.
+Railway compiled deployment `a3d8309b-5bea-4340-a262-85ee454d4733` is SUCCESS,
+reports exact source `64dfc918108a1ceb193fa9d7ea9fa4b7ce939f51`, and passed the
+compiled surface/execution startup suite. The initial observation is 14 workloads,
+no reported failures, healthy PID218. This is checkpoint evidence, not RC soak.
+The continuing plugin-retirement candidate has not been deployed or released.

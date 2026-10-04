@@ -74,6 +74,27 @@ def plugin_registry():
     return registry
 
 class ProductionExecution(unittest.TestCase):
+    def test_compiled_failed_plugin_retirement_fences_replacement(self):
+        roots = []; registry = plugin_registry()
+        def configure(root, env):
+            roots.append(root)
+            config_dir = root / 'plugin-config'; config_dir.mkdir()
+            plugin = config_dir / 'retirement-plugin.js'
+            marker = root / 'other-plugin-retired'
+            plugin.write_text("export const first = async () => ({dispose(){throw Error('fixture plugin cleanup uncertain')}});\n" +
+                "export const second = async () => ({async dispose(){await Bun.write(" + json.dumps(str(marker)) + ", 'retired')}});\n")
+            (config_dir / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+            env['NPM_CONFIG_REGISTRY'] = f'http://127.0.0.1:{registry.server_port}/'
+            env['OPENCODE_CONFIG_DIR'] = str(config_dir)
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': [plugin.as_uri()]})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); c.request('GET', '/agent', timeout=30)
+                with self.assertRaises(HttpError): c.request('POST', '/global/dispose', timeout=15)
+                self.assertTrue((roots[0] / 'other-plugin-retired').exists(), 'one failed hook skipped another disposer')
+                with self.assertRaises(HttpError): c.request('GET', '/agent', timeout=15)
+        finally: registry.shutdown(); registry.server_close()
+
     def test_retained_plugin_sdk_can_persist_provider_credentials(self):
         roots = []; registry = plugin_registry()
         def configure(root, env):

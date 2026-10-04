@@ -184,3 +184,16 @@ block Telegram RC. A shared credential-store concurrency defect is confirmed on
 a retained path and its existing-lock fix is under verification. Model-time helper
 and plugin acquisition remain audit gates. No callback lifecycle feature, RC/stable
 publication or Bot change is included.
+
+### Retained plugin registration/retirement candidate
+
+Plugin hooks are owned by their captured InstanceContext/InstanceState workspace
+scope, not a topic-selected alternate owner. Ownership starts before initializer
+invocation; raw initialization promises remain joined after waiter interruption.
+Workspace retirement prevents further startup, starts every registered disposer,
+and requires confirmed settlement. Cleanup error/deadline failure is propagated to
+the shared workspace quarantine; later settlement does not allow replacement or
+revive the retired context. This governs logical hook resources, not arbitrary raw
+Node/Bun children spawned by trusted plugin code. Process/group admission, run
+pause/abort and persistent daemon authority still require their explicit Core
+capabilities; this candidate does not pretend a plugin hook list proves them.

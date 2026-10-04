@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Candidate plugin retirement attempts every disposer, bounds actual startup/cleanup settlement, and propagates uncertainty into workspace quarantine; compiled/cumulative validation is pending.
+
 - Correct the minimal production profile to retain authenticated credential PUT/DELETE required by internal provider refresh plugins; provider sign-in and logging/control-plane APIs remain excluded.
 
 - Production rejects optional AWS `credential_process` rather than launching an SDK-owned ungoverned shell; static profiles and non-process credential links remain supported. Exact compiled validation remains pending.
