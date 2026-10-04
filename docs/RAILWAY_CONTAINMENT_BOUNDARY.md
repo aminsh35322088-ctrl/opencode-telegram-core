@@ -272,3 +272,35 @@ source experiment confirms repeated calls/new-generation handoff. The compiled
 browser diagnostic and exact-head Railway verification are pending; this checkpoint
 does not claim their results or close the Bot adoption/container crash prerequisite.
 The validation image now includes the Bot's exact pinned browser dependencies.
+
+### Compiled browser and cumulative CI checkpoint:3c6919f
+
+All three jobs in CI37218779716 pass at exact source
+`3c6919fbb0ac8274bdc743276fb3fae123308269`. The original broader failures were
+classified: fortified C rejected an unchecked write (fixed68731fd), pause tests
+observed the runner instead of the workload, missing-executable settlement raced
+the error receipt, and a synthetic legacy launcher mock no longer intercepted the
+governed OS boundary. The updated tests retain physical stop/death, joined close,
+error rejection, retained admission and immutable uncertainty checks.
+
+The [actual compiled browser probe](../tests/diagnostics/linux-process-scope/compiled_browser.py)
+passes with the exact pinned native Chromium installation. Its
+[results](../validation/containment/compiled-browser-3c6919f.json) establish two
+exclusive topic trees, new-generation reuse, physical idle parking, active pause,
+foreign-topic requests while paused, same-daemon resume, paused abort, joined
+workspace retirement and fresh authority after workspace replacement.44 captured
+identities include renderer churn; the count is evidence, not a coverage target.
+
+The probe exposed a real concurrent admission defect: a paused CLI request held
+maxConcurrent1's generic helper slot. A separate private browser-client admission
+class now allows one client per admitted browser (max2,64MiB reservation each).
+Tool-supplied environment variables cannot select that class. Browser services are
+bounded separately (max2,256MiB each). No request replay or daemon auto-adoption is
+used. The fixture corrections (isolated browser-cache path, daemon versus runner
+identity, response history and required abort runId) were observation/API contract
+errors, not production failures; no token retry or pause relaxation was introduced.
+
+The ordinary Core escaped-tree and persistent browser implementations now have
+compiled/source evidence. Their outer crash fallback remains a release prerequisite
+until exact-head Railway runner loss/Bun SIGKILL and the essential Bot integration
+are validated. No current frozen Bot deployment is declared contained.

@@ -31,3 +31,9 @@ Core leases retain admission until an empty-child receipt and joined child close
 The container must own loss of runtime or runner authority. Bot's existing
 in-container Bun restart does not satisfy that prerequisite, so release and Bot
 pins remain frozen until its separate integration is authorized and validated.
+
+`compiled_browser.py --binary /path/to/compiled/opencode` tests the actual custom
+process capability with pinned CLI on PATH and PLAYWRIGHT_BROWSERS_PATH set. It uses
+HTTP barriers for active pause/resume/abort, concurrent foreign-topic calls, physical
+idle parking, execution-generation reuse and workspace replacement. It does not
+substitute a mocked launcher or infer browser ownership from CLI exit alone.

@@ -100,7 +100,7 @@ def run(binary):
                         'directory=' + quote(str(roots[0]), safe=''), body, timeout)
             client = WorkspaceClient(runtime.base)
             a,b = [client.request('POST','/session',{})['id'] for _ in range(2)]
-            def prompt(sid, request, asynchronous=False):
+            def prompt(sid, request, asynchronous=False, expected_error=None):
                 (roots[0] / (sid+'.json')).write_text(json.dumps(request))
                 result = client.request('POST', f'/session/{sid}/'+('prompt_async' if asynchronous else 'message'),
                     {'parts':[{'type':'text','text':'Run browser probe'}], 'model':{'providerID':'fixture','modelID':'fixture'}}, timeout=45)
@@ -109,6 +109,9 @@ def run(binary):
                     tools = [part for message in history for part in message.get('parts', []) if part.get('type') == 'tool']
                     assert tools, json.dumps(history)
                     state = tools[-1]['state']
+                    if expected_error:
+                        assert state['status']=='error' and expected_error in state['error'],json.dumps(state)
+                        return state['error']
                     assert state['status'] == 'completed', json.dumps(state)
                     return state['output']
             assert 'topic-a' in prompt(a, {'action':'open','args':['data:text/html,<title>topic-a</title><h1>A</h1>']})
@@ -126,17 +129,37 @@ def run(binary):
             assert pause['paused'], pause
             wait(lambda: all(p['state']=='T' for group in browser_tree().values() for p in group))
             assert 'topic-b' in prompt(b, {'action':'snapshot'}), 'topic A pause blocked foreign browser'
-            client.request('POST',f'/session/{a}/abort',{})
-            a_ids=list(first.values())[0]
+            owner_keys = {key:owner[key] for key in ('runId','generation') if key in owner}
+            release.set()
+            assert client.request('POST',f'/session/{a}/resume',owner_keys)['paused'] is False
+            wait(lambda: client.request('GET',f'/session/{a}/execution') is None)
+            assert set(first) <= set(browser_tree()), 'resume replaced the persistent daemon'
+            assert 'barrier-complete' in prompt(a, {'action':'snapshot'})
+            entered.clear(); release.clear()
+            prompt(a, {'action':'goto','args':[f'http://127.0.0.1:{page.server_port}/again']}, True)
+            assert entered.wait(15)
+            owner=client.request('GET',f'/session/{a}/execution')
+            owner_keys = {key:owner[key] for key in ('runId','generation') if key in owner}
+            assert client.request('POST',f'/session/{a}/pause',owner_keys)['paused']
+            wait(lambda: all(p['state']=='T' for group in browser_tree().values() for p in group))
+            a_ids=browser_tree()[next(iter(first))]
+            captured += a_ids
+            client.request('POST',f'/session/{a}/abort',owner_keys)
             wait(lambda: not same_alive(a_ids))
             remaining=browser_tree(); assert len(remaining)==1 and not set(remaining)&set(first), remaining
             assert 'topic-b' in prompt(b, {'action':'snapshot'})
             assert client.request('POST','/global/dispose',timeout=15)
             wait(lambda: not same_alive(captured))
+            prompt(b, {'action':'snapshot'}, expected_error='Browser is not open')
+            assert 'replacement-workspace' in prompt(b, {'action':'open','args':['data:text/html,<title>replacement-workspace</title>']})
+            replacement=browser_tree(); assert len(replacement)==1 and not set(replacement)&set(both)
+            captured += [p for group in replacement.values() for p in group]
+            assert client.request('POST','/global/dispose',timeout=15)
+            wait(lambda:not same_alive(captured))
             print(json.dumps({'build':json.loads(os.popen(binary+' debug build-info').read()),
                 'persistentGenerationHandoff':True,'idleParked':True,'exclusiveTopicPause':True,
-                'pausedAbortConfirmedEmpty':True,'workspaceRetirementConfirmedEmpty':True,
-                'browserTrees':len(both),'capturedProcesses':len(captured)},indent=2),flush=True)
+                'activeResumeSameDaemon':True,'pausedAbortConfirmedEmpty':True,'workspaceRetirementConfirmedEmpty':True,
+                'replacementDoesNotAdoptOldBrowser':True,'browserTrees':len(both),'capturedProcesses':len(captured)},indent=2),flush=True)
     finally:
         release.set()
         for server in (provider,page,registry): server.shutdown(); server.server_close()

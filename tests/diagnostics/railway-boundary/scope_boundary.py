@@ -7,6 +7,14 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 spec=importlib.util.spec_from_file_location('baseline',Path(__file__).with_name('probe.py'))
 p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+original_configure=p.configure
+def configure(root,env):
+    original_configure(root,env)
+    env['PLAYWRIGHT_BROWSERS_PATH']=os.environ['PLAYWRIGHT_BROWSERS_PATH']
+    (root/'.opencode/tools/browser_probe.ts').write_text(
+        'export default {description:"Crash boundary browser",args:{},async execute(args,context){'+
+        'const result=await context.process.browser({action:"open",args:["data:text/html,<title>crash-owned-browser</title>"]});return result.stdout}}')
+p.configure=configure
 EVIDENCE=p.EVIDENCE
 LIVE=None; CAPTURED=None; RUNNER=None
 
@@ -37,11 +45,24 @@ def cases():
             EVIDENCE['cases']['joinedDoubleFork']={'causalReady':True,'pid':pid,'afterCompletion':after,'dispose':True}
         LIVE,CAPTURED=p.paused_server();RUNNER=p.identity(CAPTURED['ppid'])
         assert RUNNER and RUNNER['ppid']==LIVE.process.pid,RUNNER
+        p.provider.tool='browser_probe'
+        client=p.Client(LIVE.base);sid=client.request('POST','/session',{})['id']
+        client.request('POST',f'/session/{sid}/message',{'parts':[{'type':'text','text':'Open browser'}],
+            'model':{'providerID':'fixture','modelID':'fixture'}},timeout=45)
+        history=json.dumps(client.request('GET',f'/session/{sid}/message'))
+        assert 'crash-owned-browser' in history and '"status": "error"' not in history,history
+        browser_spec=importlib.util.spec_from_file_location('browser_diagnostic',
+            '/validation/diagnostics/linux-process-scope/compiled_browser.py')
+        browser_module=importlib.util.module_from_spec(browser_spec);browser_spec.loader.exec_module(browser_module)
+        trees=browser_module.browser_tree();assert len(trees)==1,trees
+        browser_ids=[p.identity(child['pid']) for group in trees.values() for child in group]
+        assert browser_ids and all(child['state']=='T' for child in browser_ids),browser_ids
+        EVIDENCE['browserTree']=browser_ids
         EVIDENCE['armed']={'runtime':p.identity(LIVE.process.pid),'pausedShell':p.identity(CAPTURED['pid']),'runner':RUNNER}
         def essential():
             code=LIVE.process.wait()
-            p.emit('essentialLoss',exitCode=code)
-            os._exit(75)
+            try: p.emit('essentialLoss',exitCode=code)
+            finally: os._exit(75)
         threading.Thread(target=essential,daemon=True).start()
         # This detached witness belongs to the diagnostic namespace, not a Core
         # scope. Its fresh heartbeat proves actual outer teardown on authority loss.
