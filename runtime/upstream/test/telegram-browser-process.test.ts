@@ -1,5 +1,8 @@
+import { createWriteStream } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { once } from "node:events"
 import { expect, test } from "bun:test"
-import { mkdtemp, realpath, rm } from "node:fs/promises"
+import { mkdtemp, realpath, rm, mkdir, writeFile, symlink, rename } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { WorkspaceBrowsers } from "@opencode-ai/core/telegram-browser-process"
@@ -60,3 +63,54 @@ test("confirmed browser startup settles its reservation without releasing its se
   expect(governor.snapshot().activeCount).toBe(1)
   browser.release()
 })
+
+
+test.skipIf(process.platform !== "linux")("pause during browser preparation prevents native process admission", async () => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "browser-prepare-pause-")))
+  const previousPath = process.env.PATH, previousBudget = process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
+  const { telegramProcessBudgetSnapshot } = await import("@opencode-ai/core/telegram-process-budget")
+  await mkdir(path.join(directory, "bin"))
+  await mkdir(path.join(directory, "node_modules/playwright-core"), { recursive: true })
+  const metadata = JSON.stringify({ name: "@playwright/cli", version: "0.1.18" })
+  await writeFile(path.join(directory, "ready-package.json"), metadata)
+  execFileSync("mkfifo", [path.join(directory, "package.json")])
+  await writeFile(path.join(directory, "node_modules/playwright-core/package.json"), JSON.stringify({ version: "1.63.0-alpha-2026-08-05" }))
+  await writeFile(path.join(directory, "cli.js"), "#!/bin/sh\nsleep 60\n", { mode: 0o755 })
+  await symlink(path.join(directory, "cli.js"), path.join(directory, "bin/playwright-cli"))
+  await symlink(path.join(directory, "cli.js"), path.join(directory, "bin/node"))
+  process.env.PATH = path.join(directory, "bin") + path.delimiter + previousPath
+  process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
+  const baseline = telegramProcessBudgetSnapshot().activeCount
+  // Opening the writer proves Core has opened this FIFO for its metadata read.
+  // Replace the pathname before releasing bytes so later package resolution sees
+  // an ordinary immutable fixture; the current reader retains the original FD.
+  const writer = createWriteStream(path.join(directory, "package.json"))
+  const preparation = once(writer, "open")
+  const browsers = new WorkspaceBrowsers(directory, () => {})
+  const control = new SessionExecutionControl()
+  const execution = control.start({ sessionId: "topic-a", runId: "prepare", directory })
+  const scope = createToolProcessScope(execution, execution.epoch, "topic-a", directory, new AbortController().signal, browsers)
+  const request = scope.port.browser({ action: "open" })
+  let terminal: unknown
+  void request.then(() => terminal = "resolved", error => terminal = error)
+  try {
+    await Promise.race([preparation, request.then(() => { throw new Error("preparation bypassed") })])
+    control.pause(execution.owner)
+    await rename(path.join(directory, "ready-package.json"), path.join(directory, "package.json"))
+    writer.end(metadata)
+    await Bun.sleep(100)
+    expect(terminal).toBeUndefined()
+    expect(telegramProcessBudgetSnapshot().activeCount).toBe(baseline)
+    control.close(execution.owner)
+    await expect(request).rejects.toThrow()
+    await scope.close()
+    expect(telegramProcessBudgetSnapshot().activeCount).toBe(baseline)
+  } finally {
+    writer.end(metadata); if (control.get(execution.owner)) control.close(execution.owner)
+    await scope.close(); await browsers.close(); writer.destroy()
+    process.env.PATH = previousPath
+    if (previousBudget === undefined) delete process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET
+    else process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = previousBudget
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 10000)

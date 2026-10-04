@@ -91,7 +91,7 @@ export class WorkspaceBrowsers {
         if (browser) { await browser.cleanup(); this.#browsers.delete(key) }
         if (request.action === "close") return { stdout: "Browser closed", stderr: "" }
         assert()
-        browser = await this.#start(key, assert)
+        browser = await this.#start(key, assert, execution, epoch, signal)
       }
       if (!browser || browser.dead) throw new Error("Browser is not open; open a browser in this session first")
       const owned = browser
@@ -106,7 +106,14 @@ export class WorkspaceBrowsers {
         await withDeadline(() => owned.ready, { timeoutMs: timeout, label: "browser startup", parentSignal: signal, activity: execution })
         await execution.checkpoint(signal, epoch)
         assert()
-        await tree.transition("SIGCONT")
+        for (;;) {
+          await execution.checkpoint(signal, epoch)
+          assert()
+          if (execution.paused) continue
+          await tree.transition("SIGCONT")
+          if (!execution.paused) break
+          await tree.transition("SIGSTOP")
+        }
         assert()
         const command = request.action === "open" ? "goto" : request.action
         const args = [`-s=${owned.identity}`]
@@ -164,7 +171,7 @@ export class WorkspaceBrowsers {
     return operation
   }
 
-  async #start(key: string, assert: () => void): Promise<Browser> {
+  async #start(key: string, assert: () => void, execution: SessionExecutionLease, epoch: number, signal: AbortSignal): Promise<Browser> {
     const cli = await executable("playwright-cli")
     const node = await executable("node")
     const metadata = JSON.parse(await readFile(path.join(path.dirname(cli), "package.json"), "utf8"))
@@ -195,7 +202,7 @@ export class WorkspaceBrowsers {
       env.PWTEST_CLI_GLOBAL_CONFIG = directory
       env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
       env.OPENCODE_TELEGRAM_PROCESS_KIND = "browser"
-      assert()
+      do { await execution.checkpoint(signal, epoch); assert() } while (execution.paused)
       lease = acquireTelegramProcessBudget("browser", env, "browser")
       if (!lease) throw new Error("browser admission unavailable")
       proc = spawnProcessTree(node, [path.join(path.dirname(corePackage), "lib/entry/cliDaemon.js"), identity,

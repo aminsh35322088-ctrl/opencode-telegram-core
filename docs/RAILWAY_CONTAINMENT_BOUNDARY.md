@@ -324,3 +324,13 @@ counted, the service admission remains held, and pressure ceilings stay unchange
 Other process classes retain their existing warmup. Focused admission tests preserve
 both the pressure rejection before readiness and retained browser accounting after
 readiness. Exact-head compiled/Railway validation of this correction is pending.
+
+A late browser-preparation pause was reproduced with a real Linux FIFO metadata
+barrier and a native sleeping launcher: while the owner was already paused,
+startup still acquired a browser admission and launched its process. The corrected
+owner checks the captured pause/cancellation gate after asynchronous preparation,
+immediately before native admission. The focused test now remains pending with no
+process admission while paused and cancels cleanly. An in-flight explicit resume
+also checks pause intent again and re-parks before continuing if pause won the
+race. This changes the new browser path, not the previously verified shell/service
+pause architecture. Source tests4/4 and production typechecking pass.
