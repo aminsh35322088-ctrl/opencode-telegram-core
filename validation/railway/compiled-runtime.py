@@ -26,6 +26,17 @@ def configure(root, env):
         'options': {'baseURL': f'http://127.0.0.1:{provider.server_port}/v1', 'apiKey': 'fixture'},
         'models': {'fixture': {'name': 'Fixture', 'limit': {'context': 32000, 'output': 2048}}}}}})
 server = Server(BINARY, readiness_path='/global/health', configure=configure).__enter__()
+# This validation wrapper is tini's essential child. It must not keep the old
+# container alive after its compiled runtime loses authority. Startup test
+# runtimes above have intentional lifetimes; this steady runtime is essential.
+stopping = threading.Event()
+def essential_runtime():
+    code = server.process.wait()
+    if stopping.is_set(): return
+    print(json.dumps({'essentialCompiledRuntimeLost': True, 'exitCode': code,
+        'containerRetirementRequired': True}), flush=True)
+    os._exit(75)
+threading.Thread(target=essential_runtime, daemon=True).start()
 client = Client(server.base)
 evidence = {'build': json.loads(Path('/validation/build-info.json').read_text()),
     'sha256': hashlib.sha256(Path(BINARY).read_bytes()).hexdigest(), 'runtimeBytes': Path(BINARY).stat().st_size,
@@ -135,6 +146,7 @@ class Health(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(raw)
 http = ThreadingHTTPServer(('0.0.0.0', int(os.environ.get('PORT', '3000'))), Health)
 def stop(*_):
+    stopping.set()
     server.close(); provider.shutdown()
     print(json.dumps({'compiledRuntimeStopped': True, 'exitCode': server.process.returncode}), flush=True)
     os._exit(0 if server.process.returncode == 0 else 1)

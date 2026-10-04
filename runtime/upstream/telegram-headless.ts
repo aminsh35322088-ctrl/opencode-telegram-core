@@ -1,4 +1,5 @@
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { installProcessTreeFatalHandler } from "@opencode-ai/core/telegram-process-tree"
 
 declare global {
   const OPENCODE_TELEGRAM_CORE_VERSION: string
@@ -92,6 +93,10 @@ async function main(): Promise<void> {
   // This production profile owns admission independently of its Telegram client.
   // Set before loading Server/runtime modules; inherited opt-out is not allowed.
   process.env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
+  installProcessTreeFatalHandler(() => {
+    console.error("Core process-tree authority lost; essential container must retire")
+    process.exit(75)
+  })
 
   const portText = optionValue("--port", process.env.PORT ?? "0")!
   const port = Number(portText)

@@ -216,3 +216,40 @@ failures; source/JSON/helper-template syntax and whitespace checks pass. Local
 compiled binaries retain8f90bdf build identity; local artifact SHA256 differs from
 Railway as already permitted by the reproducible-source/artifact contract. Full
 local failure history above is preserved, not replaced by a final green count.
+
+## Active continuation: live scope candidate (2026-10-04)
+
+The candidate now embeds a bounded Linux scope runner in the headless artifact.
+Existing custom-tool, execution shell and workspace service owners retain their
+leases until a private Unix socket delivers waitpid/ECHILD confirmation and child
+close is joined. Scope loss requests fatal Core exit75; this is **not a deployment
+closure** while Bot still restarts Bun inside its existing container. The validation
+wrapper now makes its steady compiled runtime essential: unexpected runtime exit
+retires the wrapper/container instead of merely recording a failed workload.
+No Bot changes or new release have occurred.
+
+Focused Core tests pass28 with one unsupported-Windows skip; typechecking passes.
+The real Linux probe passes five cases, including the expected survivor after
+runner SIGKILL. Pinned Playwright has a foreground cliDaemon entrypoint. Three CLI
+calls retain one browser identity; all11 daemon/Chromium/crashpad processes pause,
+and paused retirement confirms all identities gone. Two escaped crashpad processes
+are adopted. This proves feasibility of an existing workspace service owner;
+its captured topic/service API, durable naming/fencing and Bot adoption remain work.
+
+An FD prototype is deliberately retained as unshipped diagnostic evidence: Bun
+extra stdio streams intermittently lost final receipts. The candidate uses an
+independent private Unix socket and preserves ordinary child stdio. Integration
+also preserves missing-executable errors after confirmed cleanup and avoids
+waiting forever for a spawn notification already observed by Bun. Shell tests
+now verify the actual workload leader and descendant are stopped; the runner must
+remain awake to process resume/retirement. Stale-handle tests use actual retired
+scope identity, alongside the existing synthetic group-identity tests.
+
+Fixed-count compiled OAuth experiments at8f90bdf reproduce two token-socket errors
+in12 Python-default-HTTP/1.0 cases, both correctly failed closed. Explicit HTTP/1.1
+passes12/12. A reduction without Core reproduces the socket failure in Bun1.3.14;
+500 HTTP/1.1 POSTs pass. The fixture now declares its HTTP/1.1 connection contract.
+This classifies a transport-dependent fixture anomaly, not a token retry fix.
+The earlier HTTP500 body was not captured; do not rewrite it as directly proven
+identical. The next compiled checkpoint must validate repeated authorization and
+failure fencing with retained logs. Evidence: `validation/containment/continuation-scope-local.json`.

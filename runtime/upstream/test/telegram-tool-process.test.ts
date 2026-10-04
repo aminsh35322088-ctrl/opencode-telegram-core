@@ -277,6 +277,33 @@ linux("returning from a tool closes detached processes and prevents late process
   await expect(run.scope.port.execFile("unused", [])).rejects.toThrow("tool invocation closed")
 })
 
+linux("successful custom tools retire setsid and double-fork descendants before releasing admission", async () => {
+  const run = await owned()
+  const count = telegramProcessBudgetSnapshot().activeCount
+  const script = [
+    "import os,time,pathlib",
+    "root=pathlib.Path('.')",
+    "if os.fork()==0:",
+    " os.setsid()",
+    " if os.fork()!=0: os._exit(0)",
+    " for fd in (0,1,2): os.dup2(os.open('/dev/null',os.O_RDWR),fd)",
+    " root.joinpath('daemon').write_text(str(os.getpid()))",
+    " while True: time.sleep(1)",
+    "while not root.joinpath('daemon').exists(): time.sleep(.001)",
+    "print('leader complete')",
+  ].join("\n")
+  const result = await run.scope.port.execFile("python3", ["-c", script])
+  const pid = Number(await readFile(path.join(run.directory, "daemon"), "utf8"))
+  try {
+    expect(result.stdout.trim()).toBe("leader complete")
+    expect(alive(pid)).toBe(false)
+    expect(telegramProcessBudgetSnapshot().activeCount).toBe(count)
+    await run.scope.close()
+  } finally {
+    if (alive(pid)) process.kill(pid, "SIGKILL")
+  }
+})
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0)
