@@ -16,7 +16,9 @@ import urllib.request
 import threading
 import time
 import unittest
-from session_contract import Server, Client
+from session_contract import Server, Client, HttpError
+from mcp_oauth_fixture import OAuthPeer
+from urllib.parse import urlencode
 
 BINARY = None
 class Model(BaseHTTPRequestHandler):
@@ -72,6 +74,74 @@ def plugin_registry():
     return registry
 
 class ProductionExecution(unittest.TestCase):
+    def test_compiled_orphan_oauth_callback_does_not_bootstrap_services(self):
+        with OAuthPeer() as peer:
+            def configure(root, env):
+                env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'mcp': {'enabled-peer': {'type': 'remote', 'url': peer.url, 'timeout': 5000}}})
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                result = Client(server.base).request('POST', '/mcp/enabled-peer/auth/callback', {'code': 'orphaned-code', 'oauthState': 'orphaned-state'}, timeout=15)
+                self.assertEqual(result['status'], 'failed', result)
+                self.assertEqual(peer.registrations, [])
+                self.assertEqual(peer.exchanges, [])
+
+    def test_compiled_oauth_same_name_workspace_and_callback_fencing(self):
+        directories = []
+        def configure(root, env):
+            for name in ('workspace-a', 'workspace-b'):
+                directory = root / name; directory.mkdir(); directories.append(directory)
+        with OAuthPeer() as a, OAuthPeer() as b:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base)
+                def request(workspace, method, path, body=None):
+                    return c.request(method, path + '?' + urlencode({'directory': str(directories[workspace])}), body, timeout=15)
+                for i, peer in enumerate((a, b)):
+                    request(i, 'POST', '/mcp', {'name': 'shared-name', 'config': {'type': 'remote', 'url': peer.url, 'enabled': False, 'timeout': 5000}})
+                first = request(0, 'POST', '/mcp/shared-name/auth')
+                second = request(1, 'POST', '/mcp/shared-name/auth')
+                a.authorize(first, 'code-a'); b.authorize(second, 'code-b')
+                with self.assertRaisesRegex(HttpError, "-> 400:"):
+                    request(0, 'POST', '/mcp/shared-name/auth/callback', {'code': 'code-a'})
+                stale = request(0, 'POST', '/mcp/shared-name/auth/callback', {'code': 'code-a', 'oauthState': second['oauthState']})
+                self.assertEqual(stale['status'], 'failed', stale)
+                self.assertEqual(a.exchanges, []); self.assertEqual(b.exchanges, [])
+                done_a = request(0, 'POST', '/mcp/shared-name/auth/callback', {'code': 'code-a', 'oauthState': first['oauthState']})
+                done_b = request(1, 'POST', '/mcp/shared-name/auth/callback', {'code': 'code-b', 'oauthState': second['oauthState']})
+                self.assertEqual(done_a['status'], 'connected', done_a)
+                self.assertEqual(done_b['status'], 'connected', done_b)
+                self.assertEqual(a.exchanges, ['code-a']); self.assertEqual(b.exchanges, ['code-b'])
+                pending = request(0, 'POST', '/mcp/shared-name/auth')
+                a.authorize(pending, 'retired-code')
+                self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+                retired = request(0, 'POST', '/mcp/shared-name/auth/callback', {'code': 'retired-code', 'oauthState': pending['oauthState']})
+                self.assertEqual(retired['status'], 'failed', retired)
+                self.assertNotIn('retired-code', a.exchanges)
+
+    def test_compiled_oauth_retirement_aborts_delayed_token_without_committing(self):
+        roots = []
+        def configure(root, env): roots.append(root)
+        with OAuthPeer() as peer:
+            peer.gate = threading.Event()
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); result = queue.Queue()
+                c.request('POST', '/mcp', {'name': 'late-auth', 'config': {'type': 'remote', 'url': peer.url, 'enabled': False, 'timeout': 5000}})
+                flow = c.request('POST', '/mcp/late-auth/auth', timeout=15)
+                peer.authorize(flow, 'late-code')
+                def exchange():
+                    try: result.put(c.request('POST', '/mcp/late-auth/auth/callback', {'code': 'late-code', 'oauthState': flow['oauthState']}, timeout=15))
+                    except HttpError as error: result.put(error)
+                worker = threading.Thread(target=exchange, daemon=True); worker.start()
+                try:
+                    self.assertTrue(peer.entered.wait(10), 'compiled token exchange did not reach barrier')
+                    self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+                finally:
+                    peer.gate.set(); worker.join(15)
+                self.assertFalse(worker.is_alive(), 'token request survived confirmed workspace retirement')
+                outcome = result.get(timeout=1)
+                if isinstance(outcome, dict): self.assertEqual(outcome['status'], 'failed', outcome)
+                for path in (roots[0] / 'data').rglob('mcp-auth.json'):
+                    self.assertFalse(json.loads(path.read_text()).get('late-auth', {}).get('tokens'), 'retired exchange committed credentials')
+                self.assertEqual(peer.exchanges, ['late-code'])
+
     def test_compiled_custom_tool_uses_captured_process_capability(self):
         provider = ThreadingHTTPServer(('127.0.0.1', 0), Model); provider.tool = 'core_probe'
         thread = threading.Thread(target=provider.serve_forever, daemon=True); thread.start()

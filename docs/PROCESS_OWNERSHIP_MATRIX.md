@@ -158,3 +158,13 @@ This closes the reproduced shared retirement regressions, not every interrupted
 bootstrap/helper acquisition, remote MCP/OAuth or persistent-browser boundary.
 Broader resource, concurrency and crash/restart gates remain open. Pre.9 does not
 contain this candidate; no RC/stable is published. Bot remains frozen.
+
+### Remote MCP/OAuth ownership candidate after PR26
+
+[PR27 evidence](MCP_OAUTH_OWNERSHIP.md) supersedes the reproduced pending OAuth
+identity/retirement defects listed above: private handshake, exact callback state,
+joined remote cleanup, interrupted-flow retirement and guarded credential mutation
+are verified at `e6bbabe`, including the actual compiled Railway API. An orphan
+callback cannot bootstrap a replacement service. This does not close raw custom
+process/browser, provider/helper acquisition, independent crash containment or
+realistic concurrent resource/soak gates. Bot and released artifacts remain frozen.

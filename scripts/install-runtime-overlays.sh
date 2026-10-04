@@ -20,5 +20,6 @@ if [[ "${2:-}" == "--tests" ]]; then
   cp "$CORE_ROOT/runtime/upstream/telegram-headless.ts" "$tree/packages/opencode/src/telegram-headless.ts"
   cp "$CORE_ROOT/runtime/upstream/test/telegram-headless-governor.fixture.ts" "$tree/packages/opencode/test/telegram/"
   cp "$CORE_ROOT/runtime/upstream/test/telegram-mcp-service.fixture.ts" "$tree/packages/opencode/test/telegram/"
+  cp "$CORE_ROOT/runtime/upstream/test/telegram-mcp-oauth.fixture.ts" "$tree/packages/opencode/test/telegram/"
   cp "$CORE_ROOT"/runtime/upstream/test/*.test.ts "$tree/packages/opencode/test/telegram/"
 fi

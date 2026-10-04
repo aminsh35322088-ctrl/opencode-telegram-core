@@ -1,0 +1,420 @@
+diff --git a/packages/opencode/src/mcp/auth.ts b/packages/opencode/src/mcp/auth.ts
+index 808aa30..ba04b60 100644
+--- a/packages/opencode/src/mcp/auth.ts
++++ b/packages/opencode/src/mcp/auth.ts
+@@ -41,10 +41,10 @@ export interface Interface {
+   readonly all: () => Effect.Effect<Record<string, Entry>>
+   readonly get: (mcpName: string) => Effect.Effect<Entry | undefined>
+   readonly getForUrl: (mcpName: string, serverUrl: string) => Effect.Effect<Entry | undefined>
+-  readonly set: (mcpName: string, entry: Entry, serverUrl?: string) => Effect.Effect<void>
+-  readonly remove: (mcpName: string) => Effect.Effect<void>
+-  readonly updateTokens: (mcpName: string, tokens: Tokens, serverUrl?: string) => Effect.Effect<void>
+-  readonly updateClientInfo: (mcpName: string, clientInfo: ClientInfo, serverUrl?: string) => Effect.Effect<void>
++  readonly set: (mcpName: string, entry: Entry, serverUrl?: string, assertAuthorized?: () => void) => Effect.Effect<void>
++  readonly remove: (mcpName: string, assertAuthorized?: () => void) => Effect.Effect<void>
++  readonly updateTokens: (mcpName: string, tokens: Tokens, serverUrl?: string, assertAuthorized?: () => void) => Effect.Effect<void>
++  readonly updateClientInfo: (mcpName: string, clientInfo: ClientInfo, serverUrl?: string, assertAuthorized?: () => void) => Effect.Effect<void>
+   readonly updateCodeVerifier: (mcpName: string, codeVerifier: string) => Effect.Effect<void>
+   readonly clearCodeVerifier: (mcpName: string) => Effect.Effect<void>
+   readonly updateOAuthState: (mcpName: string, oauthState: string) => Effect.Effect<void>
+@@ -73,10 +73,12 @@ const layer = Layer.effect(
+       return yield* read().pipe(flock.withLock(lockKey), Effect.orDie)
+     })
+ 
+-    const mutate = Effect.fn("McpAuth.mutate")(function* (update: (data: AuthData) => AuthData | undefined) {
++    const mutate = Effect.fn("McpAuth.mutate")(function* (update: (data: AuthData) => AuthData | undefined, assertAuthorized?: () => void) {
+       yield* Effect.gen(function* () {
++        assertAuthorized?.()
+         const next = update(yield* read())
+         if (!next) return
++        assertAuthorized?.()
+         yield* fs.writeJson(filepath, next, 0o600).pipe(Effect.orDie)
+       }).pipe(flock.withLock(lockKey), Effect.orDie)
+     })
+@@ -94,29 +96,29 @@ const layer = Layer.effect(
+       return entry
+     })
+ 
+-    const set = Effect.fn("McpAuth.set")(function* (mcpName: string, entry: Entry, serverUrl?: string) {
++    const set = Effect.fn("McpAuth.set")(function* (mcpName: string, entry: Entry, serverUrl?: string, assertAuthorized?: () => void) {
+       yield* mutate((data) => ({
+         ...data,
+         [mcpName]: serverUrl ? { ...entry, serverUrl } : entry,
+-      }))
++      }), assertAuthorized)
+     })
+ 
+-    const remove = Effect.fn("McpAuth.remove")(function* (mcpName: string) {
++    const remove = Effect.fn("McpAuth.remove")(function* (mcpName: string, assertAuthorized?: () => void) {
+       yield* mutate((data) => {
+         const next = { ...data }
+         delete next[mcpName]
+         return next
+-      })
++      }, assertAuthorized)
+     })
+ 
+     const updateField = <K extends keyof Entry>(field: K, spanName: string) =>
+-      Effect.fn(`McpAuth.${spanName}`)(function* (mcpName: string, value: NonNullable<Entry[K]>, serverUrl?: string) {
++      Effect.fn(`McpAuth.${spanName}`)(function* (mcpName: string, value: NonNullable<Entry[K]>, serverUrl?: string, assertAuthorized?: () => void) {
+         yield* mutate((data) => {
+           const entry = data[mcpName] ?? {}
+           entry[field] = value
+           if (serverUrl) entry.serverUrl = serverUrl
+           return { ...data, [mcpName]: entry }
+-        })
++        }, assertAuthorized)
+       })
+ 
+     const clearField = (field: keyof Entry, spanName: string) =>
+diff --git a/packages/opencode/src/mcp/oauth-provider.ts b/packages/opencode/src/mcp/oauth-provider.ts
+index 64a9912..235d63a 100644
+--- a/packages/opencode/src/mcp/oauth-provider.ts
++++ b/packages/opencode/src/mcp/oauth-provider.ts
+@@ -23,13 +23,25 @@ export interface McpOAuthCallbacks {
+   onRedirect: (url: URL) => void | Promise<void>
+ }
+ 
++export interface OAuthOwnership {
++  assert(): void
++  track<A>(promise: Promise<A>): Promise<A>
++}
+ export class McpOAuthProvider implements OAuthClientProvider {
++  private verifier?: string
++  private nonce?: string
++  protected run<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
++    this.ownership?.assert()
++    const pending = Effect.runPromise(effect.pipe(Effect.tap(() => Effect.sync(() => this.ownership?.assert()))))
++    return this.ownership ? this.ownership.track(pending) : pending
++  }
+   constructor(
+     protected mcpName: string,
+     protected serverUrl: string,
+     protected config: McpOAuthConfig,
+     private callbacks: McpOAuthCallbacks,
+     protected auth: McpAuth.Interface,
++    protected ownership?: OAuthOwnership,
+   ) {}
+ 
+   get redirectUrl(): string {
+@@ -62,7 +74,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+ 
+     // Check stored client info (from dynamic registration)
+     // Use getForUrl to validate credentials are for the current server URL
+-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
++    const entry = await this.run(this.auth.getForUrl(this.mcpName, this.serverUrl))
+     if (entry?.clientInfo) {
+       // Check if client secret has expired
+       if (entry.clientInfo.clientSecretExpiresAt && entry.clientInfo.clientSecretExpiresAt < Date.now() / 1000) {
+@@ -79,7 +91,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+   }
+ 
+   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+-    await Effect.runPromise(
++    await this.run(
+       this.auth.updateClientInfo(
+         this.mcpName,
+         {
+@@ -89,13 +101,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
+           clientSecretExpiresAt: info.client_secret_expires_at,
+         },
+         this.serverUrl,
++        this.ownership?.assert,
+       ),
+     )
+   }
+ 
+   async tokens(): Promise<OAuthTokens | undefined> {
+     // Use getForUrl to validate tokens are for the current server URL
+-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
++    const entry = await this.run(this.auth.getForUrl(this.mcpName, this.serverUrl))
+     if (!entry?.tokens) return undefined
+ 
+     return {
+@@ -110,7 +123,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+   }
+ 
+   async saveTokens(tokens: OAuthTokens): Promise<void> {
+-    await Effect.runPromise(
++    await this.run(
+       this.auth.updateTokens(
+         this.mcpName,
+         {
+@@ -120,6 +133,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
+           scope: tokens.scope,
+         },
+         this.serverUrl,
++        this.ownership?.assert,
+       ),
+     )
+   }
+@@ -132,53 +146,38 @@ export class McpOAuthProvider implements OAuthClientProvider {
+     await this.callbacks.onRedirect(authorizationUrl)
+   }
+ 
+-  async saveCodeVerifier(codeVerifier: string): Promise<void> {
+-    await Effect.runPromise(this.auth.updateCodeVerifier(this.mcpName, codeVerifier))
++  async saveCodeVerifier(verifier: string): Promise<void> {
++    this.ownership?.assert()
++    this.verifier = verifier
+   }
+-
+   async codeVerifier(): Promise<string> {
+-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
+-    if (!entry?.codeVerifier) {
+-      throw new Error(`No code verifier saved for MCP server: ${this.mcpName}`)
+-    }
+-    return entry.codeVerifier
++    this.ownership?.assert()
++    if (!this.verifier) throw new Error("OAuth code verifier unavailable")
++    return this.verifier
+   }
+-
+   async saveState(state: string): Promise<void> {
+-    await Effect.runPromise(this.auth.updateOAuthState(this.mcpName, state))
++    this.ownership?.assert()
++    this.nonce = state
+   }
+-
+   async state(): Promise<string> {
+-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
+-    if (entry?.oauthState) {
+-      return entry.oauthState
+-    }
+-
+-    // Generate a new state if none exists — the SDK calls state() as a
+-    // generator, not just a reader, so we need to produce a value even when
+-    // startAuth() hasn't pre-saved one (e.g. during automatic auth on first
+-    // connect).
+-    const newState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+-      .map((b) => b.toString(16).padStart(2, "0"))
+-      .join("")
+-    await Effect.runPromise(this.auth.updateOAuthState(this.mcpName, newState))
+-    return newState
++    this.ownership?.assert()
++    return this.nonce ??= Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, "0")).join("")
+   }
+ 
+   async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
+-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
++    const entry = await this.run(this.auth.get(this.mcpName))
+     if (!entry) return
+     switch (type) {
+       case "all":
+-        await Effect.runPromise(this.auth.remove(this.mcpName))
++        await this.run(this.auth.remove(this.mcpName, this.ownership?.assert))
+         break
+       case "client":
+         delete entry.clientInfo
+-        await Effect.runPromise(this.auth.set(this.mcpName, entry))
++        await this.run(this.auth.set(this.mcpName, entry, this.serverUrl, this.ownership?.assert))
+         break
+       case "tokens":
+         delete entry.tokens
+-        await Effect.runPromise(this.auth.set(this.mcpName, entry))
++        await this.run(this.auth.set(this.mcpName, entry, this.serverUrl, this.ownership?.assert))
+         break
+     }
+   }
+@@ -197,6 +196,7 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
+   }
+ 
+   override async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
++    this.ownership?.assert()
+     this.pendingClientInfo = info
+   }
+ 
+@@ -205,17 +205,20 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
+   }
+ 
+   override async saveTokens(tokens: OAuthTokens): Promise<void> {
++    this.ownership?.assert()
+     this.pendingTokens = tokens
+   }
+ 
+   override async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
++    this.ownership?.assert()
+     if (type === "all" || type === "client") this.pendingClientInfo = undefined
+     if (type === "all" || type === "tokens") this.pendingTokens = undefined
+   }
+ 
+   async commit(): Promise<void> {
++    this.ownership?.assert()
+     if (!this.pendingTokens) return
+-    await Effect.runPromise(
++    await this.run(
+       this.auth.set(
+         this.mcpName,
+         {
+@@ -236,6 +239,7 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
+               : undefined,
+         },
+         this.serverUrl,
++        this.ownership?.assert,
+       ),
+     )
+   }
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
+index a6fb064..8c3d5ef 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
+@@ -20,6 +20,7 @@ export const AuthStartResponse = Schema.Struct({
+ })
+ export const AuthCallbackPayload = Schema.Struct({
+   code: Schema.String,
++  oauthState: Schema.String,
+ })
+ export const AuthRemoveResponse = Schema.Struct({
+   success: Schema.Literal(true),
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts
+index cdf0cc1..2f50844 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/mcp.ts
+@@ -38,7 +38,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
+       payload: typeof AuthCallbackPayload.Type
+     }) {
+       return yield* mcp
+-        .finishAuth(ctx.params.name, ctx.payload.code)
++        .finishAuth(ctx.params.name, ctx.payload.code, ctx.payload.oauthState)
+         .pipe(
+           Effect.catchTag("MCP.NotFoundError", (error) =>
+             Effect.fail(
+diff --git a/packages/opencode/test/mcp/oauth-auto-connect.test.ts b/packages/opencode/test/mcp/oauth-auto-connect.test.ts
+index 5f88890..f2bf535 100644
+--- a/packages/opencode/test/mcp/oauth-auto-connect.test.ts
++++ b/packages/opencode/test/mcp/oauth-auto-connect.test.ts
+@@ -149,7 +149,7 @@ mcpTest.instance("first connect to OAuth server shows needs_auth instead of fail
+   }),
+ )
+ 
+-mcpTest.instance("state() generates and persists a new state when none is saved", () =>
++mcpTest.instance("state() generates a private stable nonce without persisting it", () =>
+   Effect.gen(function* () {
+     const auth = yield* McpAuth.Service
+     const provider = new McpOAuthProvider(
+@@ -164,11 +164,12 @@ mcpTest.instance("state() generates and persists a new state when none is saved"
+ 
+     const state = yield* Effect.promise(() => provider.state())
+     expect(state).toHaveLength(64)
+-    expect((yield* auth.get("test-state-gen"))?.oauthState).toBe(state)
++    expect((yield* auth.get("test-state-gen"))?.oauthState).toBeUndefined()
++    expect(yield* Effect.promise(() => provider.state())).toBe(state)
+   }),
+ )
+ 
+-mcpTest.instance("state() returns existing state when one is saved", () =>
++mcpTest.instance("state() does not inherit a stale persisted nonce", () =>
+   Effect.gen(function* () {
+     const auth = yield* McpAuth.Service
+     const provider = new McpOAuthProvider(
+@@ -180,7 +181,9 @@ mcpTest.instance("state() returns existing state when one is saved", () =>
+     )
+ 
+     yield* auth.updateOAuthState("test-state-existing", "pre-saved-state-value")
+-    expect(yield* Effect.promise(() => provider.state())).toBe("pre-saved-state-value")
++    const state = yield* Effect.promise(() => provider.state())
++    expect(state).not.toBe("pre-saved-state-value")
++    expect(yield* Effect.promise(() => provider.state())).toBe(state)
+   }),
+ )
+ 
+@@ -212,9 +215,10 @@ mcpTest.instance("failed reauthentication preserves existing credentials", () =>
+     yield* auth.updateClientInfo(name, { clientId: "dynamic-client", clientSecret: "dynamic-secret" }, server.url)
+     yield* auth.updateTokens(name, { accessToken: "working-token" }, server.url)
+     yield* mcp.add(name, remote(server.url))
+-    expect((yield* mcp.startAuth(name)).authorizationUrl).toContain("/authorize")
++    const flow = yield* mcp.startAuth(name)
++    expect(flow.authorizationUrl).toContain("/authorize")
+ 
+-    expect(yield* mcp.finishAuth(name, "invalid-code")).toEqual({
++    expect(yield* mcp.finishAuth(name, "invalid-code", flow.oauthState)).toEqual({
+       status: "failed",
+       error: "OAuth completion failed: Token exchange failed",
+     })
+@@ -237,10 +241,11 @@ mcpTest.instance("successful reauthentication commits replacement credentials",
+     yield* auth.updateClientInfo(name, { clientId: "old-client" }, server.url)
+     yield* auth.updateTokens(name, { accessToken: "old-token" }, server.url)
+     yield* mcp.add(name, remote(server.url))
+-    expect((yield* mcp.startAuth(name)).authorizationUrl).toContain("/authorize")
++    const flow = yield* mcp.startAuth(name)
++    expect(flow.authorizationUrl).toContain("/authorize")
+     expect((yield* auth.get(name))?.tokens?.accessToken).toBe("old-token")
+ 
+-    expect((yield* mcp.finishAuth(name, "valid-code")).status).toBe("connected")
++    expect((yield* mcp.finishAuth(name, "valid-code", flow.oauthState)).status).toBe("connected")
+     const entry = yield* auth.get(name)
+     expect(entry?.tokens?.accessToken).toBe("replacement-token")
+     expect(entry?.clientInfo?.clientId).toBe("replacement-client")
+diff --git a/packages/opencode/test/mcp/auth.test.ts b/packages/opencode/test/mcp/auth.test.ts
+index 5aa0999..d32234c 100644
+--- a/packages/opencode/test/mcp/auth.test.ts
++++ b/packages/opencode/test/mcp/auth.test.ts
+@@ -1,7 +1,7 @@
+ import { expect, test } from "bun:test"
+ import { setTimeout as sleep } from "node:timers/promises"
+ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+-import { Effect, Layer } from "effect"
++import { Effect, Layer, Fiber, Exit } from "effect"
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+ import { McpAuth } from "../../src/mcp/auth"
+ 
+@@ -9,6 +9,8 @@ function authFile() {
+   let raw = ""
+   let activeWrites = 0
+   let sawOverlap = false
++  let readGate: Promise<void> | undefined
++  let readEntered: (() => void) | undefined
+ 
+   const fsLayer = Layer.effect(
+     FSUtil.Service,
+@@ -19,13 +21,15 @@ function authFile() {
+         ...fs,
+         readJson: (file) =>
+           file.endsWith("mcp-auth.json")
+-            ? Effect.try({
++            ? Effect.promise(async () => {
++                readEntered?.(); await readGate
++              }).pipe(Effect.andThen(Effect.try({
+                 try: () => {
+                   if (!raw) throw new Error("mcp-auth.json missing")
+                   return JSON.parse(raw)
+                 },
+                 catch: (cause) => new FSUtil.FileSystemError({ method: "readJson", cause }),
+-              })
++              })))
+             : fs.readJson(file),
+         writeJson: (file, value, mode) =>
+           file.endsWith("mcp-auth.json")
+@@ -43,7 +47,7 @@ function authFile() {
+     }),
+   ).pipe(Layer.provide(AppNodeBuilder.build(FSUtil.node)))
+ 
+-  return { fsLayer, raw: () => raw }
++  return { fsLayer, raw: () => raw, blockRead(gate: Promise<void>, entered: () => void) { readGate = gate; readEntered = entered } }
+ }
+ 
+ function authService(fsLayer: Layer.Layer<FSUtil.Service>) {
+@@ -76,3 +80,23 @@ test("serializes concurrent auth file updates across service instances", async (
+     }),
+   )
+ })
++
++// Ownership can retire while the file lock is held across asynchronous I/O.
++test("credential mutation rechecks retirement inside the file lock after reading", async () => {
++  const file = authFile()
++  await Effect.runPromise(Effect.gen(function* () {
++    const auth = yield* authService(file.fsLayer)
++    yield* auth.updateTokens("owned", { accessToken: "original" }, "https://example.test/mcp")
++    let entered!: () => void; let release!: () => void; let active = true
++    const observed = new Promise<void>(resolve => { entered = resolve })
++    const gate = new Promise<void>(resolve => { release = resolve })
++    file.blockRead(gate, entered)
++    const mutation = yield* auth.updateTokens("owned", { accessToken: "late" }, "https://example.test/mcp", () => {
++      if (!active) throw new Error("owner retired")
++    }).pipe(Effect.forkChild)
++    yield* Effect.promise(() => observed)
++    active = false; release()
++    expect(Exit.isFailure(yield* Fiber.await(mutation))).toBe(true)
++    expect((yield* auth.get("owned"))?.tokens?.accessToken).toBe("original")
++  }))
++})

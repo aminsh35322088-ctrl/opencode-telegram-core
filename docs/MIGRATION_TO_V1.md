@@ -168,3 +168,14 @@ This closes the reproduced shared retirement regressions, not every interrupted
 bootstrap/helper acquisition, remote MCP/OAuth or persistent-browser boundary.
 Broader resource, concurrency and crash/restart gates remain open. Pre.9 does not
 contain this candidate; no RC/stable is published. Bot remains frozen.
+
+### Remote MCP/OAuth candidate after PR26
+
+See [remote MCP/OAuth ownership checkpoint](MCP_OAUTH_OWNERSHIP.md). Real SDK/HTTP
+regressions confirm this remains a required production boundary. Its workspace
+owner and callback-state correction is verified on `stabilize/core-mcp-lifetime`
+at `e6bbabe` (PR27): cumulative CI, five Linux rounds/1,100 passes and actual
+compiled Railway six surface/eight execution tests are green. The duplicate
+cancelled Railway commit context is documented separately; it is not a live
+runtime failure. Broader crash/concurrency/resource gates remain open. Bot and
+releases remain frozen.
