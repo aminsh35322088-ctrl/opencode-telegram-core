@@ -135,7 +135,9 @@ int main(int argc, char **argv) {
     close(control);
     signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); signal(SIGPIPE, SIG_DFL);
     if (setsid() >= 0) execvp(argv[3], argv+3);
-    unsigned char error = errno; (void)write(exec_error[1], &error, 1); _exit(127);
+    unsigned char error = errno; ssize_t written;
+    do { written = write(exec_error[1], &error, 1); } while (written < 0 && errno == EINTR);
+    _exit(written == 1 ? 127 : 125);
   }
   close(exec_error[1]);
   unsigned char error; ssize_t error_bytes;
