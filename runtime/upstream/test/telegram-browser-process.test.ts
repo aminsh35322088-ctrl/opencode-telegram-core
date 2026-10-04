@@ -42,3 +42,21 @@ test("browser requests cannot select a foreign topic or unavailable workspace ow
       async () => { throw new Error("unexpected process launch") })).rejects.toThrow("workspace retired")
   } finally { await scope.close(); control.finish(execution.owner); await browsers.close(); await rm(directory, { recursive: true, force: true }) }
 })
+
+test("confirmed browser startup settles its reservation without releasing its service admission", async () => {
+  const { TelegramProcessBudgetGovernor } = await import("@opencode-ai/core/telegram-process-budget")
+  const MiB = 1024 * 1024
+  let used = 400 * MiB
+  const governor = new TelegramProcessBudgetGovernor(4, () => ({ memoryUsedBytes: used,
+    memoryLimitBytes: 1_000_000_000, memoryPressure: used / 1_000_000_000 }), () => true)
+  const browser = governor.acquire("browser", undefined, "browser")!
+  used = 600 * MiB // actual full daemon/Chromium startup is now accounted
+  expect(() => governor.acquire("node", undefined, "browser-client")).toThrow("ceiling=95.0%")
+  browser.settleStartup!()
+  expect(governor.snapshot().activeCount).toBe(1)
+  const client = governor.acquire("node", undefined, "browser-client")!
+  expect(governor.snapshot().activeCount).toBe(2)
+  client.release()
+  expect(governor.snapshot().activeCount).toBe(1)
+  browser.release()
+})

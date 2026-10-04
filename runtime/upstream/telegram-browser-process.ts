@@ -228,7 +228,7 @@ export class WorkspaceBrowsers {
         void browser.cleanup().catch(() => {})
         return
       }
-      if (stdout) { output += data.toString(); if (output.includes("Daemon listening on ")) ready() }
+      if (stdout) { output += data.toString(); if (output.includes("Daemon listening on ")) { lease?.settleStartup?.(); ready() } }
     }
     proc.stdout?.on("data", (data: Buffer) => collect(data, true))
     proc.stderr?.on("data", (data: Buffer) => collect(data, false))

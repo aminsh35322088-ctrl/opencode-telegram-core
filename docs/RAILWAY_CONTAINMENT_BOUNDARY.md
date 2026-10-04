@@ -312,3 +312,15 @@ TMPDIR and XDG paths; joined retirement removes the profiles/crash reports with
 that private directory. Failed startup/admission also removes its unpublished
 private files. The compiled probe now asserts profile placement and file removal;
 its verification at the new implementation checkpoint is pending.
+
+Railway's current plan caps this candidate at1GB; an attempted2GB allocation was
+rejected by the platform and changed no service configuration. The first328b7ef
+startup fails admission (not OOM): used594–601MiB plus the still-warm256MiB browser
+reservation plus a64MiB CLI-client reservation predicts95.8–96.6%, above95%.
+Inspection of the exact pinned daemon establishes that its listening receipt comes
+**after** Chromium context creation and backend initialization. The browser now
+settles that startup reservation on this causal receipt; actual cgroup usage remains
+counted, the service admission remains held, and pressure ceilings stay unchanged.
+Other process classes retain their existing warmup. Focused admission tests preserve
+both the pressure rejection before readiness and retained browser accounting after
+readiness. Exact-head compiled/Railway validation of this correction is pending.

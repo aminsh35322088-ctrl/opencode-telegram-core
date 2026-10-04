@@ -364,10 +364,10 @@ index e5be4d4..82b8aa4 100644
          title: input.title || `Terminal ${id.slice(-4)}`,
 diff --git a/packages/core/src/telegram-process-budget.ts b/packages/core/src/telegram-process-budget.ts
 new file mode 100644
-index 0000000..fdb517b
+index 0000000..16c01ef
 --- /dev/null
 +++ b/packages/core/src/telegram-process-budget.ts
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,295 @@
 +import { readFileSync } from "node:fs"
 +import path from "node:path"
 +
@@ -392,6 +392,7 @@ index 0000000..fdb517b
 +  readonly kind: TelegramProcessKind
 +  readonly admittedAt: number
 +  bindPid(pid: number | null | undefined, retainUntilRelease?: boolean): void
++  settleStartup?(): void
 +  release(): void
 +}
 +
@@ -400,7 +401,7 @@ index 0000000..fdb517b
 +  readonly kind: TelegramProcessKind
 +  readonly admittedAt: number
 +  readonly reserveBytes: number
-+  readonly reserveUntil: number
++  reserveUntil: number
 +  pid?: number
 +  retainUntilRelease?: boolean
 +}
@@ -598,6 +599,11 @@ index 0000000..fdb517b
 +          lease.pid = pid
 +          lease.retainUntilRelease = retainUntilRelease
 +        }
++      },
++      settleStartup: () => {
++        if (released) return
++        const lease = this.#active.get(id)
++        if (lease) lease.reserveUntil = Date.now()
 +      },
 +      release: () => {
 +        if (released) return
