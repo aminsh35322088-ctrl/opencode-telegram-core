@@ -8,7 +8,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Shell } from "@opencode-ai/core/shell"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { telegramProcessBudgetSnapshot } from "@opencode-ai/core/telegram-process-budget"
+import { ownServiceProcess } from "@opencode-ai/core/telegram-service-process"
 
 async function withProcess(
   body: (proc: childProcess.ChildProcess) => Promise<void>,
@@ -70,17 +70,31 @@ const release = () => Effect.gen(function* () {
 }).pipe(Effect.scoped, Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.runPromiseExit)
 
 test("missing close fails within the cleanup deadline and retains governor admission", async () => {
-  await withProcess(async (proc) => {
-    const baseline = telegramProcessBudgetSnapshot().activeCount
-    const exit = await release()
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("process close deadline exceeded")
-    expect(telegramProcessBudgetSnapshot().activeCount).toBe(baseline + 1)
+  // The governed OS boundary is now the scoped runner, not cross-spawn's raw
+  // launcher. Exercise joined ownership directly without accidentally launching
+  // a real runner around the synthetic executable.
+  const proc = Object.assign(new EventEmitter(), { pid: 2147483647 }) as childProcess.ChildProcess
+  let admission = 1
+  const owned = ownServiceProcess(proc, {
+    id: "missing-close", kind: "helper", admittedAt: Date.now(), bindPid() {}, release() { admission-- },
+  })
+  const originalKill = process.kill
+  const killing = spyOn(process, "kill").mockImplementation((pid, value) => {
+    if (pid !== -proc.pid!) return originalKill(pid, value)
+    if (value === 0) throw Object.assign(new Error("synthetic group is empty"), { code: "ESRCH" })
+    return true
+  })
+  try {
+    proc.emit("spawn")
+    await expect(owned.cleanup()).rejects.toThrow("workspace service process group cleanup exceeded 5000ms deadline")
+    expect(admission).toBe(1)
     proc.emit("error", new Error("synthetic post-spawn notification error"))
-    expect(telegramProcessBudgetSnapshot().activeCount).toBe(baseline + 1)
+    expect(admission).toBe(1)
     proc.emit("close", null, "SIGKILL")
-    expect(telegramProcessBudgetSnapshot().activeCount).toBe(baseline)
-  }, () => {}, true)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(admission).toBe(0) // confirmed late death can release accounting
+    await expect(owned.cleanup()).rejects.toThrow() // uncertainty stays fenced
+  } finally { proc.emit("close"); killing.mockRestore() }
 }, 10000)
 
 test("explicit process kill uses the same bounded terminal wait", async () => {

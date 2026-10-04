@@ -367,13 +367,13 @@ new file mode 100644
 index 0000000..fdb517b
 --- /dev/null
 +++ b/packages/core/src/telegram-process-budget.ts
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,289 @@
 +import { readFileSync } from "node:fs"
 +import path from "node:path"
 +
 +const MiB = 1024 * 1024
 +
-+export type TelegramProcessKind = "shell" | "mcp" | "lsp" | "pty" | "utility" | "helper" | "browser"
++export type TelegramProcessKind = "shell" | "mcp" | "lsp" | "pty" | "utility" | "helper" | "browser" | "browser-client"
 +
 +export interface TelegramProcessRule {
 +  readonly maxConcurrent: number
@@ -413,6 +413,7 @@ index 0000000..fdb517b
 +  utility: { maxConcurrent: 2, reserveBytes: 32 * MiB, pressureCeiling: 0.97 },
 +  helper: { maxConcurrent: 1, reserveBytes: 64 * MiB, pressureCeiling: 0.95 },
 +  browser: { maxConcurrent: 2, reserveBytes: 256 * MiB, pressureCeiling: 0.94 },
++  "browser-client": { maxConcurrent: 2, reserveBytes: 64 * MiB, pressureCeiling: 0.95 },
 +})
 +
 +const RESERVATION_WARMUP_MS = 5_000

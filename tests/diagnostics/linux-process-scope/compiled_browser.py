@@ -4,6 +4,7 @@ No mock browser or process identity; bounded HTTP barriers make active pause cau
 """
 import argparse, io, json, os, sys, threading, time
 from pathlib import Path
+from urllib.parse import quote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.environ.get('COMPILED_FIXTURE_TESTS', str(Path(__file__).resolve().parents[2] / 'compatibility')))
 from session_contract import Server, Client
@@ -54,7 +55,8 @@ def processes():
 
 def browser_tree():
     table = processes()
-    daemons = [p for p in table.values() if 'cliDaemon.js core-' in p['cmd']]
+    daemons = [p for p in table.values() if p['cmd'].split() and
+        Path(p['cmd'].split()[0]).name in ('node', 'nodejs') and 'cliDaemon.js core-' in p['cmd']]
     result = {}
     for daemon in daemons:
         runner = daemon['ppid']; selected = {runner}
@@ -76,6 +78,9 @@ def run(binary):
     registry = plugin_registry(); roots = []
     def configure(root, env):
         roots.append(root)
+        # Server isolates HOME/cache; explicitly pass the image's required
+        # immutable browser installation rather than silently using its empty HOME.
+        env['PLAYWRIGHT_BROWSERS_PATH'] = os.environ['PLAYWRIGHT_BROWSERS_PATH']
         config = root / '.opencode'; tools = config / 'tools'; tools.mkdir(parents=True)
         (tools / 'core_probe.ts').write_text('export default {description:"Owned browser diagnostic",args:{},async execute(args,context){'+
             'const request=await Bun.file('+json.dumps(str(root))+'+"/"+context.sessionID+".json").json();'+
@@ -89,16 +94,23 @@ def run(binary):
     captured = []
     try:
         with Server(binary, readiness_path='/global/health', configure=configure) as runtime:
-            client = Client(runtime.base)
+            class WorkspaceClient(Client):
+                def request(self, method, path, body=None, timeout=5):
+                    return super().request(method, path + ('&' if '?' in path else '?') +
+                        'directory=' + quote(str(roots[0]), safe=''), body, timeout)
+            client = WorkspaceClient(runtime.base)
             a,b = [client.request('POST','/session',{})['id'] for _ in range(2)]
             def prompt(sid, request, asynchronous=False):
                 (roots[0] / (sid+'.json')).write_text(json.dumps(request))
                 result = client.request('POST', f'/session/{sid}/'+('prompt_async' if asynchronous else 'message'),
                     {'parts':[{'type':'text','text':'Run browser probe'}], 'model':{'providerID':'fixture','modelID':'fixture'}}, timeout=45)
                 if not asynchronous:
-                    text=json.dumps(result)
-                    assert '"status": "error"' not in text, text
-                    return text
+                    history = client.request('GET', f'/session/{sid}/message')
+                    tools = [part for message in history for part in message.get('parts', []) if part.get('type') == 'tool']
+                    assert tools, json.dumps(history)
+                    state = tools[-1]['state']
+                    assert state['status'] == 'completed', json.dumps(state)
+                    return state['output']
             assert 'topic-a' in prompt(a, {'action':'open','args':['data:text/html,<title>topic-a</title><h1>A</h1>']})
             first = browser_tree(); assert len(first)==1, first
             assert all(p['state']=='T' for group in first.values() for p in group), first

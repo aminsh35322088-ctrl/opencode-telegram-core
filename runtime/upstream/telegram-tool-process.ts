@@ -34,7 +34,8 @@ export function createToolProcessScope(
   const pending = new Set<Promise<unknown>>()
   let closedInvocation = false
   let cleanupFailure: unknown
-  const execFile: ToolProcessPort["execFile"] = async (command, args, options = {}) => {
+  const execFile = async (command: string, args: readonly string[],
+    options: NonNullable<Parameters<ToolProcessPort["execFile"]>[2]> = {}, browserClient = false) => {
     if (closedInvocation) throw new Error("tool invocation closed")
     if (!execution || epoch === undefined) throw new Error("custom process requires a live runtime execution")
     execution.assertOwned(epoch)
@@ -68,7 +69,7 @@ export function createToolProcessScope(
     // governance for descendants using the Core spawn paths.
     env.OPENCODE_TELEGRAM_PROCESS_BUDGET = "1"
     delete env.OPENCODE_TELEGRAM_PROCESS_KIND
-    const budget = acquireTelegramProcessBudget(command, env)
+    const budget = acquireTelegramProcessBudget(command, env, browserClient ? "browser-client" : undefined)
     if (!budget) throw new Error("custom process budget admission unavailable")
     let detach: (() => void) | undefined
     let child: ReturnType<typeof spawn> | undefined
@@ -162,7 +163,7 @@ export function createToolProcessScope(
       if (!execution || epoch === undefined || !browsers)
         return Promise.reject(new Error("persistent browser requires captured workspace and execution authority"))
       const operation = browsers.execute(execution, epoch, sessionId, request,
-        AbortSignal.any([signal, invocation.signal]), execFile)
+        AbortSignal.any([signal, invocation.signal]), (command, args, options) => execFile(command, args, options, true))
       pending.add(operation)
       void operation.then(() => pending.delete(operation), () => pending.delete(operation))
       return operation
