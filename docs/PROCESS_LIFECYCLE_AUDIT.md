@@ -248,3 +248,14 @@ block Telegram RC. A shared credential-store concurrency defect is confirmed on
 a retained path and its existing-lock fix is under verification. Model-time helper
 and plugin acquisition remain audit gates. No callback lifecycle feature, RC/stable
 publication or Bot change is included.
+
+### Retained plugin retirement probe (2026-10-04)
+
+A real Plugin.Service/InstanceStore probe loads two local plugin modules. The first
+plugin's dispose hook throws; the second can retire normally. Current main logs the
+failure and ignores it, so store.dispose reports success instead of quarantining
+uncertain cleanup. The diagnostic is preserved in
+`tests/diagnostics/telegram-plugin-retirement.probe.ts` and intentionally is not a
+passing release assertion. Registration before async startup, joined late startup,
+attempt-all cleanup and bounded uncertainty still require implementation and
+cumulative verification. This required extension boundary remains an RC blocker.

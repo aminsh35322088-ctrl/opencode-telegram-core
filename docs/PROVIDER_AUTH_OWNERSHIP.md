@@ -114,3 +114,10 @@ physical pause/resume/abort/workspace retirement. The six compiled surface tests
 pass, including unauthenticated credential rejection and excluded logging/sign-in.
 The new recoverable AuthError regression passes alongside four credential race tests.
 The corrected exact-commit cumulative/CI and Railway gates remain pending.
+
+GitHub candidate `789cb9a` passes validate and telegram-headless; upstream-runtime
+found the new failure-injection fixture used a generic Error rather than FSUtil's
+declared error type. The fixture now uses FSUtil.FileSystemError and a void failure
+effect. Local full upstream typechecking and focused credential regressions pass;
+new exact-source CI is still required. This is a test typing correction, not a
+runtime retry or waived failure.

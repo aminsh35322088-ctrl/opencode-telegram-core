@@ -8,7 +8,7 @@ import { Auth } from "../../src/auth"
 
 function credentialFile(fileName = "auth.json") {
   let data: Record<string, unknown> = {}
-  let writeFailure: Error | undefined
+  let writeFailure: FSUtil.Error | undefined
   let writeGate: Promise<void> | undefined; let writeEntered: (() => void) | undefined; let writeSettled: (() => void) | undefined
   let writeAborted = false
   const fsLayer = Layer.effect(FSUtil.Service, Effect.gen(function* () {
@@ -19,7 +19,7 @@ function credentialFile(fileName = "auth.json") {
         await Promise.resolve()
         return snapshot
       }) : fs.readJson(file),
-      writeJson: (file, value, mode) => file.endsWith("/" + fileName) ? writeFailure ? Effect.fail(writeFailure) : Effect.promise(async signal => {
+      writeJson: (file, value, mode) => file.endsWith("/" + fileName) ? writeFailure ? Effect.fail(writeFailure).pipe(Effect.asVoid) : Effect.promise(async signal => {
         writeEntered?.(); signal.addEventListener("abort", () => { writeAborted = true }, { once: true })
         await writeGate
         data = structuredClone(value) as Record<string, unknown>
@@ -28,7 +28,7 @@ function credentialFile(fileName = "auth.json") {
     })
   })).pipe(Layer.provide(AppNodeBuilder.build(FSUtil.node)))
   const layer = AppNodeBuilder.build(LayerNode.group([Auth.node, McpAuth.node]), [[FSUtil.node, fsLayer]])
-  return { layer, data: () => data, writeAborted: () => writeAborted, failWrite(error: Error) { writeFailure = error }, blockWrite(value: Promise<void>, onWrite: () => void, onSettled: () => void) { writeGate = value; writeEntered = onWrite; writeSettled = onSettled } }
+  return { layer, data: () => data, writeAborted: () => writeAborted, failWrite(error: FSUtil.Error) { writeFailure = error }, blockWrite(value: Promise<void>, onWrite: () => void, onSettled: () => void) { writeGate = value; writeEntered = onWrite; writeSettled = onSettled } }
 }
 test("concurrent provider credential writes preserve both accounts", async () => {
   const file = credentialFile()
@@ -95,7 +95,7 @@ test("MCP credential cancellation cannot release a lock before admitted write se
 })
 
 test("provider write failures remain recoverable AuthError values", async () => {
-  const file = credentialFile(); file.failWrite(new Error("fixture filesystem failure"))
+  const file = credentialFile(); file.failWrite(new FSUtil.FileSystemError({method:"writeJson",cause:new Error("fixture filesystem failure")}))
   await Effect.runPromise(Effect.gen(function* () {
     const auth = yield* Auth.Service
     for (const operation of [auth.set("first", {type:"api",key:"fixture"}), auth.remove("first")]) {
