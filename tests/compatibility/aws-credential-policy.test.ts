@@ -6,7 +6,9 @@ import { telegramAwsCredentialPolicy } from "../../scripts/telegram-aws-credenti
 
 const packageDir = process.env.OPENCODE_PACKAGE_DIR
 if (!packageDir) throw new Error("OPENCODE_PACKAGE_DIR is required for SDK policy verification")
-const sdk = path.join(packageDir, "node_modules/@aws-sdk/credential-providers")
+// Resolve from the runtime importer, not an installation-layout assumption.
+// The frozen workspace install may place this dependency at the tree root.
+const sdk = Bun.resolveSync("@aws-sdk/credential-providers", packageDir)
 
 async function probe(config: string, credentials: string, body: string, env: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "core-aws-policy-"))

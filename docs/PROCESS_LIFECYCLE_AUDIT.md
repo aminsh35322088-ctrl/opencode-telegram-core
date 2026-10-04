@@ -402,3 +402,23 @@ LSP failures. The four initial categories pass under isolated idle execution and
 exact-source headless CI is green. The new common gate is serialized and green;
 actual production cumulative verification must still be repeated without that
 resource overlap. This records failed evidence rather than treating reruns as proof.
+
+### Scoped installation and escaped-tree evidence
+
+The hoisted compiled build exposed five policy-test failures caused by a hardcoded
+package-local `node_modules` path, not the AWS rejection policy. SDK verification
+now resolves from the actual runtime importer with `Bun.resolveSync`. Seven bundled
+provider-policy tests/29 assertions pass. Serialized compiled verification passes
+362 cumulative tests/two expected skips, all five shell race repeats, helper15,
+compiled surface6/execution15 (including uncertain shutdown), and compatibility10.
+The binary built from `58ce9b2` is114,669,696 bytes; its graph remains exclusion-clean.
+This is local compiled evidence, not exact-successor CI/Railway verification.
+
+The next ownership risk is now causal, not just a documentation concern:
+[the escaped-descendant probe](../tests/diagnostics/custom-process-tree/README.md)
+reproduces successful custom-tool cleanup releasing admission while a captured
+descendant in a separate process group survives. Pinned Playwright implementation
+inspection confirms its daemon and browser use separate groups. Existing tests
+called "detached processes" cover an admitted detached group, not descendants that
+create another group. Group-only cleanup must not be described as full process-tree
+ownership. Shared tree retirement and hard-crash containment remain RC blockers.
