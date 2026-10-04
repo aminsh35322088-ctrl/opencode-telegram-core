@@ -6,3 +6,4 @@
 0006-telegram-event-provenance.patch
 0007-telegram-service-retry-cancellation.patch
 0008-telegram-workspace-retirement.patch
+0009-telegram-mcp-oauth-ownership.patch

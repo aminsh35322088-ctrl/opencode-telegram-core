@@ -168,3 +168,10 @@ This closes the reproduced shared retirement regressions, not every interrupted
 bootstrap/helper acquisition, remote MCP/OAuth or persistent-browser boundary.
 Broader resource, concurrency and crash/restart gates remain open. Pre.9 does not
 contain this candidate; no RC/stable is published. Bot remains frozen.
+
+### Remote MCP/OAuth candidate after PR26
+
+See [remote MCP/OAuth ownership checkpoint](MCP_OAUTH_OWNERSHIP.md). Real SDK/HTTP
+regressions confirm this remains a required production boundary. Its workspace
+owner and callback-state correction is on `stabilize/core-mcp-lifetime`, pending
+cumulative and actual compiled-runtime validation. Bot and releases remain frozen.

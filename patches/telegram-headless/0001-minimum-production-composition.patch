@@ -61,7 +61,7 @@ diff --git a/packages/opencode/src/server/server.ts b/packages/opencode/src/serv
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
-@@ -31,7 +31,6 @@
+@@ -33,7 +33,6 @@
  import { InstanceState } from "@/effect/instance-state"
  import { McpCatalog } from "./catalog"
  import { McpEvent } from "@opencode-ai/schema/mcp-event"
@@ -69,7 +69,7 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
  
  const DEFAULT_TIMEOUT = 30_000
  const CLIENT_OPTIONS = {
-@@ -208,7 +207,6 @@
+@@ -225,7 +224,6 @@
    Effect.gen(function* () {
      const auth = yield* McpAuth.Service
      const events = yield* EventV2Bridge.Service
@@ -77,8 +77,8 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
  
      type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
  
-@@ -900,52 +898,6 @@
-       )
+@@ -970,30 +968,6 @@
+       }).pipe(Effect.onExit(exit => Exit.isFailure(exit) ? closeClient(s, mcpName) : Effect.void)))
      })
  
 -    const authenticate = Effect.fn("MCP.authenticate")(function* (
@@ -86,28 +86,12 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
 -      onAuthorization?: (authorizationUrl: string) => void,
 -    ) {
 -      const result = yield* startAuth(mcpName)
--      if (!result.authorizationUrl) {
--        const client = "client" in result ? result.client : undefined
--        const mcpConfig = yield* requireMcpConfig(mcpName).pipe(
--          Effect.tapError(() => Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)),
--        )
--
--        const listed = client
--          ? client.getServerCapabilities()?.tools
--            ? yield* McpCatalog.defs(client, mcpConfig.timeout)
--            : []
--          : undefined
--        if (!client || !listed) {
--          yield* Effect.tryPromise(() => client?.close() ?? Promise.resolve()).pipe(Effect.ignore)
--          return { status: "failed", error: "Failed to get tools" } satisfies Status
--        }
--
--        const s = yield* InstanceState.get(state)
--        yield* auth.clearOAuthState(mcpName)
--        return yield* storeClient(s, mcpName, client, listed, client.getInstructions()?.trim(), mcpConfig.timeout)
--      }
--
--      const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState, mcpName)
+-      if (!result.authorizationUrl) return { status: "connected" } satisfies Status
+-      const s = yield* InstanceState.get(state)
+-      const flow = s.oauthFlows.get(mcpName)
+-      if (!flow || flow.oauthState !== result.oauthState) throw new Error("OAuth flow retired")
+-      yield* Effect.promise(() => McpOAuthCallback.ensureRunning(flow.provider.redirectUrl))
+-      const callbackPromise = McpOAuthCallback.waitForCallback(result.oauthState)
 -      onAuthorization?.(result.authorizationUrl)
 -
 -      yield* browser.open(result.authorizationUrl).pipe(
@@ -118,19 +102,13 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
 -
 -      const code = yield* Effect.promise(() => callbackPromise)
 -
--      const storedState = yield* auth.getOAuthState(mcpName)
--      if (storedState !== result.oauthState) {
--        yield* auth.clearOAuthState(mcpName)
--        throw new Error("OAuth state mismatch - potential CSRF attack")
--      }
--      yield* auth.clearOAuthState(mcpName)
--      return yield* finishAuth(mcpName, code)
+-      return yield* finishAuth(mcpName, code, result.oauthState)
 -    })
 -
-     const finishAuth = Effect.fn("MCP.finishAuth")(function* (mcpName: string, authorizationCode: string) {
-       yield* requireMcpConfig(mcpName)
-       const pending = pendingOAuthTransports.get(mcpName)
-@@ -1015,7 +967,7 @@
+     const finishAuth = Effect.fn("MCP.finishAuth")(function* (mcpName: string, authorizationCode: string, oauthState?: string) {
+       const s = yield* InstanceState.get(state)
+       return yield* withOperation(s, mcpName, Effect.gen(function* () {
+@@ -1069,7 +1043,7 @@
        getPrompt,
        readResource,
        startAuth,
@@ -139,7 +117,7 @@ diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/inde
        finishAuth,
        removeAuth,
        supportsOAuth,
-@@ -1030,7 +982,7 @@
+@@ -1084,7 +1058,7 @@
  export const node = LayerNode.make({
    service: Service,
    layer: layer,
@@ -823,7 +801,7 @@ diff --git a/packages/opencode/src/server/routes/instance/httpapi/api.ts b/packa
 diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
 --- a/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
 +++ b/packages/opencode/src/server/routes/instance/httpapi/groups/mcp.ts
-@@ -90,18 +90,6 @@
+@@ -91,18 +91,6 @@
                "Complete OAuth authentication for a Model Context Protocol (MCP) server using the authorization code.",
            }),
          ),

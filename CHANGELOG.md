@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Candidate remote MCP/OAuth ownership: scope handshakes to the original workspace, keep PKCE/nonce private, require callback state, abort and join remote requests before replacement, and fence credential writes inside the file lock. See `docs/MCP_OAUTH_OWNERSHIP.md` for validation and remaining gates; not yet published.
+
 - Correct Telegram Core to the audited current Bot contract: 41 production endpoints, no full upstream parity. Exclude PTY, v2/workspace/control/UI routes, sharing, mDNS, Console integration, Code Mode/TypeScript and FFF native search; preserve required agent/MCP/LSP/files/plugin/native capabilities and all closed invariants.
 - Freeze the model catalog for reproducible candidates; enforce graph exclusion and a 120 MB production budget. Add real compiled model/SSE/shell/MCP/auth regressions and a dedicated actual-runtime Railway validation image.
 - Retain unused native v2 adapters and future live-control APIs only in compatibility/debug tooling. No Bot migration or RC/stable claim.
