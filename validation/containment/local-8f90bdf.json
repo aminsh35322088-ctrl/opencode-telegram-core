@@ -1,0 +1,160 @@
+{
+  "boot": "d695afc0-77a9-4ebb-b077-07e665c54b55",
+  "binarySha256": "fbe2119a92f2bd2d9906a01477f0b3720b091bf5154043055ac6d9bb9e07b52b",
+  "build": {
+    "upstreamVersion": "1.18.33",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "telegramCoreCommit": "8f90bdff019335e2e2500b33fa07598b786bffc3",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "runtimeProfile": "telegram-headless",
+    "embeddedWebUi": false
+  },
+  "cases": {
+    "normalTermPaused": {
+      "before": {
+        "pid": 1046,
+        "state": "T",
+        "ppid": 1027,
+        "group": 1046,
+        "session": 1046,
+        "started": "51690",
+        "namespace": "pid:[4026532200]"
+      },
+      "after": null,
+      "exit": 0
+    },
+    "bunKillAndReplacement": {
+      "before": {
+        "pid": 1066,
+        "state": "T",
+        "ppid": 1047,
+        "group": 1066,
+        "session": 1066,
+        "started": "52009",
+        "namespace": "pid:[4026532200]"
+      },
+      "after": {
+        "pid": 1066,
+        "state": "T",
+        "ppid": 1018,
+        "group": 1066,
+        "session": 1066,
+        "started": "52009",
+        "namespace": "pid:[4026532200]"
+      },
+      "replacementPID": 1067,
+      "afterReplacement": {
+        "pid": 1066,
+        "state": "T",
+        "ppid": 1018,
+        "group": 1066,
+        "session": 1066,
+        "started": "52009",
+        "namespace": "pid:[4026532200]"
+      }
+    },
+    "doubleForkEscape": {
+      "captured": {
+        "pid": 1096,
+        "state": "S",
+        "ppid": 1018,
+        "group": 1095,
+        "session": 1095,
+        "started": "52399",
+        "namespace": "pid:[4026532200]"
+      },
+      "afterDispose": {
+        "pid": 1096,
+        "state": "S",
+        "ppid": 1018,
+        "group": 1095,
+        "session": 1095,
+        "started": "52399",
+        "namespace": "pid:[4026532200]"
+      },
+      "disposed": true
+    }
+  },
+  "errors": [],
+  "environment": {
+    "self": {
+      "pid": 1019,
+      "state": "R",
+      "ppid": 1018,
+      "group": 1014,
+      "session": 1014,
+      "started": "51406",
+      "namespace": "pid:[4026532200]"
+    },
+    "init": {
+      "pid": 1,
+      "state": "S",
+      "ppid": 0,
+      "group": 0,
+      "session": 0,
+      "started": "22",
+      "namespace": "pid:[4026532200]"
+    },
+    "initCmdline": "tail -f /dev/null ",
+    "status": [
+      "NSpid:\t1019",
+      "CapInh:\t0000000000000000",
+      "CapPrm:\t0000000000000000",
+      "CapEff:\t0000000000000000",
+      "CapBnd:\t000001ffffffffff",
+      "CapAmb:\t0000000000000000",
+      "NoNewPrivs:\t0",
+      "Seccomp:\t0",
+      "Seccomp_filters:\t0"
+    ],
+    "cgroup": "0::/\n",
+    "cgroupMounts": [
+      "59 58 0:24 /.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:8 - cgroup2 cgroup2 rw,nsdelegate"
+    ],
+    "cgroupAccess": {
+      "cgroup.procs": {
+        "exists": true,
+        "writable": false
+      },
+      "cgroup.freeze": {
+        "exists": true,
+        "writable": false
+      },
+      "cgroup.kill": {
+        "exists": true,
+        "writable": false
+      }
+    },
+    "delegationMkdir": {
+      "errno": 13,
+      "type": "PermissionError"
+    },
+    "namespaceOperations": {
+      "unshareUserPidMount": "0 0",
+      "setnsOwnPid": "-1 1"
+    }
+  },
+  "armed": {
+    "runtime": {
+      "pid": 1097,
+      "state": "R",
+      "ppid": 1019,
+      "group": 1014,
+      "session": 1014,
+      "started": "52424",
+      "namespace": "pid:[4026532200]"
+    },
+    "pausedShell": {
+      "pid": 1117,
+      "state": "T",
+      "ppid": 1097,
+      "group": 1117,
+      "session": 1117,
+      "started": "52701",
+      "namespace": "pid:[4026532200]"
+    }
+  },
+  "ready": true,
+  "localTestHarness": "outer test-only subreaper; no production init claim"
+}

@@ -74,6 +74,171 @@ def plugin_registry():
     return registry
 
 class ProductionExecution(unittest.TestCase):
+    def test_compiled_shutdown_reports_uncertain_retirement(self):
+        roots = []; registry = plugin_registry()
+        def configure(root, env):
+            roots.append(root)
+            directory = root / 'plugin-config'; directory.mkdir()
+            plugin = directory / 'shutdown-plugin.js'
+            plugin.write_text("export const first = async () => ({async dispose(){await Bun.write(" +
+                json.dumps(str(root / 'first-retired')) + ", 'attempted');throw Error('fixture shutdown uncertainty')}});\n" +
+                "export const second = async () => ({async dispose(){await Bun.write(" +
+                json.dumps(str(root / 'second-retired')) + ", 'retired')}});\n")
+            (directory / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+            env['NPM_CONFIG_REGISTRY'] = f'http://127.0.0.1:{registry.server_port}/'
+            env['OPENCODE_CONFIG_DIR'] = str(directory)
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': [plugin.as_uri()]})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                Client(server.base).request('GET', '/agent', timeout=30)
+                reports = queue.Queue()
+                def observe_shutdown():
+                    for line in server.process.stderr:
+                        if 'Core shutdown incomplete; retirement authority retained' in line:
+                            reports.put(line); return
+                observer = threading.Thread(target=observe_shutdown, daemon=True); observer.start()
+                server.process.terminate()
+                self.assertIn('retirement authority retained', reports.get(timeout=15))
+                observer.join(3); self.assertFalse(observer.is_alive())
+                self.assertIsNone(server.process.poll(), 'uncertain owner exited before confirmed cleanup')
+                self.assertTrue((roots[0] / 'first-retired').exists(), 'shutdown skipped failing cleanup')
+                self.assertTrue((roots[0] / 'second-retired').exists(), 'shutdown skipped another disposer')
+        finally:
+            registry.shutdown(); registry.server_close()
+
+    def test_compiled_failed_plugin_retirement_fences_replacement(self):
+        roots = []; registry = plugin_registry()
+        def configure(root, env):
+            roots.append(root)
+            config_dir = root / 'plugin-config'; config_dir.mkdir()
+            plugin = config_dir / 'retirement-plugin.js'
+            marker = root / 'other-plugin-retired'
+            plugin.write_text("export const first = async () => ({dispose(){throw Error('fixture plugin cleanup uncertain')}});\n" +
+                "export const second = async () => ({async dispose(){await Bun.write(" + json.dumps(str(marker)) + ", 'retired')}});\n")
+            (config_dir / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+            env['NPM_CONFIG_REGISTRY'] = f'http://127.0.0.1:{registry.server_port}/'
+            env['OPENCODE_CONFIG_DIR'] = str(config_dir)
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': [plugin.as_uri()]})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); c.request('GET', '/agent', timeout=30)
+                with self.assertRaises(HttpError): c.request('POST', '/global/dispose', timeout=15)
+                self.assertTrue((roots[0] / 'other-plugin-retired').exists(), 'one failed hook skipped another disposer')
+                with self.assertRaises(HttpError): c.request('GET', '/agent', timeout=15)
+        finally: registry.shutdown(); registry.server_close()
+
+    def test_retained_plugin_sdk_can_persist_provider_credentials(self):
+        roots = []; registry = plugin_registry()
+        def configure(root, env):
+            roots.append(root)
+            config_dir = root / 'plugin-config'; config_dir.mkdir()
+            plugin = config_dir / 'credential-plugin.js'
+            plugin.write_text("export default async ({client}) => { const result = await client.auth.set({path:{id:'plugin-fixture'},body:{type:'api',key:'fixture'}}); if(result.error) throw Error('credential publication failed'); return {} };\n")
+            (config_dir / '.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+            env['NPM_CONFIG_REGISTRY'] = f'http://127.0.0.1:{registry.server_port}/'
+            env['OPENCODE_CONFIG_DIR'] = str(config_dir)
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': [plugin.as_uri()]})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); c.request('GET', '/agent', timeout=30)
+                paths = list((roots[0] / 'data').rglob('auth.json'))
+                self.assertEqual(len(paths), 1, 'retained plugin SDK could not publish credentials')
+                self.assertIn('plugin-fixture', json.loads(paths[0].read_text()))
+                self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+        finally: registry.shutdown(); registry.server_close()
+
+    def test_compiled_azure_cli_credentials_fail_closed_without_launch(self):
+        roots = []
+        def configure(root, env):
+            roots.append(root)
+            binary_dir = root / 'bin'; binary_dir.mkdir()
+            helper = binary_dir / 'az'
+            helper.write_text('#!' + sys.executable + '\nimport pathlib,json\npathlib.Path(' +
+                repr(str(root / 'azure-helper-started')) + ').write_text("started")\n' +
+                'print(json.dumps({"accessToken":"fixture","expires_on":4102444800}))\n')
+            helper.chmod(0o755)
+            env['PATH'] = str(binary_dir) + ':' + env.get('PATH', '')
+            env['OPENCODE_AUTH_CONTENT'] = json.dumps({'azure': {'type': 'oauth',
+                'access': 'fixture', 'refresh': 'fixture', 'expires': 4102444800000}})
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'provider': {'azure': {
+                'options': {'resourceName': 'fixture', 'baseURL': 'http://127.0.0.1:1'},
+                'models': {'fixture': {'name': 'Fixture', 'limit': {'context': 32000, 'output': 1024}}}}}})
+        with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+            c = Client(server.base); sid = c.request('POST', '/session', {})['id']
+            c.request('POST', f'/session/{sid}/message', {'parts': [{'type': 'text', 'text': 'fixture'}],
+                'model': {'providerID': 'azure', 'modelID': 'fixture'}}, timeout=15)
+            history = json.dumps(c.request('GET', f'/session/{sid}/message'))
+            self.assertIn('Azure CLI OAuth is unsupported in Telegram Core', history)
+            self.assertFalse((roots[0] / 'azure-helper-started').exists())
+            self.assertNotIn(sid, c.request('GET', '/session/status'))
+            self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+
+    def test_compiled_azure_api_key_inference_remains_supported(self):
+        provider = ThreadingHTTPServer(('127.0.0.1', 0), Model)
+        thread = threading.Thread(target=provider.serve_forever, daemon=True); thread.start()
+        def configure(root, env):
+            env['OPENCODE_AUTH_CONTENT'] = json.dumps({'azure': {'type': 'api', 'key': 'fixture'}})
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'permission': 'allow', 'provider': {'azure': {
+                'options': {'resourceName': 'fixture', 'baseURL': f'http://127.0.0.1:{provider.server_port}/v1',
+                            'useCompletionUrls': True},
+                'models': {'fixture': {'name': 'Fixture', 'limit': {'context': 32000, 'output': 1024}}}}}})
+        try:
+            with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+                c = Client(server.base); sid = c.request('POST', '/session', {})['id']
+                c.request('POST', f'/session/{sid}/message', {'parts': [{'type': 'text', 'text': 'fixture'}],
+                    'model': {'providerID': 'azure', 'modelID': 'fixture'}}, timeout=30)
+                history = json.dumps(c.request('GET', f'/session/{sid}/message'))
+                self.assertIn('Telegram compiled execution complete', history)
+                self.assertNotIn(sid, c.request('GET', '/session/status'))
+                self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+        finally:
+            provider.shutdown(); provider.server_close(); thread.join(3)
+
+    def test_compiled_aws_process_credentials_fail_closed_without_launch(self):
+        roots = []
+        def configure(root, env):
+            roots.append(root)
+            helper = root / 'aws-helper.py'
+            helper.write_text('import pathlib,json\npathlib.Path(' + repr(str(root / 'aws-helper-started')) + ').write_text("started")\nprint(json.dumps({"Version":1,"AccessKeyId":"fixture","SecretAccessKey":"fixture"}))\n')
+            config = root / 'aws-config'
+            config.write_text('[profile core-fixture]\ncredential_process = ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(helper)) + '\n')
+            credentials = root / 'aws-credentials'; credentials.write_text('')
+            env.update(AWS_CONFIG_FILE=str(config), AWS_SHARED_CREDENTIALS_FILE=str(credentials),
+                AWS_PROFILE='core-fixture', AWS_EC2_METADATA_DISABLED='true', OPENCODE_TELEGRAM_PROCESS_BUDGET='1')
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'permission': 'allow', 'provider': {
+                'amazon-bedrock': {'options': {'profile': 'core-fixture', 'region': 'us-east-1',
+                'endpoint': 'http://127.0.0.1:1'}, 'models': {'fixture': {'name': 'Fixture',
+                'limit': {'context': 32000, 'output': 1024}}}}}})
+        with Server(BINARY, readiness_path='/global/health', configure=configure) as server:
+            c = Client(server.base); sid = c.request('POST', '/session', {})['id']
+            c.request('POST', f'/session/{sid}/message', {'parts': [{'type': 'text', 'text': 'fixture'}],
+                'model': {'providerID': 'amazon-bedrock', 'modelID': 'fixture'}}, timeout=15)
+            history = json.dumps(c.request('GET', f'/session/{sid}/message'))
+            self.assertIn('credential_process is unsupported in Telegram Core', history)
+            self.assertFalse((roots[0] / 'aws-helper-started').exists())
+            self.assertTrue(c.request('POST', '/global/dispose', timeout=15))
+
+    def test_compiled_concurrent_credential_updates_preserve_all_accounts(self):
+        roots = []
+        with Server(BINARY, readiness_path='/global/health', configure=lambda root, env: roots.append(root)) as server:
+            c = Client(server.base); failures = queue.Queue(); barrier = threading.Barrier(12)
+            def update(index):
+                try:
+                    barrier.wait(5)
+                    self.assertTrue(c.request('PUT', '/auth/compiled-fixture-' + str(index),
+                        {'type': 'api', 'key': 'compiled-fixture-key'}, timeout=15))
+                except Exception as error: failures.put(error)
+            threads = [threading.Thread(target=update, args=(index,), daemon=True) for index in range(12)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join(20)
+            self.assertFalse(any(thread.is_alive() for thread in threads), 'credential request did not settle')
+            self.assertTrue(failures.empty(), list(failures.queue))
+            paths = list((roots[0] / 'data').rglob('auth.json'))
+            self.assertEqual(len(paths), 1)
+            self.assertEqual(set(json.loads(paths[0].read_text())), {'compiled-fixture-' + str(i) for i in range(12)})
+            self.assertTrue(c.request('DELETE', '/auth/compiled-fixture-0', timeout=15))
+            self.assertEqual(len(json.loads(paths[0].read_text())), 11)
+
     def test_compiled_orphan_oauth_callback_does_not_bootstrap_services(self):
         with OAuthPeer() as peer:
             def configure(root, env):

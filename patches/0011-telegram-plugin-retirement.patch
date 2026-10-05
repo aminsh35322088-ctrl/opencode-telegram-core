@@ -1,0 +1,148 @@
+diff --git a/packages/opencode/src/plugin/index.ts b/packages/opencode/src/plugin/index.ts
+index 6f05329..0133f60 100644
+--- a/packages/opencode/src/plugin/index.ts
++++ b/packages/opencode/src/plugin/index.ts
+@@ -25,6 +25,8 @@ import { SnowflakeCortexAuthPlugin } from "./snowflake-cortex"
+ import { Effect, Layer, Context } from "effect"
+ import { EffectBridge } from "@/effect/bridge"
+ import { InstanceState } from "@/effect/instance-state"
++import { assertContextActive } from "@/effect/instance-registry"
++import { withDeadline } from "@opencode-ai/core/telegram-deadline"
+ import { errorMessage } from "@/util/error"
+ import { PluginLoader } from "./loader"
+ import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
+@@ -111,16 +113,16 @@ function getLegacyPlugins(mod: Record<string, unknown>) {
+   return result
+ }
+ 
+-async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks: Hooks[]) {
++async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, loadHook: (start: () => Promise<Hooks>) => Promise<Hooks>) {
+   const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
+   if (plugin) {
+     await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
+-    hooks.push(await (plugin as PluginModule).server(input, load.options))
++    await loadHook(() => (plugin as PluginModule).server(input, load.options))
+     return
+   }
+ 
+   for (const server of getLegacyPlugins(load.mod)) {
+-    hooks.push(await server(input, load.options))
++    await loadHook(() => server(input, load.options))
+   }
+ }
+ 
+@@ -134,6 +136,48 @@ const layer = Layer.effect(
+     const state = yield* InstanceState.make<State>(
+       Effect.fn("Plugin.state")(function* (ctx) {
+         const hooks: Hooks[] = []
++        const initializing = new Set<Promise<unknown>>()
++        const disposing = new Map<Hooks, Promise<void>>()
++        let closing = false
++        function ownStartup<T>(start: () => Promise<T>): Promise<T> {
++          const operation = Promise.resolve().then(() => {
++            assertContextActive(ctx)
++            if (closing) throw new Error("Plugin workspace has retired")
++            return start()
++          })
++          initializing.add(operation)
++          void operation.then(() => initializing.delete(operation), () => initializing.delete(operation))
++          return operation
++        }
++        function disposeHook(hook: Hooks): Promise<void> {
++          const previous = disposing.get(hook)
++          if (previous) return previous
++          const retirement = Promise.resolve().then(() => hook.dispose?.()).then(() => undefined)
++          disposing.set(hook, retirement)
++          void retirement.catch(() => undefined)
++          return retirement
++        }
++        const loadHook = (start: () => Promise<Hooks>) => ownStartup(async () => {
++          const hook = await start()
++          hooks.push(hook)
++          if (closing) void disposeHook(hook)
++          return hook
++        })
++        // Register retirement before startup. The raw acquisition promises, not
++        // just their interruptible Effect waiters, own any late returned hooks.
++        yield* Effect.addFinalizer(() => Effect.promise(async () => {
++          closing = true
++          // Stop known resources before joining potentially stuck acquisition.
++          const knownCleanup = hooks.map(disposeHook)
++          await withDeadline(async () => {
++            await Promise.allSettled([...initializing, ...knownCleanup])
++            const exits = await Promise.allSettled(hooks.map(disposeHook))
++            const failures = exits.filter((exit): exit is PromiseRejectedResult => exit.status === "rejected")
++            if (failures.length) throw new AggregateError(failures.map(exit => exit.reason), "Plugin workspace cleanup failed")
++            hooks.length = 0
++            disposing.clear()
++          }, {timeoutMs: 5000, label: "Plugin workspace cleanup"})
++        }))
+         const bridge = yield* EffectBridge.make()
+ 
+         function publishPluginError(message: string) {
+@@ -168,14 +212,14 @@ const layer = Layer.effect(
+         }
+ 
+         for (const plugin of flags.disableDefaultPlugins ? [] : internalPlugins(flags)) {
+-          const init = yield* Effect.tryPromise({
+-            try: () => plugin(input),
++          yield* Effect.tryPromise({
++            try: () => loadHook(() => plugin(input)),
+             catch: errorMessage,
+           }).pipe(
+             Effect.tapError((error) => Effect.logError("failed to load internal plugin", { name: plugin.name, error })),
+             Effect.option,
+           )
+-          if (init._tag === "Some") hooks.push(init.value)
++          // loadHook registers returned ownership even after waiter interruption.
+         }
+ 
+         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
+@@ -183,7 +227,7 @@ const layer = Layer.effect(
+         }
+         if (plugins.length) yield* config.waitForDependencies()
+ 
+-        const loaded = yield* Effect.promise(() =>
++        const loaded = yield* Effect.promise(() => ownStartup(() =>
+           PluginLoader.loadExternal({
+             items: plugins,
+             kind: "server",
+@@ -215,14 +259,14 @@ const layer = Layer.effect(
+               },
+             },
+           }),
+-        )
++        ))
+         for (const load of loaded) {
+           if (!load) continue
+ 
+           // Keep plugin execution sequential so hook registration and execution
+           // order remains deterministic across plugin runs.
+           yield* Effect.tryPromise({
+-            try: () => applyPlugin(load, input, hooks),
++            try: () => ownStartup(() => applyPlugin(load, input, loadHook)),
+             catch: (err) => {
+               const message = errorMessage(err)
+               return message
+@@ -262,21 +306,6 @@ const layer = Layer.effect(
+         })
+         yield* Effect.addFinalizer(() => unsubscribe)
+ 
+-        yield* Effect.addFinalizer(() =>
+-          Effect.forEach(
+-            hooks,
+-            (hook) =>
+-              Effect.tryPromise({
+-                try: () => Promise.resolve(hook.dispose?.()),
+-                catch: errorMessage,
+-              }).pipe(
+-                Effect.tapError((error) => Effect.logError("plugin dispose hook failed", { error })),
+-                Effect.ignore,
+-              ),
+-            { discard: true },
+-          ),
+-        )
+-
+         return { hooks }
+       }),
+     )

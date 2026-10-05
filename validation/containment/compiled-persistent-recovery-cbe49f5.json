@@ -1,0 +1,26 @@
+{
+  "before": {
+    "session": "ses_ef7697833ffewll7Q606w6epl6",
+    "owner": {
+      "runId": "6152d561-5523-471a-aa2a-65bb0a82c6e5",
+      "paused": false,
+      "continuation": "live"
+    },
+    "physicallyPausedPid": 22646
+  },
+  "recovered": {
+    "runId": "6152d561-5523-471a-aa2a-65bb0a82c6e5",
+    "paused": true,
+    "continuation": "unavailable"
+  },
+  "staleControlsRejected": true,
+  "noImplicitReplay": true,
+  "explicitAbortClearedIntent": true,
+  "fresh": {
+    "runId": "d1f01c09-7f49-4b7b-b65f-bd4dce130ed3",
+    "paused": false,
+    "continuation": "live"
+  },
+  "source": "cbe49f5c6e2ca8e411b10b8a08638e951abb7a64",
+  "boundary": "Local compiled durable-state semantics; not container retirement proof"
+}

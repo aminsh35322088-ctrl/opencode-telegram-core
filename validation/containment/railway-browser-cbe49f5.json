@@ -1,0 +1,86 @@
+{
+  "build": {
+    "embeddedWebUi": false,
+    "runtimeBytes": 115886208,
+    "runtimeMaxBytes": 120000000,
+    "runtimeProfile": "telegram-headless",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreCommit": "cbe49f5c6e2ca8e411b10b8a08638e951abb7a64",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "upstreamVersion": "1.18.33"
+  },
+  "sha256": "e13128b66031384cd5fb2789d47ef435b2610ec0645711496a3774934a999887",
+  "runtimeBytes": 115886208,
+  "browser": {
+    "build": {
+      "upstreamVersion": "1.18.33",
+      "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+      "telegramCoreCommit": "cbe49f5c6e2ca8e411b10b8a08638e951abb7a64",
+      "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+      "runtimeProfile": "telegram-headless",
+      "embeddedWebUi": false
+    },
+    "persistentGenerationHandoff": true,
+    "idleParked": true,
+    "exclusiveTopicPause": true,
+    "activeResumeSameDaemon": true,
+    "pausedAbortConfirmedEmpty": true,
+    "workspaceRetirementConfirmedEmpty": true,
+    "privateProfilesRetired": true,
+    "replacementDoesNotAdoptOldBrowser": true,
+    "browserTrees": 1,
+    "requestedResidentBrowserTrees": 1,
+    "foreignTopicWorkWhilePaused": true,
+    "capturedProcesses": 44,
+    "memory": {
+      "current": 477364224,
+      "maximum": "999997440",
+      "inactiveFile": 18526208,
+      "workingSet": 458838016,
+      "anon": 442834944,
+      "file": 18526208
+    },
+    "resourceObservations": {
+      "parked": {
+        "current": 647409664,
+        "maximum": "999997440",
+        "inactiveFile": 17780736,
+        "workingSet": 629628928,
+        "anon": 597020672,
+        "file": 26124288
+      },
+      "pausedBeforeForeignWork": {
+        "current": 654983168,
+        "maximum": "999997440",
+        "inactiveFile": 18100224,
+        "workingSet": 636882944,
+        "anon": 601714688,
+        "file": 27009024
+      }
+    }
+  },
+  "healthy": true,
+  "alive": true,
+  "completedWorkloads": 9,
+  "failures": [],
+  "idleBaseline": {
+    "rssKiB": 285912,
+    "cgroup": {
+      "memoryCurrentBytes": 264470528,
+      "memoryMaxBytes": 999997440,
+      "inactiveFileBytes": 14094336,
+      "workingSetBytes": 250376192,
+      "cpuUsageUsec": 51601149,
+      "processScopeCapabilities": {
+        "directoryWritable": false,
+        "procsWritable": false,
+        "freezePresent": true,
+        "killPresent": true
+      }
+    }
+  },
+  "deployment": "0f1bb68a-4824-4c5c-a117-5d3d660ace31",
+  "scope": "bounded candidate gate, not Bot adoption or long soak"
+}

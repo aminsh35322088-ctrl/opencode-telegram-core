@@ -1,0 +1,142 @@
+{
+  "runtimeSource": "8f90bdff019335e2e2500b33fa07598b786bffc3",
+  "observedAtUnixMs": 1791124343534,
+  "witnessDeployment": "c1d870f7-4673-4697-8883-8fa74043dfc0",
+  "scenarios": [
+    {
+      "name": "platformRestart",
+      "boot": "69421df5-4fd0-42b6-b0aa-127ed0df97f8",
+      "heartbeatCount": 213,
+      "firstHeartbeat": {
+        "receivedAt": 1791123919459,
+        "event": {
+          "kind": "heartbeat",
+          "boot": "69421df5-4fd0-42b6-b0aa-127ed0df97f8",
+          "pid": 101,
+          "namespace": "pid:[4026567268]"
+        }
+      },
+      "lastHeartbeat": {
+        "receivedAt": 1791123988431,
+        "event": {
+          "kind": "heartbeat",
+          "boot": "69421df5-4fd0-42b6-b0aa-127ed0df97f8",
+          "pid": 101,
+          "namespace": "pid:[4026567268]"
+        }
+      },
+      "actions": [],
+      "newBoot": "8dc15dcc-4265-4727-ad38-073279b7a8b2",
+      "newNamespace": "pid:[4026572870]",
+      "newBootObservedAtUnixMs": 1791123990483,
+      "platformAction": "railway_restart_service(deployment=f0e1317f-d9e7-4c0b-8d9d-87677083aec7)"
+    },
+    {
+      "name": "directChildExitWithoutCleanup",
+      "boot": "8dc15dcc-4265-4727-ad38-073279b7a8b2",
+      "heartbeatCount": 36,
+      "firstHeartbeat": {
+        "receivedAt": 1791124004236,
+        "event": {
+          "kind": "heartbeat",
+          "boot": "8dc15dcc-4265-4727-ad38-073279b7a8b2",
+          "pid": 103,
+          "namespace": "pid:[4026572870]"
+        }
+      },
+      "lastHeartbeat": {
+        "receivedAt": 1791124015558,
+        "event": {
+          "kind": "heartbeat",
+          "boot": "8dc15dcc-4265-4727-ad38-073279b7a8b2",
+          "pid": 103,
+          "namespace": "pid:[4026572870]"
+        }
+      },
+      "actions": [
+        {
+          "receivedAt": 1791124015636,
+          "event": {
+            "kind": "action",
+            "boot": "8dc15dcc-4265-4727-ad38-073279b7a8b2",
+            "action": "/exit-wrapper",
+            "pausedShell": {
+              "pid": 101,
+              "state": "T",
+              "ppid": 82,
+              "group": 101,
+              "session": 101,
+              "started": "1651364868",
+              "namespace": "pid:[4026572870]"
+            }
+          }
+        }
+      ],
+      "newBoot": "334a4373-1ade-4518-8b20-43af6f8cc175",
+      "newNamespace": "pid:[4026567268]",
+      "newBootObservedAtUnixMs": 1791124016984
+    },
+    {
+      "name": "compiledPrimaryBunSIGKILL",
+      "boot": "4506605e-1555-45b2-b94c-770ea77e7c63",
+      "heartbeatCount": 159,
+      "firstHeartbeat": {
+        "receivedAt": 1791124272931,
+        "event": {
+          "kind": "heartbeat",
+          "boot": "4506605e-1555-45b2-b94c-770ea77e7c63",
+          "pid": 107,
+          "namespace": "pid:[4026631830]"
+        }
+      },
+      "lastHeartbeat": {
+        "receivedAt": 1791124321680,
+        "event": {
+          "kind": "heartbeat",
+          "boot": "4506605e-1555-45b2-b94c-770ea77e7c63",
+          "pid": 107,
+          "namespace": "pid:[4026631830]"
+        }
+      },
+      "actions": [
+        {
+          "receivedAt": 1791124320076,
+          "event": {
+            "kind": "action",
+            "boot": "4506605e-1555-45b2-b94c-770ea77e7c63",
+            "action": "/primary-bun",
+            "pausedShell": {
+              "pid": 105,
+              "state": "T",
+              "ppid": 84,
+              "group": 105,
+              "session": 105,
+              "started": "4360252704",
+              "namespace": "pid:[4026631830]"
+            }
+          }
+        },
+        {
+          "receivedAt": 1791124321856,
+          "event": {
+            "kind": "primaryBunKill",
+            "boot": "4506605e-1555-45b2-b94c-770ea77e7c63",
+            "identity": {
+              "pid": 2,
+              "state": "S",
+              "ppid": 1,
+              "group": 2,
+              "session": 1,
+              "started": "4360250806",
+              "namespace": "pid:[4026631830]"
+            },
+            "ppid": 1
+          }
+        }
+      ],
+      "newBoot": "0b9956f7-14bb-473a-8a6a-58676deb9889",
+      "newNamespace": "pid:[4026582911]",
+      "newBootObservedAtUnixMs": 1791124323778
+    }
+  ]
+}

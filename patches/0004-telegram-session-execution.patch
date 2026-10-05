@@ -969,20 +969,31 @@ index 99f7aec..baa0eca 100644
    const permission = yield* Permission.Service
    const registry = yield* ToolRegistry.Service
 diff --git a/packages/opencode/src/tool/registry.ts b/packages/opencode/src/tool/registry.ts
-index 9167cb3..8792606 100644
+index 9167cb3..d822d3d 100644
 --- a/packages/opencode/src/tool/registry.ts
 +++ b/packages/opencode/src/tool/registry.ts
-@@ -3,6 +3,9 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
+@@ -3,6 +3,11 @@ import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
  import { Ripgrep } from "@opencode-ai/core/ripgrep"
  import { PlanExitTool } from "./plan"
  import { Session } from "@/session/session"
 +import { SessionRunState } from "@/session/run-state"
 +import { createToolProcessScope } from "@opencode-ai/core/telegram-tool-process"
++import { WorkspaceBrowsers } from "@opencode-ai/core/telegram-browser-process"
++import { assertContextActive } from "@/effect/instance-registry"
 +import { CurrentTelegramExecution, CurrentTelegramEpoch } from "@opencode-ai/core/telegram-execution-context"
  import { QuestionTool } from "./question"
  import { ShellTool } from "./shell"
  import { EditTool } from "./edit"
-@@ -145,13 +148,25 @@ const layer = Layer.effect(
+@@ -121,6 +126,8 @@ const layer = Layer.effect(
+     const state = yield* InstanceState.make<State>(
+       Effect.fn("ToolRegistry.state")(function* (ctx) {
+         const custom: Tool.Def[] = []
++        const browsers = new WorkspaceBrowsers(ctx.directory, () => assertContextActive(ctx))
++        yield* Effect.addFinalizer(() => Effect.promise(() => browsers.close()))
+ 
+         function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
+           // Plugin tools still expose Zod args publicly; keep that compatibility
+@@ -145,13 +152,26 @@ const layer = Layer.effect(
                  // Bridge the host's Effect-based `ask` into a Promise-returning
                  // function for the plugin to make sure context persists
                  const bridge = yield* EffectBridge.make()
@@ -994,6 +1005,7 @@ index 9167cb3..8792606 100644
 +                  toolCtx.sessionID,
 +                  ctx.directory,
 +                  toolCtx.abort,
++                  browsers,
 +                )
                  const pluginCtx: PluginToolContext = {
                    ...toolCtx,
@@ -1009,7 +1021,7 @@ index 9167cb3..8792606 100644
                  const output = typeof result === "string" ? result : result.output
                  const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                  const attachments = typeof result === "string" ? undefined : result.attachments
-@@ -435,6 +450,7 @@ export const node = LayerNode.make({
+@@ -435,6 +455,7 @@ export const node = LayerNode.make({
      Agent.node,
      Skill.node,
      Session.node,

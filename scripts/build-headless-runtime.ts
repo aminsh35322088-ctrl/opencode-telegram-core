@@ -1,23 +1,31 @@
-import path from "node:path"
+import path from "node:path";
+import {
+  telegramAwsCredentialPolicy,
+  telegramAzureCredentialPolicy,
+} from "./telegram-aws-credential-policy";
 
-const packageDir = process.env.OPENCODE_PACKAGE_DIR
-const output = process.env.OPENCODE_HEADLESS_OUTPUT
-if (!packageDir) throw new Error("OPENCODE_PACKAGE_DIR is required")
-if (!output) throw new Error("OPENCODE_HEADLESS_OUTPUT is required")
+const packageDir = process.env.OPENCODE_PACKAGE_DIR;
+const output = process.env.OPENCODE_HEADLESS_OUTPUT;
+if (!packageDir) throw new Error("OPENCODE_PACKAGE_DIR is required");
+if (!output) throw new Error("OPENCODE_HEADLESS_OUTPUT is required");
 
 // A checked-in snapshot fixes the catalog input across local/CI/Railway builds.
-process.env.MODELS_DEV_API_JSON = path.resolve(import.meta.dir, "../runtime/models-dev.json")
-process.chdir(packageDir)
-const generated = await import(path.join(packageDir, "script/generate.ts"))
+process.env.MODELS_DEV_API_JSON = path.resolve(
+  import.meta.dir,
+  "../runtime/models-dev.json",
+);
+process.chdir(packageDir);
+const generated = await import(path.join(packageDir, "script/generate.ts"));
 
 const required = (name: string): string => {
-  const value = process.env[name]
-  if (!value) throw new Error(`${name} is required`)
-  return value
-}
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+};
 
 const result = await Bun.build({
   conditions: ["bun", "node"],
+  plugins: [telegramAwsCredentialPolicy, telegramAzureCredentialPolicy],
   tsconfig: "./tsconfig.json",
   external: ["node-gyp"],
   format: "esm",
@@ -46,16 +54,27 @@ const result = await Bun.build({
     OPENCODE_CHANNEL: JSON.stringify("telegram"),
     OPENCODE_LIBC: JSON.stringify("glibc"),
     "process.env.OPENTUI_LIBC": JSON.stringify("glibc"),
-    OPENCODE_TELEGRAM_CORE_VERSION: JSON.stringify(required("OPENCODE_TELEGRAM_CORE_VERSION")),
-    OPENCODE_TELEGRAM_CORE_COMMIT: JSON.stringify(required("OPENCODE_TELEGRAM_CORE_COMMIT")),
-    OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT: JSON.stringify(required("OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT")),
-    OPENCODE_TELEGRAM_CORE_SDK_REVISION: JSON.stringify(required("OPENCODE_TELEGRAM_CORE_SDK_REVISION")),
+    OPENCODE_TELEGRAM_CORE_VERSION: JSON.stringify(
+      required("OPENCODE_TELEGRAM_CORE_VERSION"),
+    ),
+    OPENCODE_TELEGRAM_CORE_COMMIT: JSON.stringify(
+      required("OPENCODE_TELEGRAM_CORE_COMMIT"),
+    ),
+    OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT: JSON.stringify(
+      required("OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT"),
+    ),
+    OPENCODE_TELEGRAM_CORE_SDK_REVISION: JSON.stringify(
+      required("OPENCODE_TELEGRAM_CORE_SDK_REVISION"),
+    ),
   },
-})
+});
 
 if (!result.success) {
-  for (const log of result.logs) console.error(log)
-  process.exit(1)
+  for (const log of result.logs) console.error(log);
+  process.exit(1);
 }
 
-await Bun.write(output + ".metafile.json", JSON.stringify(result.metafile, null, 2) + "\n")
+await Bun.write(
+  output + ".metafile.json",
+  JSON.stringify(result.metafile, null, 2) + "\n",
+);

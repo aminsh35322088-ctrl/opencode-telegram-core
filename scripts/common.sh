@@ -47,3 +47,14 @@ assert_safe_materialize_destination() {
     *) die "materialization destination must be under $core/.work or $tmp: $target" ;;
   esac
 }
+
+# Keep the pinned lock intact, but install only the runtime/SDK workspace closure.
+# Unused Console/Web previews must not make a Telegram build depend on an expired
+# upstream preview URL. Bun includes transitive workspace dependencies. Hoisting
+# preserves the pinned source's ambient SDK/type/build-tool lookup at the root.
+install_upstream_dependencies() {
+  local tree="${1:?upstream tree required}"
+  local bun="${2:?Bun executable required}"
+  "$bun" install --cwd "$tree" --frozen-lockfile --linker hoisted \
+    --filter './packages/opencode' --filter './packages/sdk/js'
+}

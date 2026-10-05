@@ -7,6 +7,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 class Handler(BaseHTTPRequestHandler):
+    # Give this deterministic loopback fixture an explicit HTTP/1.1 connection
+    # contract. Python's implicit HTTP/1.0 close races Bun's socket reuse;
+    # production correctly fails closed when token transport is uncertain.
+    protocol_version = 'HTTP/1.1'
     def log_message(self, *args): pass
     def reply(self, payload=None, status=200, headers=None):
         raw = b'' if payload is None else json.dumps(payload).encode()

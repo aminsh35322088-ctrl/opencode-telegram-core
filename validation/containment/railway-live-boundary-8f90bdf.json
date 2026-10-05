@@ -1,0 +1,170 @@
+{
+  "boot": "e7331217-d40e-45d7-bc12-e19ba0796662",
+  "binarySha256": "15556672ad7579b13abf25b186cf5711aae147d4e8003cc0c069521a58355104",
+  "build": {
+    "upstreamVersion": "1.18.33",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "telegramCoreCommit": "8f90bdff019335e2e2500b33fa07598b786bffc3",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "runtimeProfile": "telegram-headless",
+    "embeddedWebUi": false
+  },
+  "cases": {
+    "normalTermPaused": {
+      "before": {
+        "pid": 32,
+        "state": "T",
+        "ppid": 11,
+        "group": 32,
+        "session": 32,
+        "started": "1651340032",
+        "namespace": "pid:[4026612952]"
+      },
+      "after": null,
+      "exit": 0
+    },
+    "bunKillAndReplacement": {
+      "before": {
+        "pid": 53,
+        "state": "T",
+        "ppid": 33,
+        "group": 53,
+        "session": 53,
+        "started": "1651340303",
+        "namespace": "pid:[4026612952]"
+      },
+      "after": {
+        "pid": 53,
+        "state": "T",
+        "ppid": 1,
+        "group": 53,
+        "session": 53,
+        "started": "1651340303",
+        "namespace": "pid:[4026612952]"
+      },
+      "replacementPID": 54,
+      "afterReplacement": {
+        "pid": 53,
+        "state": "T",
+        "ppid": 1,
+        "group": 53,
+        "session": 53,
+        "started": "1651340303",
+        "namespace": "pid:[4026612952]"
+      }
+    },
+    "doubleForkEscape": {
+      "captured": {
+        "pid": 83,
+        "state": "S",
+        "ppid": 1,
+        "group": 82,
+        "session": 82,
+        "started": "1651340666",
+        "namespace": "pid:[4026612952]"
+      },
+      "afterDispose": {
+        "pid": 83,
+        "state": "S",
+        "ppid": 1,
+        "group": 82,
+        "session": 82,
+        "started": "1651340666",
+        "namespace": "pid:[4026612952]"
+      },
+      "disposed": true
+    }
+  },
+  "errors": [],
+  "environment": {
+    "self": {
+      "pid": 2,
+      "state": "R",
+      "ppid": 1,
+      "group": 2,
+      "session": 1,
+      "started": "1651339779",
+      "namespace": "pid:[4026612952]"
+    },
+    "init": {
+      "pid": 1,
+      "state": "S",
+      "ppid": 0,
+      "group": 1,
+      "session": 1,
+      "started": "1651339760",
+      "namespace": "pid:[4026612952]"
+    },
+    "initCmdline": "/usr/bin/tini -s -- (diagnostic command omitted; v1 SHA256 recorded)",
+    "status": [
+      "NSpid:\t2",
+      "CapInh:\t0000000000000000",
+      "CapPrm:\t00000000800405fb",
+      "CapEff:\t00000000800405fb",
+      "CapBnd:\t00000000800405fb",
+      "CapAmb:\t0000000000000000",
+      "NoNewPrivs:\t0",
+      "Seccomp:\t2",
+      "Seccomp_filters:\t3"
+    ],
+    "cgroup": "0::/\n",
+    "cgroupMounts": [
+      "118730 117789 0:27 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot"
+    ],
+    "cgroupAccess": {
+      "cgroup.procs": {
+        "exists": true,
+        "writable": false
+      },
+      "cgroup.freeze": {
+        "exists": true,
+        "writable": false
+      },
+      "cgroup.kill": {
+        "exists": true,
+        "writable": false
+      }
+    },
+    "delegationMkdir": {
+      "errno": 30,
+      "type": "OSError"
+    },
+    "namespaceOperations": {
+      "unshareUserPidMount": "-1 13",
+      "setnsOwnPid": "-1 1"
+    }
+  },
+  "armed": {
+    "runtime": {
+      "pid": 84,
+      "state": "R",
+      "ppid": 2,
+      "group": 2,
+      "session": 1,
+      "started": "1651340689",
+      "namespace": "pid:[4026612952]"
+    },
+    "pausedShell": {
+      "pid": 103,
+      "state": "T",
+      "ppid": 84,
+      "group": 103,
+      "session": 103,
+      "started": "1651340918",
+      "namespace": "pid:[4026612952]"
+    }
+  },
+  "ready": true,
+  "afterKillBun": {
+    "pid": 103,
+    "state": "T",
+    "ppid": 1,
+    "group": 103,
+    "session": 103,
+    "started": "1651340918",
+    "namespace": "pid:[4026612952]"
+  },
+  "deployment": "f0e1317f-d9e7-4c0b-8d9d-87677083aec7",
+  "probeSha256": "0057f80762b0e2d7d32df7a2dec523a144df91124dd267816a5049e313b6f369"
+}

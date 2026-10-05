@@ -11,14 +11,18 @@ ARG CORE_SOURCE_COMMIT
 ENV CORE_SOURCE_COMMIT=${CORE_SOURCE_COMMIT:-${RAILWAY_GIT_COMMIT_SHA}}
 RUN test -n "$CORE_SOURCE_COMMIT" && ./scripts/build-runtime.sh
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends tini python3 git ripgrep ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM node:22.14.0-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends tini dumb-init python3 git ripgrep ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN npm install --global "@playwright/cli@0.1.18" && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright-cli install-browser chromium --with-deps && npm cache clean --force
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 WORKDIR /validation
 COPY --from=build /core/dist/runtime/opencode /usr/local/bin/opencode
 COPY --from=build /core/dist/build-info.json ./build-info.json
 COPY tests/compatibility ./tests
 COPY validation/railway/compiled-runtime.py ./compiled-runtime.py
-ENV PORT=3000
+COPY tests/diagnostics/linux-process-scope/compiled_browser.py ./diagnostics/linux-process-scope/compiled_browser.py
+COPY tests/diagnostics/railway-boundary ./boundary
+ENV PORT=3000 COMPILED_FIXTURE_TESTS=/validation/tests
 EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 CMD ["python3", "-u", "/validation/compiled-runtime.py"]

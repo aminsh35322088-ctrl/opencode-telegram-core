@@ -66,6 +66,23 @@ test.skipIf(process.platform !== "linux")("failed LSP spawn returns admission wi
   expect(telegramProcessBudgetSnapshot().activeCount).toBe(count)
 })
 
+test.skipIf(process.platform !== "linux")("workspace service retirement joins descendants outside its original group", async () => {
+  const count = telegramProcessBudgetSnapshot().activeCount
+  const script = "import os,time; child=os.fork();\nif child==0:\n os.setsid(); print(os.getpid(),flush=True);\n while True: time.sleep(1)\nwhile True: time.sleep(1)"
+  const proc = launchLsp("python3", ["-c", script])
+  const [chunk] = await once(proc.stdout, "data")
+  const descendant = Number(chunk.toString().trim())
+  try {
+    expect(descendant).toBeGreaterThan(0)
+    await Process.stop(proc)
+    expect(await exists(descendant)).toBe(false)
+    expect(telegramProcessBudgetSnapshot().activeCount).toBe(count)
+  } finally {
+    if (await exists(descendant)) process.kill(descendant, "SIGKILL")
+    await proc.exited
+  }
+})
+
 test.skipIf(process.platform !== "linux")("uncertain service cleanup retains admission", async () => {
   const pid = 2147483001
   const proc = Object.assign(new EventEmitter(), { pid }) as ChildProcess
@@ -124,6 +141,23 @@ test.skipIf(process.platform !== "linux")("workspace service cleanup remains bou
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
       }
     }
+    await proc.exited
+  }
+})
+
+test.skipIf(process.platform !== "linux")("ordinary helper success joins a double-fork outside its original group", async () => {
+  const count = telegramProcessBudgetSnapshot().activeCount
+  const script = "import os,time; p=os.fork();\nif p==0:\n os.setsid(); p=os.fork();\n if p==0:\n  print(os.getpid(),flush=True); time.sleep(60)\n else: os._exit(0)\nelse:\n time.sleep(.1); os._exit(0)"
+  const proc = Process.spawn(["python3", "-c", script], { stdout: "pipe" })
+  const [chunk] = await once(proc.stdout!, "data")
+  const descendant = Number(chunk.toString().trim())
+  try {
+    expect(descendant).toBeGreaterThan(0)
+    expect(await proc.exited).toBe(0)
+    expect(await exists(descendant)).toBe(false)
+    expect(telegramProcessBudgetSnapshot().activeCount).toBe(count)
+  } finally {
+    if (await exists(descendant)) process.kill(descendant, "SIGKILL")
     await proc.exited
   }
 })

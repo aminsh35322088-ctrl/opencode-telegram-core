@@ -1,0 +1,115 @@
+{
+  "startingSource": "7c1b58314ab9949bff5343d6a67743445195b12c",
+  "candidateScopeSha256": "d8a6ee32103df3615a02287a8ca5c909612077d0c410369058f17a25cd6197e4",
+  "focusedCore": {
+    "passed": 28,
+    "skipped": 1,
+    "failed": 0,
+    "typecheck": "passed"
+  },
+  "scopeProbe": {
+    "cases": 5,
+    "passed": 5,
+    "runnerKillCase": "EOF without retirement, live survivor; external container recovery required"
+  },
+  "pinnedBrowser": {
+    "pinned_cli": "0.1.18",
+    "pinned_playwright": "1.63.0-alpha-2026-08-05",
+    "processes": 11,
+    "adopted_crashpad": 2,
+    "persistent_calls": 3,
+    "paused_all_captured_processes": true,
+    "paused_retirement_confirmed_empty": true,
+    "captured_identities": [
+      {
+        "pid": 6463,
+        "state": "S",
+        "ppid": 6462,
+        "start": "657447"
+      },
+      {
+        "pid": 6475,
+        "state": "S",
+        "ppid": 6463,
+        "start": "657478"
+      },
+      {
+        "pid": 6477,
+        "state": "S",
+        "ppid": 6462,
+        "start": "657481"
+      },
+      {
+        "pid": 6479,
+        "state": "S",
+        "ppid": 6475,
+        "start": "657481"
+      },
+      {
+        "pid": 6481,
+        "state": "S",
+        "ppid": 6475,
+        "start": "657481"
+      },
+      {
+        "pid": 6482,
+        "state": "S",
+        "ppid": 6462,
+        "start": "657481"
+      },
+      {
+        "pid": 6503,
+        "state": "S",
+        "ppid": 6479,
+        "start": "657484"
+      },
+      {
+        "pid": 6516,
+        "state": "S",
+        "ppid": 6475,
+        "start": "657506"
+      },
+      {
+        "pid": 6517,
+        "state": "S",
+        "ppid": 6481,
+        "start": "657508"
+      },
+      {
+        "pid": 6567,
+        "state": "S",
+        "ppid": 6481,
+        "start": "657697"
+      },
+      {
+        "pid": 6568,
+        "state": "S",
+        "ppid": 6481,
+        "start": "657697"
+      }
+    ]
+  },
+  "oauth": {
+    "compiledSource": "8f90bdff019335e2e2500b33fa07598b786bffc3",
+    "http10FixedCount": {
+      "cases": 12,
+      "passed": 10,
+      "failed": 2,
+      "failure": "token completion socket closed; failed closed"
+    },
+    "http11FixedCount": {
+      "cases": 12,
+      "passed": 12,
+      "failed": 0
+    },
+    "reducedBun": "Bun1.3.14 fetch POST to Python HTTP/1.0 reproduces unexpected socket closure without Core; 500 HTTP/1.1 POSTs pass",
+    "original500": "not captured directly; same transport hypothesis must remain bounded to observed evidence"
+  },
+  "limitations": [
+    "candidate Core source not yet compiled/deployed",
+    "no Bot source/pin/deployment change",
+    "no durable runtime/workspace fencing closure",
+    "persistent browser capability integration not implemented",
+    "no RC publication"
+  ]
+}

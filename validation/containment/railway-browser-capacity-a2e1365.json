@@ -1,0 +1,27 @@
+{
+  "deployment": "5a7dd24f-35bb-4936-a27e-5e233fa9324e",
+  "source": "a2e136568f799805fc498a2f4aecef7b13e9ee1b",
+  "observation": {
+    "browserFailure": {
+      "status": "error",
+      "input": {},
+      "error": "Telegram process budget rejected browser: usedMb=694 reserveMb=256 limitMb=954 predicted=99.6% ceiling=94.0%",
+      "time": {
+        "start": 1791143089680,
+        "end": 1791143089691
+      }
+    },
+    "memory": {
+      "current": 725753856,
+      "maximum": "999997440",
+      "inactiveFile": 22294528,
+      "workingSet": 703459328,
+      "anon": 593477632,
+      "file": 108105728
+    },
+    "trees": {
+      "285": 11
+    }
+  },
+  "classification": "correct rejection of a second resident browser under the 1GB candidate contract; no request success or leak claimed"
+}

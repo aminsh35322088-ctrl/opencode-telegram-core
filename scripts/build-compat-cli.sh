@@ -11,7 +11,7 @@ expected="$(json_get commit)"
 "$CORE_ROOT/scripts/materialize-upstream.sh" "$tree"
 "$CORE_ROOT/scripts/apply-patches.sh" "$tree"
 bash "$CORE_ROOT/scripts/install-runtime-overlays.sh" "$tree"
-"$BUN" install --cwd "$tree" --frozen-lockfile
+install_upstream_dependencies "$tree" "$BUN"
 actual="$(git -C "$tree" rev-parse HEAD)"
 [[ "$actual" == "$expected" ]] || die "compat CLI source mismatch: expected $expected, got $actual"
 
@@ -26,7 +26,7 @@ export OPENCODE_TELEGRAM_CORE_COMMIT="$core_commit"
 export OPENCODE_TELEGRAM_CORE_UPSTREAM_COMMIT="$expected"
 export OPENCODE_TELEGRAM_CORE_SDK_REVISION="$expected"
 
-"$BUN" run --cwd "$tree/packages/opencode" script/build.ts --single --skip-embed-web-ui
+"$BUN" run --cwd "$tree/packages/opencode" script/build.ts --single --skip-install --skip-embed-web-ui
 
 mapfile -t binaries < <(find "$tree/packages/opencode/dist" -type f -path '*/opencode-linux-x64/bin/opencode' -print)
 [[ "${#binaries[@]}" -eq 1 ]] || die "expected exactly one linux-x64 compat CLI, found ${#binaries[@]}"

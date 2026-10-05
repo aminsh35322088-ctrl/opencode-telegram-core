@@ -1,0 +1,24 @@
+{
+  "sourceCheckpoint": "b5cd4b18c10c756764a93d5975284d4df5747a94",
+  "probeImage": "python:3.11-slim-bookworm@sha256:2333bd330d12de02514770b3585cad313644316047cdee24a7acfdece6de6efb",
+  "hostLibc": "Debian GLIBC 2.41-12+deb13u3",
+  "runtimeLibc": "Bookworm glibc 2.36",
+  "dynamicRunnerResult": {
+    "exitCode": 1,
+    "error": "GLIBC_2.38 not found"
+  },
+  "staticRunner": {
+    "bytes": 945496,
+    "sha256": "33997fede55f365646fa0baa6219b83c187fc4dca776bfddaf3f33d0095016ff",
+    "hasELFInterpreter": false,
+    "compileFlags": "-static -std=c11 -O2 -Wall -Wextra -Werror"
+  },
+  "actualLinuxCases": {
+    "transientDoubleForkRetirement": true,
+    "persistentLauncherHandoff": true,
+    "adoptedPauseResumePausedAbort": true,
+    "nonLeaderThreadDescendants": true,
+    "runnerSigkillRequiresContainerFallback": true
+  },
+  "scope": "native runner portability; compiled production artifact and Railway verification remain separate"
+}

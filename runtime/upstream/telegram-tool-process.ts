@@ -1,10 +1,12 @@
-import { spawn } from "node:child_process"
+import { type spawn } from "node:child_process"
 import { realpath } from "node:fs/promises"
 import path from "node:path"
 import type { ToolProcessPort } from "./telegram-tool-process-contract"
 import type { SessionExecutionLease } from "./session-execution-control"
 import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled } from "./telegram-process-budget"
-import { abortableSleep, withDeadline } from "./telegram-deadline"
+import { withDeadline } from "./telegram-deadline"
+import { spawnProcessTree, processTree } from "./telegram-process-tree"
+import type { WorkspaceBrowsers } from "./telegram-browser-process"
 
 export class ToolProcessError extends Error {
   constructor(
@@ -26,12 +28,14 @@ export function createToolProcessScope(
   sessionId: string,
   directory: string,
   signal: AbortSignal,
+  browsers?: WorkspaceBrowsers,
 ) {
   const invocation = new AbortController()
   const pending = new Set<Promise<unknown>>()
   let closedInvocation = false
   let cleanupFailure: unknown
-  const execFile: ToolProcessPort["execFile"] = async (command, args, options = {}) => {
+  const execFile = async (command: string, args: readonly string[],
+    options: NonNullable<Parameters<ToolProcessPort["execFile"]>[2]> = {}) => {
     if (closedInvocation) throw new Error("tool invocation closed")
     if (!execution || epoch === undefined) throw new Error("custom process requires a live runtime execution")
     execution.assertOwned(epoch)
@@ -72,10 +76,10 @@ export function createToolProcessScope(
     let closed = Promise.resolve()
     let output = { stdout: "", stderr: "" }
     try {
-      child = spawn(command, [...args], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] })
+      child = spawnProcessTree(command, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] })
       budget.bindPid(child.pid, true)
       const proc = child
-      const terminate = () => signalGroup(proc.pid, "SIGKILL")
+      const terminate = () => processTree(proc)!.signal("SIGKILL")
       let close!: () => void
       closed = new Promise<void>((resolve) => {
         close = resolve
@@ -108,8 +112,8 @@ export function createToolProcessScope(
       proc.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk))
       proc.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk))
       detach = execution.attach({
-        pause: () => signalGroup(proc.pid, "SIGSTOP"),
-        resume: () => signalGroup(proc.pid, "SIGCONT"),
+        pause: () => processTree(proc)!.signal("SIGSTOP"),
+        resume: () => processTree(proc)!.signal("SIGCONT"),
         terminate,
       })
       const exit = await withDeadline(() => result, {
@@ -130,13 +134,12 @@ export function createToolProcessScope(
     } finally {
       try {
         if (child) {
-          signalGroup(child.pid, "SIGKILL")
           await withDeadline(
-            async (cleanupSignal) => {
+            async () => {
+              await processTree(child!)!.cleanup()
               await closed
-              while (groupAlive(child!.pid)) await abortableSleep(20, cleanupSignal)
             },
-            { timeoutMs: 5_000, label: "custom process group cleanup" },
+            { timeoutMs: 5_000, label: "custom process tree cleanup" },
           )
         }
         detach?.()
@@ -155,6 +158,16 @@ export function createToolProcessScope(
     return output
   }
   const port: ToolProcessPort = Object.freeze({
+    browser: (request: Parameters<ToolProcessPort["browser"]>[0]) => {
+      if (closedInvocation) return Promise.reject(new Error("tool invocation closed"))
+      if (!execution || epoch === undefined || !browsers)
+        return Promise.reject(new Error("persistent browser requires captured workspace and execution authority"))
+      const operation = browsers.execute(execution, epoch, sessionId, request,
+        AbortSignal.any([signal, invocation.signal]))
+      pending.add(operation)
+      void operation.then(() => pending.delete(operation), () => pending.delete(operation))
+      return operation
+    },
     execFile: (...args: Parameters<ToolProcessPort["execFile"]>) => {
       const operation = execFile(...args)
       pending.add(operation)
@@ -176,25 +189,5 @@ export function createToolProcessScope(
       })
       if (cleanupFailure) throw cleanupFailure
     },
-  }
-}
-
-function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (!pid) return
-  try {
-    process.kill(-pid, signal)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
-  }
-}
-
-function groupAlive(pid: number | undefined): boolean {
-  if (!pid) return false
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false
-    throw error
   }
 }

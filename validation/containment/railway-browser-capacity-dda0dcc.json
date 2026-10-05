@@ -1,0 +1,28 @@
+{
+  "deployment": "cc69cdac-cf9b-40d7-b68d-1309abc30598",
+  "source": "dda0dcc9b672b465684bb0fd4a6eda230f05a519",
+  "observation": {
+    "browserFailure": {
+      "status": "error",
+      "input": {},
+      "error": "Telegram process budget rejected browser-client: usedMb=870 reserveMb=64 limitMb=954 predicted=104.7% ceiling=95.0%",
+      "time": {
+        "start": 1791142435447,
+        "end": 1791142435486
+      }
+    },
+    "memory": {
+      "current": 709242880,
+      "maximum": "999997440",
+      "inactiveFile": 11493376,
+      "workingSet": 697749504,
+      "anon": 658321408,
+      "file": 18370560
+    },
+    "trees": {
+      "28": 12
+    }
+  },
+  "measurementTiming": "after tool error joined rejected browser retirement; usedMb in error is the actual earlier admission observation",
+  "classification": "capacity rejection; guard intact; client launcher simplification pending verification"
+}

@@ -34,6 +34,12 @@ class TelegramSurface(unittest.TestCase):
                     with self.assertRaises(urllib.error.HTTPError) as caught:
                         urllib.request.urlopen(server.base + path, timeout=5)
                     self.assertEqual(caught.exception.code, 401)
+            for method, body in [('PUT', {'type': 'api', 'key': 'fixture'}), ('DELETE', None)]:
+                request = urllib.request.Request(server.base + '/auth/fixture', method=method,
+                    data=json.dumps(body).encode() if body else None, headers={'content-type': 'application/json'})
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(request, timeout=5)
+                self.assertEqual(caught.exception.code, 401)
             request = urllib.request.Request(server.base + '/config', headers=server.headers)
             with urllib.request.urlopen(request, timeout=15) as response: self.assertEqual(response.status, 200)
 
@@ -71,7 +77,9 @@ class TelegramSurface(unittest.TestCase):
             ('GET', '/tui/control/next', None), ('POST', '/tui/append-prompt', {'text': 'x'}),
             ('GET', '/experimental/worktree', None), ('GET', '/experimental/workspace', None),
             ('GET', '/file?path=.', None), ('GET', '/find/file?query=x', None),
-            ('GET', '/provider', None), ('POST', '/global/upgrade', {}),
+            ('POST', '/log', {'service': 'fixture', 'level': 'info', 'message': 'excluded'}), ('GET', '/provider', None), ('GET', '/provider/auth', None),
+            ('POST', '/provider/openai/oauth/authorize', {'method': 0}),
+            ('POST', '/provider/openai/oauth/callback', {'method': 0, 'oauthState': 'stale'}), ('POST', '/global/upgrade', {}),
             ('GET', '/doc', None), ('GET', '/', None), ('GET', '/lsp', None),
             ('POST', '/mcp/nonexistent/auth/authenticate', {}),
         ]:

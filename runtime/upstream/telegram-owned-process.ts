@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process"
 import type { SessionExecutionLease } from "./session-execution-control"
 import type { TelegramProcessLease } from "./telegram-process-budget"
 import { abortableSleep, withDeadline } from "./telegram-deadline"
+import { processTree } from "./telegram-process-tree"
 
 /** A short-lived shell group belongs to its original execution, not its leader's exit. */
 export function ownShellProcess(proc: ChildProcess, execution: SessionExecutionLease, epoch: number, budget: TelegramProcessLease) {
@@ -14,6 +15,8 @@ export function ownShellProcess(proc: ChildProcess, execution: SessionExecutionL
   let cleanup: Promise<void> | undefined
   const send = (signal: NodeJS.Signals) => {
     if (retired) return
+    const tree = processTree(proc)
+    if (tree) { tree.signal(signal); return }
     try { process.kill(-pid, signal) }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
@@ -44,6 +47,15 @@ export function ownShellProcess(proc: ChildProcess, execution: SessionExecutionL
     },
     closed: () => { complete() },
     cleanup: () => cleanup ??= withDeadline(async (signal) => {
+      const tree = processTree(proc)
+      if (tree) {
+        await tree.cleanup()
+        await closed
+        retired = true
+        detach?.()
+        budget.release()
+        return
+      }
       // Also terminate descendants that closed their pipes before leader exit.
       send("SIGKILL")
       await closed

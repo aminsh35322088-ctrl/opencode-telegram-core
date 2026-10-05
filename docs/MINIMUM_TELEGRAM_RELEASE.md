@@ -39,7 +39,9 @@ Core stable in a separately authorized phase; no Bot behavior changes occur here
 - Full v2 server, control-plane/remote workspace routing, workspace proxy/sync and
   experimental worktree/workspace management. Reject workspace routing/config.
 - File/find/provider-auth/config-mutation HTTP APIs; actual file tools, inference,
-  provider credentials and plugin hooks remain supported.
+  provider credentials and plugin hooks remain supported. Authenticated credential
+  PUT/DELETE remain required internally by model-time OAuth refresh plugins; their
+  two thin handlers are retained without provider sign-in or logging/control-plane APIs.
 - TUI/control routes, UI fallback/proxy, documentation route, embedded/frontend
   composition and interactive CLI graph. The previous runtime already embedded no
   frontend assets; this additionally removes their server composition.
@@ -53,7 +55,9 @@ Core stable in a separately authorized phase; no Bot behavior changes occur here
 - Native v2 session client/event pump production exports and emitted Node modules.
   They remain in the independent debug entrypoint. Unused native JSON-line transport, run reconciliation adapter and conformance helper also move there; the internally used worker outbound gate remains.
 
-The legacy composed endpoint count falls from 130 to 44; the separate v2 server is
+The original slim legacy composed endpoint count fell from 130 to 44; retained
+plugin credential persistence requires two authenticated PUT/DELETE endpoints,
+bringing the corrected composition to 46; the separate v2 server is
 also excluded entirely. This count excludes duplicate public schema-only aliases.
 Unsupported production routes return non-success responses. Enable flags for
 removed behavior fail explicitly; persisted Console organization selection returns
@@ -127,9 +131,14 @@ Genuine remaining blockers:
    session/daemon ownership cannot be inferred from a short-lived governed launcher.
    Core's invocation capability exists, but current tools have not adopted it.
    This task preserves browser capability and performs no Bot migration.
-2. Remote MCP/OAuth pending transport/callback ownership is not yet consolidated
-   under workspace closing/retirement. Module-level pending OAuth state and remote
-   acquisition need isolation, late-publication/replacement/cleanup tests and fixes.
+2. PR27, merged as `884ae87d47f96ddbe670d4abcd4088dc2ae832da`, closes the
+   reproduced remote MCP/OAuth flow/retirement defects; see
+   [verified evidence](MCP_OAUTH_OWNERSHIP.md). Provider-auth HTTP routes and its
+   service were already excluded by the minimal composition: diagnostic callback
+   defects are not production gates. The retained shared credential store has a
+   reproduced concurrent read/modify/write defect under verification. Model-time
+   provider/plugin/helper acquisition still needs its production audit. See
+   [corrected reachability evidence](PROVIDER_AUTH_OWNERSHIP.md).
 3. Actual hard-crash containment/reaping and restart safety for all remaining
    process classes require fault-injection evidence, beyond ordinary joined cleanup
    or an init process. Required provider credential/plugin helper subprocesses also
@@ -229,3 +238,59 @@ This closes the reproduced shared retirement regressions, not every interrupted
 bootstrap/helper acquisition, remote MCP/OAuth or persistent-browser boundary.
 Broader resource, concurrency and crash/restart gates remain open. Pre.9 does not
 contain this candidate; no RC/stable is published. Bot remains frozen.
+
+
+### Railway containment boundary continuation (2026-10-04)
+
+[The compiled/Railway investigation](RAILWAY_CONTAINMENT_BOUNDARY.md) separates
+normal escaped-tree retirement from runtime/container failure. Actual Railway
+primary-Bun SIGKILL and platform restart demonstrate namespace teardown, while
+child-Bun replacement beneath a live parent and normal successful custom-tool
+double-fork retirement still strand processes. Runtime cgroup delegation is denied.
+Hard-crash containment belongs to a proven essential-child container contract; the
+frozen Bot currently respawns Bun inside its surviving Node container, so adoption
+is a separate deployment/integration prerequisite. No Core supervisor was shipped,
+no Bot change was made, and no current process RC blocker is declared closed.
+Persistent browser lifetime still requires a durable workspace service authority
+and actual pinned-browser validation; a launcher lease is insufficient. The report
+records remaining epoch/overlap fencing and the classified/unfinished test evidence.
+This supersedes earlier pending/blanket in-Core crash-gate statements, not previously
+verified credential/plugin/shutdown/MCP/shell invariants or removed-surface scope.
+
+
+### Current containment gate status (2026-10-04)
+
+This supersedes the earlier pending browser/group-only/crash statements and
+checklist percentages. Credential serialization, joined plugin retirement,
+uncertain shutdown propagation, required credential HTTP transport, MCP OAuth,
+optional AWS/Azure fail-closed policy and previous isolation/pause gates remain
+verified; they are not reopened.
+
+The cumulative Core candidate implements a bounded external native scope runner
+under the existing lease and a captured persistent foreground browser service.
+Actual compiled Linux and Railway tests prove ordinary escaped/double-fork tree
+retirement, physical pause/resume/abort, workspace replacement, same-browser reuse
+and joined Chromium/crashpad/private-file cleanup. Static runner packaging works
+in the Bot's Bookworm libc environment. Direct owned-daemon IPC avoids per-call
+Node launchers. The 1GB Railway fixture uses one resident browser plus foreign-topic
+governed work; a second browser may be correctly rejected by admission. Local
+higher-capacity two-browser isolation remains verified.
+
+Runtime/runner loss belongs to the essential-container boundary. Actual Railway
+UID1000/dumb-init tests prove Core75 on runner loss, Bun SIGKILL, independent
+namespace witness termination, mounted-volume old-writer fencing, and persisted
+pause recovery as continuation-unavailable with stale resume rejected. No larger
+Core supervisor or recursively guarded authority is needed. The supported contract
+is one container/replica with its volume, essential Core loss ending the container,
+and no replacement Bun below a surviving parent. Cgroup delegation/nested namespace
+operations are unavailable in the actual candidate.
+
+The frozen Bot does not yet adopt that contract or the browser/custom-process
+capabilities. These remain real production integration blockers, separately scoped
+in [the concrete prerequisite](BOT_CONTAINMENT_PREREQUISITE.md). Candidate evidence
+cannot certify unchanged Bot code. PR28 remains Draft; no RC/stable, Bot pin,
+deployment or migration is changed. After adoption, the shortest justified rc.1
+path is the combined required Telegram workload/failure gate and aligned exact
+source/artifact/CI/Railway verification. Stable additionally requires its soak and
+operator rollback evidence. See [the boundary report](RAILWAY_CONTAINMENT_BOUNDARY.md)
+and its retained physical experiments for exact source/digest/deployment details.

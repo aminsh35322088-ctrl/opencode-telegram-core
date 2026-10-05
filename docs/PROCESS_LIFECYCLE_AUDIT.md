@@ -232,3 +232,269 @@ are verified at `e6bbabe`, including the actual compiled Railway API. An orphan
 callback cannot bootstrap a replacement service. This does not close raw custom
 process/browser, provider/helper acquisition, independent crash containment or
 realistic concurrent resource/soak gates. Bot and released artifacts remain frozen.
+
+
+### 2026-10-04 integration and provider-auth checkpoint
+
+PR27 merged as `884ae87d47f96ddbe670d4abcd4088dc2ae832da`; its source candidate
+`e6bbabe` has actual compiled Railway verification. This supersedes earlier
+statements that the reproduced remote MCP OAuth defects remain open. Pre.9 is
+unchanged and does not contain PR26/27.
+
+[Corrected production reachability](PROVIDER_AUTH_OWNERSHIP.md): provider-auth
+HTTP routes and the ProviderAuth service are excluded from the actual compiled
+Telegram graph. The full-upstream callback probes reproduce defects but do not
+block Telegram RC. A shared credential-store concurrency defect is confirmed on
+a retained path and its existing-lock fix is under verification. Model-time helper
+and plugin acquisition remain audit gates. No callback lifecycle feature, RC/stable
+publication or Bot change is included.
+
+### Retained plugin retirement probe (2026-10-04)
+
+A real Plugin.Service/InstanceStore probe loads two local plugin modules. The first
+plugin's dispose hook throws; the second can retire normally. Current main logs the
+failure and ignores it, so store.dispose reports success instead of quarantining
+uncertain cleanup. The diagnostic is preserved in
+`tests/diagnostics/telegram-plugin-retirement.probe.ts` and intentionally is not a
+passing release assertion. Registration before async startup, joined late startup,
+attempt-all cleanup and bounded uncertainty still require implementation and
+cumulative verification. This required extension boundary remains an RC blocker.
+
+Candidate common patch 0011 replaces ignored plugin cleanup with the existing
+bounded deadline and shared workspace quarantine path. It registers before startup
+and retains actual initialization promises through late hook publication; all hook
+disposers start even when another fails. Three focused lifecycle assertions pass:
+failed retirement fences replacement; interrupted startup retires its returned
+hook; uncertain disposal reaches the existing five-second bound, attempts every
+hook, and never clears quarantine after late settlement. A premature registration
+experiment regressed late-hook disposal; that experiment was replaced before any
+checkpoint/merge and the raw-promise ownership regression remains in the gate.
+The unchanged pre-fix startup case itself passed, so this is not claimed as proof
+of an additional original startup defect. The original ignored-cleanup defect is
+also reproduced in the actual compiled runtime: global.dispose incorrectly succeeds.
+Compiled green and cumulative verification of 0011 are pending. No browser/raw
+process/helper or crash-containment gate is inferred closed by these hook tests.
+
+Review identified that joining every initializer before cleanup can strand an
+already loaded hook behind a permanently stuck later initializer. The corrected
+candidate starts known hook disposal immediately, memoizes each disposer, and
+starts late hook cleanup as soon as ownership is returned. The controlled blocked-
+initializer regression fails on the prior candidate (loaded disposer count zero)
+and passes after correction; loaded and late disposer counts remain exactly one.
+Four focused lifecycle assertions now pass. The prior full cumulative 370-pass run
+preceded this correction and is not final-candidate closure evidence. Final
+cumulative and compiled/Railway verification remain required.
+
+Final reviewed common-source candidate: 371 pass, two expected skips, zero failures,
+ten helper assertions and all five shell admission/cancellation race repeats pass.
+This gate includes all four plugin lifecycle regressions. Compiled pre-fix Plugin
+retirement fails its new assertion (global.dispose succeeds after a hook throws),
+so actual compiled green verification remains required after checkpoint build.
+
+The required helper audit reproduced retained Azure CLI model-time acquisition in
+the actual compiled runtime: fake `az` PID22106 was started by Core PID22089;
+session abort acknowledged true while the helper remained alive. The diagnostic
+kills/reaps only its owned fixture process and is preserved as
+`tests/diagnostics/azure-compiled-ownership.probe.py`. This is a confirmed acquisition
+lifetime defect, not merely an import finding. Optional CLI credential scope must
+be decided against Telegram requirements; Azure API-key inference must remain.
+
+### Exact plugin checkpoint and Azure scope correction
+
+Checkpoint `25da66b2582a133f4ff092fda32d4e43d8fb191d` passes all three GitHub gates
+(run 37186470981). Its actual compiled local gate also passes: six surface checks,
+twelve execution checks (including failed plugin retirement fencing replacement)
+and ten independent session-contract checks. The earlier pending compiled statements
+above are superseded for this checkpoint. Railway lifecycle verification of this
+checkpoint is still required; the prior deployed credential candidate is not proof.
+
+The Azure CLI model-time helper is optional upstream functionality with no documented
+Telegram consumer/install requirement. The candidate production resolver removes
+that acquisition path and rejects imported CLI OAuth terminally; Azure API-key
+inference is retained. See [scope and validation](PROVIDER_AUTH_OWNERSHIP.md#azure-production-credential-scope-correction-2026-10-04).
+No required browser/daemon or crash-containment gate is closed by that exclusion.
+
+### Hard crash: confirmed required process survivor (2026-10-04)
+
+At source `32f2437ede3a0e4e87cce489d119e0d9308548a9`, the actual compiled runtime
+was killed with SIGKILL after its model shell acknowledged pause and Linux `/proc`
+confirmed state T. The same PID/start-time/group survived, still stopped, reparented
+to the test subreaper. This is a required production crash-containment blocker, not
+an optional dead graph. The bounded diagnostic owns and kills its fixture group;
+`tests/diagnostics/compiled-crash-containment.probe.py` preserves the reproduction.
+The test subreaper is test hygiene, not shipped crash containment.
+
+A classified, unshipped Linux supervisor prototype uses PR_SET_CHILD_SUBREAPER and
+pidfds outside Bun. Killing the same compiled Bun child then retires/reaps the paused
+shell before supervisor completion. It is diagnostic evidence, not a production
+fix. This environment lacks `/proc/self/task/PID/children`; adopted child discovery
+must not assume that optional kernel interface. The corrected prototype enumerates
+`/proc/*/stat` and holds un-reaped direct-child identity until pidfd acquisition.
+
+Open design gates include supervisor death itself, durable replacement fencing,
+packaging/consumer compatibility and behavior for detached/double-fork descendants,
+MCP/LSP/helper classes, concurrent work and uncertain cleanup. An ancestor guard
+cannot be claimed to survive its own SIGKILL. No RC gate is closed by this spike.
+Linux references: PR_SET_CHILD_SUBREAPER(2const) and pidfd_send_signal(2) on man7.org.
+
+The exact Azure/plugin candidate is now independently verified on Railway:
+deployment `a3c4c50e-9c33-4329-9648-9c302552e6f4` SUCCESS, health endpoint reports
+source `32f2437`, PID260, startup six surface/fourteen execution checks pass. The
+first two sequential observation workloads complete without failures. This is
+short candidate verification, not RC soak or resource/crash closure. Local
+production cumulative totals are 362 pass, two expected skips and zero failures,
+plus all five two-case shell race repeats, helper15 and independent session10.
+
+The supervisor-death counterexample also reproduces: killing the prototype guard
+kills Bun but leaves the same paused shell reparented to the test subreaper. A single
+guard with destructive PDEATHSIG is insufficient. The prototype remains explicitly
+unshipped while the surviving-authority/restart boundary is investigated.
+
+The compiled shutdown diagnostic also confirms an independent false-success edge:
+a plugin disposer writes its attempted marker and throws, yet headless SIGTERM exits
+zero and reports no uncertainty. Source `Server.listen().stop` converts the stop
+Effect to Exit and discards it; `makeStop` also ignores scope-close failure. This
+hides previously propagated workspace retirement failures at the outer runtime
+boundary. Root propagation and compiled failure-exit regression are required; they
+do not alone establish crash containment or durable replacement fencing.
+
+### Shutdown failure propagation candidate
+
+Common patch 0012 removes listener `runPromiseExit` result discard and preserves
+scope-close failures through the cached stop operation. The compiled fixture proves
+its plugin disposer was attempted but the original runtime reported exit0. In this
+Effect version, `ignore` suppresses typed failures, not defects: discarded Exit is
+the decisive demonstrated suppression for the rejecting plugin fixture; the same
+probe does not separately prove the typed scope-close case. Scope closing still
+attempts every registered finalizer before aggregating failures.
+
+Headless stop now catches failure explicitly, emits a fixed non-sensitive failure
+report, retains `stopping` and sets eventual exitCode1 without force exit. A referenced
+idle quarantine handle keeps the failed authority alive even if closure removed all
+other event-loop handles; it performs no cleanup polling or retry. Controlled compiled
+coverage checks the failure report, both attempted disposers and continued owner
+liveness. Final exact-source cumulative/CI/Railway verification remains pending.
+This truthful failure boundary is not hard-crash containment or cross-process
+replacement fencing; both remain release blockers.
+
+### Reproducible scoped build dependency candidate
+
+At `e56feba`, GitHub validate and the full compiled headless gate pass; the
+upstream-runtime job fails before tests because the unused Console/Web SolidJS
+preview URL `pkg.pr.new/@solidjs/start@dfb2020` returns404. This is a build gate
+failure, not a tested lifecycle regression. The continuing candidate installs only
+runtime and SDK workspace closures from the existing patched frozen lock, using
+hoisted resolution for ambient SDK/type/build-tool imports required by the pinned
+source. No dependency version or upstream identity is changed. The compatibility
+builder also uses its existing `--skip-install` flag, preventing three downstream
+unfiltered/non-frozen installs from bypassing the initial contract.
+
+A clean real-Bun fixture reproduces original installation failure on an expired
+unused preview. Scoped installation passes with fresh cache, unchanged lock bytes,
+no unused fetch and working transitive runtime/ambient SDK/own SDK dependencies.
+The actual serialized common gate passes typecheck, SDK generation/formatting and
+surface checks, helper10, cumulative371/two expected skips/zero failures, and all
+five shell race repeats. Full binary/linker/CI/Railway verification remains required.
+
+An earlier local production gate ran while a large diagnostic typecheck overlapped:
+MCP roots timed out, shell/LSP fixtures timed out and unretired mocks caused later
+LSP failures. The four initial categories pass under isolated idle execution and
+exact-source headless CI is green. The new common gate is serialized and green;
+actual production cumulative verification must still be repeated without that
+resource overlap. This records failed evidence rather than treating reruns as proof.
+
+### Scoped installation and escaped-tree evidence
+
+The hoisted compiled build exposed five policy-test failures caused by a hardcoded
+package-local `node_modules` path, not the AWS rejection policy. SDK verification
+now resolves from the actual runtime importer with `Bun.resolveSync`. Seven bundled
+provider-policy tests/29 assertions pass. Serialized compiled verification passes
+362 cumulative tests/two expected skips, all five shell race repeats, helper15,
+compiled surface6/execution15 (including uncertain shutdown), and compatibility10.
+The binary built from `58ce9b2` is114,669,696 bytes; its graph remains exclusion-clean.
+This is local compiled evidence, not exact-successor CI/Railway verification.
+
+The next ownership risk is now causal, not just a documentation concern:
+[the escaped-descendant probe](../tests/diagnostics/custom-process-tree/README.md)
+reproduces successful custom-tool cleanup releasing admission while a captured
+descendant in a separate process group survives. Pinned Playwright implementation
+inspection confirms its daemon and browser use separate groups. Existing tests
+called "detached processes" cover an admitted detached group, not descendants that
+create another group. Group-only cleanup must not be described as full process-tree
+ownership. Shared tree retirement and hard-crash containment remain RC blockers.
+
+Actual compiled custom-tool execution also reproduces the escape: a FIFO handshake
+confirms the new session before launcher return; both the successful tool and
+`/global/dispose` acknowledge completion while the same descendant survives.
+See the compiled probe beside the source-level probe. Fixture cleanup is explicit.
+
+Checkpoint `7174ae6` passes all three CI gates (run37191228055) and compiled Railway
+deployment `efab7f70-e746-421e-a34e-7e920ea86249` is healthy on the exact source.
+The first18 sequential workload observations have no failures, with RSS510,040–
+902,556 KiB and subsequent drops toward600,000 KiB. One-hour Railway metrics span
+both old/new deployments and must not be attributed solely to this candidate.
+Neither RSS nor native smoke proves the remaining ownership/resource gates.
+
+The validation harness now records bounded (256-sample) cgroup current/max,
+inactive-file, reclaim-aware working set and CPU counters separately from Bun RSS,
+plus an idle baseline. It reports read-only cgroup freeze/kill presence and write
+permissions to evaluate possible kernel-backed process scopes; permissions alone
+do not prove delegation. The Cloud agent cannot write its cgroup directory.
+No cgroup or production governor is changed by this measurement. Exact successor
+CI/Railway verification is pending, as are realistic concurrent/failure workloads.
+
+
+### Railway containment boundary continuation (2026-10-04)
+
+[The compiled/Railway investigation](RAILWAY_CONTAINMENT_BOUNDARY.md) separates
+normal escaped-tree retirement from runtime/container failure. Actual Railway
+primary-Bun SIGKILL and platform restart demonstrate namespace teardown, while
+child-Bun replacement beneath a live parent and normal successful custom-tool
+double-fork retirement still strand processes. Runtime cgroup delegation is denied.
+Hard-crash containment belongs to a proven essential-child container contract; the
+frozen Bot currently respawns Bun inside its surviving Node container, so adoption
+is a separate deployment/integration prerequisite. No Core supervisor was shipped,
+no Bot change was made, and no current process RC blocker is declared closed.
+Persistent browser lifetime still requires a durable workspace service authority
+and actual pinned-browser validation; a launcher lease is insufficient. The report
+records remaining epoch/overlap fencing and the classified/unfinished test evidence.
+This supersedes earlier pending/blanket in-Core crash-gate statements, not previously
+verified credential/plugin/shutdown/MCP/shell invariants or removed-surface scope.
+
+
+### Current containment gate status (2026-10-04)
+
+This supersedes the earlier pending browser/group-only/crash statements and
+checklist percentages. Credential serialization, joined plugin retirement,
+uncertain shutdown propagation, required credential HTTP transport, MCP OAuth,
+optional AWS/Azure fail-closed policy and previous isolation/pause gates remain
+verified; they are not reopened.
+
+The cumulative Core candidate implements a bounded external native scope runner
+under the existing lease and a captured persistent foreground browser service.
+Actual compiled Linux and Railway tests prove ordinary escaped/double-fork tree
+retirement, physical pause/resume/abort, workspace replacement, same-browser reuse
+and joined Chromium/crashpad/private-file cleanup. Static runner packaging works
+in the Bot's Bookworm libc environment. Direct owned-daemon IPC avoids per-call
+Node launchers. The 1GB Railway fixture uses one resident browser plus foreign-topic
+governed work; a second browser may be correctly rejected by admission. Local
+higher-capacity two-browser isolation remains verified.
+
+Runtime/runner loss belongs to the essential-container boundary. Actual Railway
+UID1000/dumb-init tests prove Core75 on runner loss, Bun SIGKILL, independent
+namespace witness termination, mounted-volume old-writer fencing, and persisted
+pause recovery as continuation-unavailable with stale resume rejected. No larger
+Core supervisor or recursively guarded authority is needed. The supported contract
+is one container/replica with its volume, essential Core loss ending the container,
+and no replacement Bun below a surviving parent. Cgroup delegation/nested namespace
+operations are unavailable in the actual candidate.
+
+The frozen Bot does not yet adopt that contract or the browser/custom-process
+capabilities. These remain real production integration blockers, separately scoped
+in [the concrete prerequisite](BOT_CONTAINMENT_PREREQUISITE.md). Candidate evidence
+cannot certify unchanged Bot code. PR28 remains Draft; no RC/stable, Bot pin,
+deployment or migration is changed. After adoption, the shortest justified rc.1
+path is the combined required Telegram workload/failure gate and aligned exact
+source/artifact/CI/Railway verification. Stable additionally requires its soak and
+operator rollback evidence. See [the boundary report](RAILWAY_CONTAINMENT_BOUNDARY.md)
+and its retained physical experiments for exact source/digest/deployment details.

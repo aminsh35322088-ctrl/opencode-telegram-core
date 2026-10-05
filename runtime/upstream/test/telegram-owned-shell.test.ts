@@ -55,23 +55,24 @@ linux("parent pause stops the shell group; resume retains its PID; abort after p
   const child = control.start({ sessionId: "child", runId: "child-run", directory: process.cwd() }, parent.owner)
   await Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", ["-c", "trap '' TERM; sleep 60 & echo $!; wait"], {
+    const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", ["-c", "trap '' TERM; sleep 60 & echo $$ $!; wait"], {
       stdin: "ignore", detached: true,
     }))
     const chunks = yield* Stream.runCollect(handle.stdout.pipe(Stream.take(1)))
-    const descendant = Number(Buffer.concat([...chunks]).toString().trim())
+    const [leader, descendant] = Buffer.concat([...chunks]).toString().trim().split(" ").map(Number)
     yield* Effect.promise(async () => {
       try {
         expect(descendant).toBeGreaterThan(0)
+        expect(leader).toBeGreaterThan(0)
         control.pause(parent.owner)
-        await until(async () => await state(Number(handle.pid)) === "T" && await state(descendant) === "T")
+        await until(async () => await state(leader!) === "T" && await state(descendant!) === "T")
         expect(telegramProcessBudgetSnapshot().activeCount).toBe(count + 1)
         control.resume(parent.owner)
-        await until(async () => await state(Number(handle.pid)) !== "T" && await state(descendant) !== "T")
+        await until(async () => await state(leader!) !== "T" && await state(descendant!) !== "T")
         expect(await state(Number(handle.pid))).not.toBeNull()
         control.pause(parent.owner)
         control.close(parent.owner)
-        await until(async () => await state(Number(handle.pid)) === null && await state(descendant) === null)
+        await until(async () => await state(Number(handle.pid)) === null && await state(leader!) === null && await state(descendant!) === null)
       } finally {
         if (control.get(parent.owner)) control.close(parent.owner)
         // Keep a red regression from leaving its deliberately long-lived child.
@@ -152,45 +153,31 @@ linux("completed shell ownership cannot signal a reused process-group identity",
   }
 })
 
-linux("retained shell handles cannot kill a reused process group after scope cleanup", async () => {
+linux("retained shell handles cannot signal an identity after confirmed tree cleanup", async () => {
   const control = new SessionExecutionControl()
   const execution = control.start({ sessionId: "session", runId: "run", directory: process.cwd() })
-  const pid = 2147483100
-  const proc = Object.assign(new EventEmitter(), {
-    pid, stdin: null, stdout: null, stderr: null, stdio: [null, null, null],
-    exitCode: null, signalCode: null, kill: () => true,
-  }) as unknown as NodeChildProcess
-  let replacement = false
-  const launching = spyOn(nodeChildProcess, "spawn").mockImplementation((() => {
-    queueMicrotask(() => proc.emit("spawn"))
-    return proc
-  }) as typeof nodeChildProcess.spawn)
-  const signals = spyOn(process, "kill").mockImplementation((target, signal) => {
-    if (target !== -pid) throw new Error("unexpected identity")
-    if (signal === 0 && !replacement) throw Object.assign(new Error("gone"), { code: "ESRCH" })
-    return true
+  const handle = await Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", ["-c", "exit 0"], { detached: true }))
+    yield* handle.exitCode
+    return handle
+  }).pipe(
+    Effect.scoped, Effect.provideService(CurrentTelegramExecution, execution),
+    Effect.provideService(CurrentTelegramEpoch, execution.epoch),
+    Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.runPromise,
+  )
+  expect(await state(Number(handle.pid))).toBeNull()
+  const signals = spyOn(process, "kill").mockImplementation(() => {
+    throw new Error("retired identity was signalled")
   })
   try {
-    const handle = await Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-      const handle = yield* spawner.spawn(ChildProcess.make("/bin/bash", [], { detached: true }))
-      proc.emit("exit", 0, null)
-      proc.emit("close", 0, null)
-      yield* handle.exitCode
-      return handle
-    }).pipe(
-      Effect.scoped, Effect.provideService(CurrentTelegramExecution, execution),
-      Effect.provideService(CurrentTelegramEpoch, execution.epoch),
-      Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)), Effect.runPromise,
-    )
-    const calls = signals.mock.calls.length
-    replacement = true
     await Effect.runPromise(handle.kill())
-    expect(signals.mock.calls.length).toBe(calls)
+    control.pause(execution.owner)
+    control.resume(execution.owner)
+    expect(signals.mock.calls.length).toBe(0)
   } finally {
-    control.close(execution.owner)
-    launching.mockRestore()
     signals.mockRestore()
+    control.close(execution.owner)
   }
 })
 

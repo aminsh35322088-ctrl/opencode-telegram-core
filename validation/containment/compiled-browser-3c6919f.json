@@ -1,0 +1,20 @@
+{
+  "build": {
+    "upstreamVersion": "1.18.33",
+    "upstreamCommit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "telegramCoreVersion": "1.18.33-bot.13-pre.9",
+    "telegramCoreCommit": "3c6919fbb0ac8274bdc743276fb3fae123308269",
+    "sdkRevision": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
+    "runtimeProfile": "telegram-headless",
+    "embeddedWebUi": false
+  },
+  "persistentGenerationHandoff": true,
+  "idleParked": true,
+  "exclusiveTopicPause": true,
+  "activeResumeSameDaemon": true,
+  "pausedAbortConfirmedEmpty": true,
+  "workspaceRetirementConfirmedEmpty": true,
+  "replacementDoesNotAdoptOldBrowser": true,
+  "browserTrees": 2,
+  "capturedProcesses": 44
+}
