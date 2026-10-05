@@ -206,7 +206,8 @@ class Boundary:
                 return value
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-        raise ValueError('no valid persisted snapshot')
+        # Leave Core unready until an authenticated bootstrap repairs the cache.
+        return None
 
     def apply(self, value):
         raw = self.verify_snapshot(value)
@@ -221,18 +222,44 @@ class Boundary:
             versions.mkdir(exist_ok=True)
             name = str(value['revision']) + '-' + value['hash']
             directory = versions / name
-            if not directory.exists():
-                directory.mkdir()
-                atomic(directory / 'snapshot.json', raw)
-                atomic(directory / 'opencode.json', canonical(value['configuration'].get('runtime', {})))
+            intact = False
+            if directory.exists() and not directory.is_symlink():
+                try:
+                    stored = json.loads((directory / 'snapshot.json').read_bytes())
+                    intact = self.verify_snapshot(stored) == raw
+                    intact = intact and (directory / 'opencode.json').read_bytes() == canonical(value['configuration'].get('runtime', {}))
+                    intact = intact and all((directory / 'skills' / skill['name'] / 'SKILL.md').read_bytes() == skill['content'].encode() for skill in value['skills'])
+                except (OSError, ValueError, KeyError, TypeError):
+                    intact = False
+            if not intact:
+                # Rebuild only from authenticated, fully hash-verified bytes. The
+                # revision/hash highwater checks above still prohibit replacement.
+                staged = versions / ('.repair-' + secrets.token_hex(12))
+                staged.mkdir()
+                atomic(staged / 'snapshot.json', raw)
+                atomic(staged / 'opencode.json', canonical(value['configuration'].get('runtime', {})))
                 for skill in value['skills']:
-                    target = directory / 'skills' / skill['name']
+                    target = staged / 'skills' / skill['name']
                     target.mkdir(parents=True)
                     atomic(target / 'SKILL.md', skill['content'].encode())
-            else:
-                stored = json.loads((directory / 'snapshot.json').read_bytes())
-                if self.verify_snapshot(stored) != raw:
-                    raise ValueError('immutable snapshot conflict')
+                quarantine = versions / ('.corrupt-' + secrets.token_hex(12))
+                if directory.exists() or directory.is_symlink():
+                    os.replace(directory, quarantine)
+                try:
+                    os.replace(staged, directory)
+                    fd = os.open(versions, os.O_DIRECTORY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                except Exception:
+                    if quarantine.exists() or quarantine.is_symlink():
+                        os.replace(quarantine, directory)
+                    raise
+                if quarantine.is_symlink():
+                    quarantine.unlink()
+                elif quarantine.exists():
+                    shutil.rmtree(quarantine)
             current = self.root / 'active.json'
             if current.exists() and previous and previous['hash'] != value['hash']:
                 atomic(self.root / 'previous.json', current.read_bytes())
@@ -263,6 +290,7 @@ class Agent:
         self.process = None
         self.ready = False
         self.lock = threading.RLock()
+        self.sync_watcher = None
         self.workspace = boundary.root / 'topic'
         self.workspace.mkdir(exist_ok=True)
         self.retired = boundary.get('retired') is True
@@ -417,18 +445,22 @@ class Agent:
             return json.loads(raw) if raw else None
 
 
-    def refresh_snapshot(self):
+    def refresh_snapshot(self, allow_offline=True):
         # Transport outage may use prior valid state; integrity errors fail closed.
         try:
             latest = self.outbound('snapshot.get', {})
         except (OSError, TimeoutError):
+            if not allow_offline:
+                raise
             if self.boundary.snapshot is None:
                 raise ValueError('snapshot unavailable')
-            return
+            return False
         self.boundary.verify_snapshot(latest)
         current = self.boundary.snapshot
         if current and latest['hash'] == current['hash']:
-            return
+            self.boundary.apply(latest)
+            self.boundary.set('pendingGlobalSync', False)
+            return True
         self.boundary.apply(latest)
         self.stop_core()
         try:
@@ -440,6 +472,51 @@ class Agent:
                 self.boundary.snapshot = current
                 self.start_core()
             raise
+        self.boundary.set('pendingGlobalSync', False)
+        return True
+
+    def converge_pending_sync(self, wait=False):
+        with self.lock:
+            if self.retired or not self.boundary.get('pendingGlobalSync'):
+                return False
+            deadline = time.monotonic() + (2 if wait else 0)
+            session = self.boundary.get('session')
+            while True:
+                prepared = self.boundary.get('runPrepared')
+                preparing = prepared and prepared['expiresAt'] >= time.time()
+                execution = self.local('GET', '/session/' + quote(session, safe='') + '/execution') if session else None
+                if not preparing and not execution:
+                    return self.refresh_snapshot(allow_offline=False)
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(.025)
+
+    def ensure_sync_watcher(self, admitting=False):
+        if self.sync_watcher is not None or not self.boundary.get('pendingGlobalSync'):
+            return
+        session, run_id = self.boundary.get('session'), self.boundary.get('runId')
+        request = Request('http://127.0.0.1:' + str(self.core_port) + '/event', headers={'Accept': 'text/event-stream', 'x-opencode-directory': str(self.workspace)})
+        stream = urlopen(request, timeout=15)
+        prepared = self.boundary.get('runPrepared')
+        if not admitting and not (prepared and prepared['expiresAt'] >= time.time()) and not self.local('GET', '/session/' + quote(session, safe='') + '/execution'):
+            stream.close()
+            self.converge_pending_sync()
+            return
+        def observe():
+            try:
+                with stream:
+                    for _ in self.stream_frames(stream, session, run_id, 0):
+                        pass
+                self.converge_pending_sync(wait=True)
+            except Exception:
+                # Keep the durable deferred claim; the next authenticated RPC
+                # retries convergence. No idle reconnect or background retry.
+                pass
+            finally:
+                with self.lock:
+                    self.sync_watcher = None
+        self.sync_watcher = threading.Thread(target=observe, daemon=True)
+        self.sync_watcher.start()
 
     def dispatch(self, value):
         operation, payload = value['operation'], value['payload']
@@ -456,24 +533,16 @@ class Agent:
                 self.stop_core()
                 return {'retired': True}
             if operation == 'sync-global':
+                self.boundary.set('pendingGlobalSync', True)
                 session = self.boundary.get('session')
-                if session:
-                    execution = self.local('GET', '/session/' + quote(session, safe='') + '/execution')
-                    if execution and execution.get('continuation') == 'live':
-                        raise ValueError('cannot sync during active execution')
-                snapshot = self.outbound('snapshot.get', {})
-                previous = self.boundary.snapshot
-                self.boundary.apply(snapshot)
-                self.stop_core()
-                try:
-                    self.start_core()
-                except Exception:
-                    if previous:
-                        marker = dict(directory=str(previous['revision']) + '-' + previous['hash'], hash=previous['hash'])
-                        atomic(self.boundary.root / 'active.json', canonical(marker))
-                        self.boundary.snapshot = previous
-                        self.start_core()
-                    raise
+                prepared = self.boundary.get('runPrepared')
+                execution = self.local('GET', '/session/' + quote(session, safe='') + '/execution') if session else None
+                if execution or (prepared and prepared['expiresAt'] >= time.time()):
+                    self.ensure_sync_watcher()
+                    snapshot = self.boundary.snapshot
+                    return {'deferred': True, 'revision': snapshot['revision'], 'hash': snapshot['hash']}
+                self.refresh_snapshot(allow_offline=False)
+                snapshot = self.boundary.snapshot
                 return {'revision': snapshot['revision'], 'hash': snapshot['hash']}
             if not self.ready or not self.process or self.process.poll() is not None:
                 raise ValueError('node not ready')
@@ -488,6 +557,11 @@ class Agent:
             if not session or value.get('sessionId') != session:
                 raise ValueError('foreign session')
             encoded = quote(session, safe='')
+            if operation in ('status', 'session.status', 'session.messages', 'session.query', 'session.get'):
+                try:
+                    self.converge_pending_sync()
+                except OSError:
+                    pass
             run_id = self.boundary.get('runId')
             if operation == 'session.get':
                 return self.local('GET', '/session/' + encoded)
@@ -563,6 +637,7 @@ class Agent:
                 for key in ('model', 'variant', 'agent'):
                     if key in payload:
                         body[key] = payload[key]
+                self.ensure_sync_watcher(admitting=True)
                 self.local('POST', '/session/' + encoded + '/prompt_async', body)
                 return {'accepted': True, 'runId': run_id}
             if operation in ('pause', 'resume'):

@@ -55,8 +55,13 @@ snapshot = dict(version=1, revision=1, configuration={'runtime': runtime}, skill
 snapshot['hash'] = digest(snapshot)
 boundary.apply(snapshot)
 agent = Agent(boundary, 'https://control.invalid')
+control_outage = [False]
+control_requests = []
 def fixture_control(operation, payload, session=None):
     if operation == 'snapshot.get':
+        control_requests.append(operation)
+        if control_outage[0]:
+            raise OSError('fixture control outage')
         return snapshot
     raise ValueError('unexpected fixture control operation')
 agent.outbound = fixture_control
@@ -97,8 +102,12 @@ try:
     raw = canonical(boundary.envelope('session.events', {'runId': 'compiled-real-run'}, session))
     live_stream = urlopen(Request(base + '/rpc', data=raw, headers={'x-node-signature': boundary.signature(raw)}), timeout=30)
     assert live_stream.headers['x-node-stream-ready'] == boundary.signature(raw + b'\nstream-ready')
+    requests_before_admission = len(control_requests)
+    control_outage[0] = True
     result = rpc('run', {'runId': 'compiled-real-run', 'parts': [{'type': 'text', 'text': 'Run the shell probe'}], 'model': {'providerID': 'fixture', 'modelID': 'fixture'}}, session)
     assert result['accepted']
+    assert len(control_requests) == requests_before_admission, 'prepared admission redundantly refreshed snapshot'
+    control_outage[0] = False
     frames = []
     # Open the explicitly requested stream while actual model execution is live.
     for _ in range(40):
@@ -108,6 +117,12 @@ try:
         time.sleep(.05)
     paused = rpc('pause', {'runId': 'compiled-real-run'}, session)
     assert paused['paused'] is True
+    snapshot = json.loads(json.dumps(snapshot))
+    snapshot['revision'] = 2
+    snapshot['defaults'] = {'deferredFixture': True}
+    snapshot['hash'] = digest({key: value for key, value in snapshot.items() if key != 'hash'})
+    deferred = rpc('sync-global', {}, session)
+    assert deferred['deferred'] and boundary.get('pendingGlobalSync') is True
     resumed = rpc('resume', {'runId': 'compiled-real-run'}, session)
     assert resumed['paused'] is False
     with live_stream as response:
@@ -126,6 +141,7 @@ try:
         time.sleep(.1)
     assert 'worker-owned-shell' in history, history
     assert 'Telegram compiled execution complete' in history, history
+    assert boundary.snapshot['revision'] == 2 and boundary.get('pendingGlobalSync') is False, 'deferred sync did not converge after completion'
     assert agent.process is not None
     assert generated['OPENCODE_TELEGRAM_PROCESS_BUDGET'] == '1'
     assert all(not key.startswith(('NODE_SHARED_SECRET', 'TELEGRAM_', 'RAILWAY_')) for key in generated)
@@ -164,7 +180,7 @@ try:
     assert rpc('session.get', {}, session)['id'] == session
     rpc('retire')
     assert agent.process is None and boundary.get('retired') is True
-    print(json.dumps({'compiledCoreExecution': True, 'signedLiveEvents': len(frames), 'uid': 1000, 'processBudget': 1, 'retirement': True, 'questionReply': True, 'pauseResume': True, 'stopJoinedShell': True, 'restartSession': True, 'snapshotRestore': True}))
+    print(json.dumps({'compiledCoreExecution': True, 'signedLiveEvents': len(frames), 'uid': 1000, 'processBudget': 1, 'retirement': True, 'questionReply': True, 'pauseResume': True, 'stopJoinedShell': True, 'restartSession': True, 'snapshotRestore': True, 'preparedOutageAdmission': True, 'deferredIdleSync': True}))
 finally:
     agent.stop_core()
     server.shutdown()

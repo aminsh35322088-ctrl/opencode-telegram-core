@@ -175,5 +175,83 @@ class LifecycleTests(SecurityTests):
         self.assertEqual(self.b.restore()['revision'], 10)
 
 
+class DeferredSyncTests(LifecycleTests):
+    def test_prepared_run_does_not_refresh_during_control_outage(self):
+        calls = []
+        self.agent.local = lambda method, route, payload=None: calls.append((method, route)) or None
+        refreshes = []
+        self.agent.refresh_snapshot = lambda: refreshes.append('snapshot')
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'reserved'}))
+        self.assertEqual(refreshes, ['snapshot'])
+        def outage(*args, **kwargs):
+            self.fail('prepared admission contacted unavailable control plane')
+        self.agent.refresh_snapshot = outage
+        result = self.agent.dispatch(self.request('run', {'runId': 'reserved', 'text': 'execute'}))
+        self.assertTrue(result['accepted'])
+        self.assertIn(('POST', '/session/ses_owned/prompt_async'), calls)
+
+    def test_wrong_or_expired_prepared_run_cannot_dispatch_prompt(self):
+        from unittest.mock import patch
+        self.agent.local = lambda *args: None
+        self.agent.refresh_snapshot = lambda: None
+        with patch.object(a.time, 'time', return_value=100):
+            self.agent.dispatch(self.request('run.prepare', {'runId': 'reserved'}))
+        for run, now in [('other', 101), ('reserved', 131)]:
+            with patch.object(a.time, 'time', return_value=now):
+                with self.assertRaises(ValueError):
+                    self.agent.dispatch(self.request('run', {'runId': run, 'text': 'execute'}))
+
+    def test_busy_sync_defers_and_idle_completion_fetches_once(self):
+        snapshot = self.snapshot()
+        self.b.apply(snapshot)
+        state = {'busy': True}
+        self.agent.local = lambda *args, **kwargs: {'continuation': 'live', 'runId': 'native'} if state['busy'] else None
+        watchers = []
+        self.agent.ensure_sync_watcher = lambda: watchers.append('active-only')
+        result = self.agent.dispatch(self.request('sync-global'))
+        self.assertTrue(result['deferred'])
+        self.assertTrue(self.b.get('pendingGlobalSync'))
+        self.assertEqual(watchers, ['active-only'])
+        fetches = []
+        self.agent.outbound = lambda *args: fetches.append('snapshot') or snapshot
+        state['busy'] = False
+        self.assertTrue(self.agent.converge_pending_sync())
+        self.assertFalse(self.b.get('pendingGlobalSync'))
+        self.agent.converge_pending_sync()
+        self.assertEqual(fetches, ['snapshot'])
+
+    def test_deferred_claim_survives_outage_without_background_retry(self):
+        self.b.apply(self.snapshot())
+        self.b.set('pendingGlobalSync', True)
+        self.agent.local = lambda *args: None
+        calls = []
+        def unavailable(*args):
+            calls.append('snapshot')
+            raise OSError('fixture outage')
+        self.agent.outbound = unavailable
+        with self.assertRaises(OSError):
+            self.agent.converge_pending_sync()
+        self.assertEqual(calls, ['snapshot'])
+        self.assertTrue(self.b.get('pendingGlobalSync'))
+
+    def test_corrupt_same_revision_repairs_only_verified_bytes(self):
+        snapshot = self.snapshot()
+        directory = self.b.apply(snapshot)
+        (directory / 'snapshot.json').write_text('{}')
+        (directory / 'skills' / 'safe' / 'SKILL.md').write_text('corrupt')
+        self.b.db.close()
+        self.b = a.Boundary(self.temp.name, 's' * 32, self.identity)
+        self.assertIsNone(self.b.snapshot)
+        self.b.apply(snapshot)
+        self.assertEqual(self.b.restore(), snapshot)
+        self.assertEqual((directory / 'skills' / 'safe' / 'SKILL.md').read_text(), 'hello')
+        conflicting = self.snapshot()
+        conflicting['defaults'] = {'changed': True}
+        conflicting['hash'] = a.digest({key: value for key, value in conflicting.items() if key != 'hash'})
+        with self.assertRaises(ValueError):
+            self.b.apply(conflicting)
+        self.assertEqual(self.b.restore(), snapshot)
+
+
 if __name__ == '__main__':
     unittest.main()
