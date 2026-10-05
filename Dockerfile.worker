@@ -1,0 +1,23 @@
+# Reuses the existing source-pinned compiled Core build, never downloads a floating runtime.
+FROM node:22.14.0-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends python3 build-essential ca-certificates unzip curl git && rm -rf /var/lib/apt/lists/*
+RUN npm install --global node-gyp@11
+WORKDIR /core
+COPY scripts ./scripts
+COPY upstream ./upstream
+COPY patches ./patches
+COPY runtime ./runtime
+ARG RAILWAY_GIT_COMMIT_SHA
+ARG CORE_SOURCE_COMMIT
+ENV CORE_SOURCE_COMMIT=${CORE_SOURCE_COMMIT:-${RAILWAY_GIT_COMMIT_SHA}}
+RUN test -n "$CORE_SOURCE_COMMIT" && ./scripts/build-runtime.sh
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends tini python3 git ripgrep ca-certificates && rm -rf /var/lib/apt/lists/* && groupadd -g 1000 core && useradd -u 1000 -g 1000 -M core
+COPY --from=build /core/dist/runtime/opencode /usr/local/bin/opencode
+COPY --from=build /core/dist/build-info.json /usr/local/share/core-build-info.json
+COPY worker /opt/worker
+ENV PORT=3000 OPENCODE_TELEGRAM_PROCESS_BUDGET=1
+EXPOSE 3000
+ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
+CMD ["python3", "-u", "/opt/worker/node_agent.py"]
