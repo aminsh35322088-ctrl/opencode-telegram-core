@@ -279,7 +279,7 @@ class Boundary:
 
 
 class Agent:
-    def __init__(self, boundary, control_plane, binary='/usr/local/bin/opencode', core_port=4096):
+    def __init__(self, boundary, control_plane, binary='/usr/local/bin/opencode', core_port=4096, exit_on_crash=None):
         endpoint = urlsplit(control_plane)
         if endpoint.scheme != 'https' or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
             raise ValueError('control plane requires HTTPS')
@@ -288,6 +288,13 @@ class Agent:
         self.binary = binary
         self.core_port = core_port
         self.process = None
+        self.process_epoch = 0
+        self.process_stopping = False
+        self.process_lease = None
+        self.fatal_exit_requested = False
+        self.process_lock = threading.RLock()
+        self.lifecycle_lock = threading.RLock()
+        self.exit_on_crash = os._exit if exit_on_crash is None else exit_on_crash
         self.ready = False
         self.lock = threading.RLock()
         self.sync_watcher = None
@@ -324,7 +331,51 @@ class Agent:
                 return
         self.start_core()
 
+    def fatal_core_exit(self):
+        with self.process_lock:
+            if self.fatal_exit_requested:
+                return
+            self.fatal_exit_requested = True
+            self.ready = False
+            self.exit_on_crash(1)
+
+    def supervise_core(self, process):
+        with self.process_lock:
+            self.process_epoch += 1
+            lease = {'process': process, 'epoch': self.process_epoch, 'intentional': False,
+                     'joined': False, 'stop_complete': threading.Event()}
+            self.process = process
+            self.process_lease = lease
+            self.process_stopping = False
+        def await_exit():
+            try:
+                code = process.wait()
+            except Exception:
+                self.fatal_core_exit()
+                return
+            # PR28's essential-child contract: signal/nonzero/75 always retires
+            # the container, even during a planned stop or from an older lease.
+            if code != 0:
+                self.fatal_core_exit()
+                return
+            if lease['intentional']:
+                lease['stop_complete'].wait()
+            with self.process_lock:
+                if lease['intentional'] and lease['joined']:
+                    return
+                self.fatal_core_exit()
+        watcher = threading.Thread(target=await_exit, daemon=True)
+        watcher.start()
+        return watcher
+
     def start_core(self):
+        with self.lifecycle_lock:
+            return self._start_core()
+
+    def _start_core(self):
+        with self.process_lock:
+            if self.fatal_exit_requested or self.process is not None:
+                raise RuntimeError('Core lease must be intentionally joined before replacement')
         snapshot = self.boundary.snapshot
         if snapshot is None:
             raise ValueError('snapshot unavailable')
@@ -403,15 +454,23 @@ class Agent:
                 os.setuid(1000)
         else:
             raise RuntimeError('production agent requires root to demote Core')
-        self.process = subprocess.Popen([self.binary, 'serve', '--hostname', '127.0.0.1', '--port', str(self.core_port)], cwd=self.workspace,
+        try:
+            process = subprocess.Popen([self.binary, 'serve', '--hostname', '127.0.0.1', '--port', str(self.core_port)], cwd=self.workspace,
                                        env=child_environment(os.environ), preexec_fn=demote, start_new_session=True)
+        except Exception:
+            self.fatal_core_exit()
+            raise
+        self.supervise_core(process)
         # Bounded startup checks only; no background polling or idle traffic.
         for _ in range(100):
-            if self.process.poll() is not None:
+            if process.poll() is not None:
                 raise RuntimeError('Core exited during startup')
             try:
                 self.local('GET', '/global/health')
-                self.ready = True
+                with self.process_lock:
+                    if self.process is not process or self.process_stopping or process.poll() is not None:
+                        raise RuntimeError('Core startup lease ended')
+                    self.ready = True
                 return
             except Exception:
                 time.sleep(.1)
@@ -419,20 +478,51 @@ class Agent:
         raise RuntimeError('Core startup timeout')
 
     def stop_core(self):
-        self.ready = False
-        if self.process and self.process.poll() is None:
+        with self.lifecycle_lock:
+            with self.process_lock:
+                process, lease = self.process, self.process_lease
+                self.ready = False
+                if process is not None and process.poll() is not None and not (lease and lease['intentional'] and lease['joined']):
+                    self.fatal_core_exit()
+                    raise RuntimeError('Core exited before retirement intent')
+                self.process_stopping = True
+                self.process_epoch += 1
+                if lease:
+                    lease['intentional'] = True
+            if process is None:
+                return
             try:
-                self.local('POST', '/global/dispose', {}, timeout=10)
-            except Exception:
-                pass
-            import signal
-            os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=5)
-        self.process = None
+                if process.poll() is None:
+                    try:
+                        self.local('POST', '/global/dispose', {}, timeout=10)
+                    except Exception:
+                        # Disposal failure is uncertain retirement, not permission
+                        # to signal/replace the owner beneath a surviving Agent.
+                        self.fatal_core_exit()
+                        raise RuntimeError('Core disposal could not be joined')
+                    import signal
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                try:
+                    code = process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.fatal_core_exit()
+                    raise RuntimeError('Core retirement timed out')
+                if code != 0:
+                    self.fatal_core_exit()
+                    raise RuntimeError('Core exited without proven retirement')
+                with self.process_lock:
+                    if lease:
+                        lease['joined'] = True
+                    if self.process is process:
+                        self.process = None
+                        self.process_lease = None
+            finally:
+                if lease:
+                    lease['stop_complete'].set()
 
     def local(self, method, route, payload=None, timeout=30):
         request = Request('http://127.0.0.1:' + str(self.core_port) + route,
@@ -720,9 +810,11 @@ class Agent:
         response = urlopen(request, timeout=15)
         return response, session, run_id, after
 
-    def stream_frames(self, stream, session, run_id, cursor):
+    def stream_frames(self, stream, session, run_id, cursor, stream_nonce=None):
         lines = []
         size = 0
+        sequence = 0
+        stream_nonce = secrets.token_hex(24) if stream_nonce is None else stream_nonce
         for raw_line in stream:
             if self.retired or not self.ready or self.boundary.get('runId') != run_id or self.boundary.get('session') != session:
                 return
@@ -754,7 +846,8 @@ class Agent:
                 if durable.get('aggregateID') != session or type(seq) is not int or seq <= cursor:
                     raise ValueError('foreign or unordered event')
                 cursor = seq
-            envelope = self.boundary.envelope('session.event', {'runId': run_id, 'event': event}, session)
+            sequence += 1
+            envelope = self.boundary.envelope('session.event', {'runId': run_id, 'event': event, 'streamNonce': stream_nonce, 'sequence': sequence}, session)
             raw = canonical(envelope)
             yield canonical({'envelope': envelope, 'body': raw.decode('utf-8'), 'signature': self.boundary.signature(raw)})
             properties = event.get('properties', {})
@@ -808,7 +901,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 try:
                     with stream:
-                        for frame in self.server.agent.stream_frames(stream, session, run_id, cursor):
+                        for frame in self.server.agent.stream_frames(stream, session, run_id, cursor, value['nonce']):
                             self.wfile.write(b'data: ' + frame + b'\n\n')
                             self.wfile.flush()
                 except Exception:

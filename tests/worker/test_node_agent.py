@@ -148,6 +148,18 @@ class LifecycleTests(SecurityTests):
         self.b.set('runId', 'replacement')
         self.assertEqual(list(self.agent.stream_frames(stream, 'ses_owned', 'run_owned', 0)), [])
 
+    def test_stream_sequences_are_request_bound_and_independent_of_cursor(self):
+        import io
+        events = [{'type': 'message.updated', 'durable': {'aggregateID': 'ses_owned', 'seq': 71}},
+                  {'type': 'session.idle', 'durable': {'aggregateID': 'ses_owned', 'seq': 74}}]
+        raw = b''.join(b'data: ' + a.canonical(event) + b'\n\n' for event in events)
+        frames = [json.loads(frame)['envelope'] for frame in self.agent.stream_frames(io.BytesIO(raw), 'ses_owned', 'run_owned', 70, 'signed-rpc-nonce')]
+        self.assertEqual([frame['payload']['sequence'] for frame in frames], [1, 2])
+        self.assertEqual([frame['payload']['streamNonce'] for frame in frames], ['signed-rpc-nonce', 'signed-rpc-nonce'])
+        replacement = list(self.agent.stream_frames(io.BytesIO(raw), 'ses_owned', 'run_owned', 70, 'replacement-rpc-nonce'))
+        self.assertEqual(json.loads(replacement[0])['envelope']['payload']['sequence'], 1)
+        self.assertEqual(json.loads(replacement[0])['envelope']['payload']['streamNonce'], 'replacement-rpc-nonce')
+
     def test_foreign_durable_event_fails_closed(self):
         import io
         event = {'type': 'message.updated', 'durable': {'aggregateID': 'ses_other', 'seq': 1}}
@@ -251,6 +263,174 @@ class DeferredSyncTests(LifecycleTests):
         with self.assertRaises(ValueError):
             self.b.apply(conflicting)
         self.assertEqual(self.b.restore(), snapshot)
+
+
+class ProcessSupervisorTests(SecurityTests):
+    def fake_process(self):
+        import threading
+        class Process:
+            pid = 123456
+            def __init__(self):
+                self.exited = threading.Event()
+            def wait(self, timeout=None):
+                if not self.exited.wait(timeout):
+                    raise a.subprocess.TimeoutExpired('fixture', timeout)
+                return self.exit_code
+            exit_code = -9
+            def poll(self):
+                return self.exit_code if self.exited.is_set() else None
+        return Process()
+
+    def agent(self):
+        import threading
+        self.exit_called = threading.Event()
+        self.exit_codes = []
+        def exit_callback(code):
+            self.exit_codes.append(code)
+            self.exit_called.set()
+        return a.Agent(self.b, 'https://control.invalid', exit_on_crash=exit_callback)
+
+    def test_unexpected_exit_marks_unready_and_requests_nonzero_agent_exit(self):
+        agent = self.agent()
+        process = self.fake_process()
+        watcher = agent.supervise_core(process)
+        agent.ready = True
+        process.exited.set()
+        watcher.join(1)
+        self.assertTrue(self.exit_called.is_set())
+        self.assertEqual(self.exit_codes, [1])
+        self.assertFalse(agent.ready)
+
+    def test_unexpected_normal_exit_is_not_permission_for_local_restart(self):
+        agent = self.agent()
+        process = self.fake_process()
+        process.exit_code = 0
+        watcher = agent.supervise_core(process)
+        process.exited.set()
+        watcher.join(1)
+        self.assertEqual(self.exit_codes, [1])
+        with self.assertRaises(RuntimeError):
+            agent.start_core()
+
+    def test_exit_zero_before_stop_intent_cannot_be_reclassified_as_reload(self):
+        import threading
+        agent = self.agent()
+        process = self.fake_process()
+        release_callback = threading.Event()
+        original_wait = process.wait
+        def delayed_wait(timeout=None):
+            code = original_wait(timeout)
+            release_callback.wait()
+            return code
+        process.wait = delayed_wait
+        watcher = agent.supervise_core(process)
+        process.exit_code = 0
+        process.exited.set()
+        with self.assertRaises(RuntimeError):
+            agent.stop_core()
+        self.assertEqual(self.exit_codes, [1])
+        self.assertFalse(agent.process_lease['intentional'])
+        release_callback.set()
+        watcher.join(1)
+        self.assertEqual(self.exit_codes, [1])
+
+    def test_wait_authority_failure_retires_agent(self):
+        agent = self.agent()
+        process = self.fake_process()
+        def lost_wait():
+            raise OSError('fixture lost wait authority')
+        process.wait = lost_wait
+        watcher = agent.supervise_core(process)
+        watcher.join(1)
+        self.assertEqual(self.exit_codes, [1])
+
+    def test_controlled_stop_invalidates_watcher_before_dispose_and_kill(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        process = self.fake_process()
+        watcher = agent.supervise_core(process)
+        agent.ready = True
+        def dispose(*args, **kwargs):
+            process.exit_code = 0
+            process.exited.set()
+        agent.local = dispose
+        with patch.object(a.os, 'killpg'):
+            agent.stop_core()
+        watcher.join(1)
+        self.assertEqual(self.exit_codes, [])
+        self.assertIsNone(agent.process)
+        self.assertFalse(agent.ready)
+
+    def test_joined_old_generation_callback_cannot_exit_replacement(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        import threading
+        old, replacement = self.fake_process(), self.fake_process()
+        release_old_callback = threading.Event()
+        original_wait = old.wait
+        def delayed_wait(timeout=None):
+            code = original_wait(timeout)
+            if timeout is None:
+                release_old_callback.wait()
+            return code
+        old.wait = delayed_wait
+        old_watcher = agent.supervise_core(old)
+        def dispose(*args, **kwargs):
+            old.exit_code = 0
+            old.exited.set()
+        agent.local = dispose
+        with patch.object(a.os, 'killpg'):
+            agent.stop_core()
+        replacement_watcher = agent.supervise_core(replacement)
+        agent.ready = True
+        release_old_callback.set()
+        old_watcher.join(1)
+        self.assertEqual(self.exit_codes, [])
+        self.assertTrue(agent.ready)
+        replacement.exited.set()
+        replacement_watcher.join(1)
+        self.assertEqual(self.exit_codes, [1])
+
+    def test_nonzero_exit_during_planned_retirement_is_fatal(self):
+        agent = self.agent()
+        process = self.fake_process()
+        watcher = agent.supervise_core(process)
+        def dispose(*args, **kwargs):
+            process.exit_code = 75
+            process.exited.set()
+        agent.local = dispose
+        with self.assertRaises(RuntimeError):
+            agent.stop_core()
+        watcher.join(1)
+        self.assertEqual(self.exit_codes, [1])
+        self.assertTrue(agent.fatal_exit_requested)
+
+    def test_retired_agent_still_exits_on_abnormal_child_loss(self):
+        agent = self.agent()
+        process = self.fake_process()
+        watcher = agent.supervise_core(process)
+        agent.retired = True
+        process.exited.set()
+        watcher.join(1)
+        self.assertEqual(self.exit_codes, [1])
+
+    def test_shutdown_authority_failure_does_not_force_kill_or_reload(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        process = self.fake_process()
+        watcher = agent.supervise_core(process)
+        def uncertain(*args, **kwargs):
+            raise OSError('fixture lost retirement authority')
+        agent.local = uncertain
+        with patch.object(a.os, 'killpg') as kill:
+            with self.assertRaises(RuntimeError):
+                agent.stop_core()
+            kill.assert_not_called()
+        self.assertEqual(self.exit_codes, [1])
+        with self.assertRaises(RuntimeError):
+            agent.start_core()
+        process.exited.set()
+        watcher.join(1)
 
 
 if __name__ == '__main__':

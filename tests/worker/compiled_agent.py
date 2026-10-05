@@ -125,12 +125,15 @@ try:
     assert deferred['deferred'] and boundary.get('pendingGlobalSync') is True
     resumed = rpc('resume', {'runId': 'compiled-real-run'}, session)
     assert resumed['paused'] is False
+    stream_nonce = json.loads(raw)['nonce']
     with live_stream as response:
         for line in response:
             if line.startswith(b'data: '):
                 frame = json.loads(line[6:])
                 assert boundary.signature(frame['body'].encode()) == frame['signature']
                 signed = json.loads(frame['body'])
+                assert signed['payload']['streamNonce'] == stream_nonce
+                assert signed['payload']['sequence'] == len(frames) + 1
                 assert signed['sessionId'] == session and signed['payload']['runId'] == 'compiled-real-run'
                 frames.append(signed)
     assert frames, 'no live signed events forwarded'
