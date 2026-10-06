@@ -303,6 +303,8 @@ class Agent:
         self.retired = boundary.get('retired') is True
         from provider_proxy import ProviderProxy
         self.proxy = ProviderProxy(self)
+        from mcp_proxy import MCPProxy
+        self.mcp_proxy = MCPProxy(self)
         from control_bridge import ControlBridge
         self.bridge = ControlBridge(self)
 
@@ -414,7 +416,9 @@ class Agent:
         if not isinstance(runtime_config, dict):
             raise ValueError('snapshot missing verified runtime configuration projection')
         runtime_config = self.proxy.rewrite(runtime_config, snapshot['credentialReferences'])
+        runtime_config = self.mcp_proxy.rewrite(runtime_config, snapshot['credentialReferences'])
         self.proxy.start()
+        self.mcp_proxy.start()
         self.bridge.start()
         tools = config / 'tools'
         if tools.is_symlink():
@@ -478,6 +482,7 @@ class Agent:
         raise RuntimeError('Core startup timeout')
 
     def stop_core(self):
+        self.mcp_proxy.close_active()
         with self.lifecycle_lock:
             with self.process_lock:
                 process, lease = self.process, self.process_lease
@@ -582,7 +587,8 @@ class Agent:
                 time.sleep(.025)
 
     def ensure_sync_watcher(self, admitting=False):
-        if self.sync_watcher is not None or not self.boundary.get('pendingGlobalSync'):
+        needs_mcp_join = self.mcp_proxy.active is not None and any(route['enabled'] for route in self.mcp_proxy.routes.values())
+        if self.sync_watcher is not None or not (self.boundary.get('pendingGlobalSync') or needs_mcp_join):
             return
         session, run_id = self.boundary.get('session'), self.boundary.get('runId')
         request = Request('http://127.0.0.1:' + str(self.core_port) + '/event', headers={'Accept': 'text/event-stream', 'x-opencode-directory': str(self.workspace)})
@@ -603,6 +609,7 @@ class Agent:
                 # retries convergence. No idle reconnect or background retry.
                 pass
             finally:
+                self.mcp_proxy.end(session, run_id)
                 with self.lock:
                     self.sync_watcher = None
         self.sync_watcher = threading.Thread(target=observe, daemon=True)
@@ -727,8 +734,13 @@ class Agent:
                 for key in ('model', 'variant', 'agent'):
                     if key in payload:
                         body[key] = payload[key]
-                self.ensure_sync_watcher(admitting=True)
-                self.local('POST', '/session/' + encoded + '/prompt_async', body)
+                self.mcp_proxy.begin(session, run_id)
+                try:
+                    self.ensure_sync_watcher(admitting=True)
+                    self.local('POST', '/session/' + encoded + '/prompt_async', body)
+                except Exception:
+                    self.mcp_proxy.end(session, run_id)
+                    raise
                 return {'accepted': True, 'runId': run_id}
             if operation in ('pause', 'resume'):
                 if payload.get('runId') != run_id:
@@ -746,6 +758,7 @@ class Agent:
             if operation == 'stop':
                 if payload.get('runId') != run_id:
                     raise ValueError('foreign run')
+                self.mcp_proxy.end(session, run_id)
                 execution = self.local('GET', '/session/' + encoded + '/execution')
                 if not execution:
                     self.boundary.set('runPrepared', None)
@@ -847,11 +860,14 @@ class Agent:
                     raise ValueError('foreign or unordered event')
                 cursor = seq
             sequence += 1
+            properties = event.get('properties', {})
+            terminal = event.get('type') in ('session.idle', 'session.error') or (event.get('type') == 'session.status' and properties.get('status', {}).get('type') == 'idle')
+            if terminal:
+                self.mcp_proxy.end(session, run_id)
             envelope = self.boundary.envelope('session.event', {'runId': run_id, 'event': event, 'streamNonce': stream_nonce, 'sequence': sequence}, session)
             raw = canonical(envelope)
             yield canonical({'envelope': envelope, 'body': raw.decode('utf-8'), 'signature': self.boundary.signature(raw)})
-            properties = event.get('properties', {})
-            if event.get('type') in ('session.idle', 'session.error') or (event.get('type') == 'session.status' and properties.get('status', {}).get('type') == 'idle'):
+            if terminal:
                 return
 
 

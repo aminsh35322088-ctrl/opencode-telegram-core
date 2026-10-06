@@ -37,3 +37,26 @@ the Bot's authenticated control endpoint, allocator, catalog, credential leases,
 Telegram routing and end-to-end Railway tests. Secure remote MCP credential
 materialization and the complete generated Action execution path require that
 control-plane integration; stored metadata alone is not proof of execution.
+# Remote MCP credential boundary
+
+Remote MCP URLs are rewritten to a root Agent loopback proxy. During an admitted
+owned run, the proxy requests `credential.get` with purpose `mcp.request`, exact
+`mcp:<name>` capability, snapshot credential reference ID, original HTTPS endpoint,
+and bound session. Leased headers remain in Agent memory for at most 60 seconds;
+Core configuration, process environment and logs receive no credential values.
+Uncredentialed remote servers use the same endpoint boundary without a lease.
+
+The proxy supports Streamable HTTP POST/GET/DELETE and preserves MCP session and
+protocol headers. Public DNS addresses are pinned with verified TLS, redirects
+are refused, requests are bounded to 10 MiB and responses to 32 MiB. Active
+streams are closed on execution completion, stop, reload or retirement; there is
+no idle reconnect or credential refresh. A stream exceeding ten minutes closes
+that capability connection, without stopping the Core execution.
+
+Legacy SSE endpoint negotiation and OAuth client acquisition are unsupported and
+fail closed. An existing safely leased access token may authenticate a Streamable
+HTTP server; Core is configured with OAuth disabled for its local proxy route.
+The compiled MCP probe uses an offline synthetic upstream transport; it verifies
+real Core discovery and tool execution, while DNS/TLS rejection is unit-tested.
+
+Pending credential and TCP/TLS requests are cancellable without holding the runtime retirement lock. Unsupported remote transport configuration marks only that runtime capability unavailable; it does not block ordinary Topic AI or alter canonical Global enabled settings.
