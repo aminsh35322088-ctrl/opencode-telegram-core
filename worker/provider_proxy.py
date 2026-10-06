@@ -80,6 +80,8 @@ class ProviderProxy:
         return result
 
     def credential(self, provider):
+        if self.agent.boundary.unbound:
+            raise ValueError('unbound node authority unavailable')
         key = (provider['capability'], provider['credentialId'])
         with self.lock:
             now = time.time()
@@ -118,7 +120,7 @@ class ProviderProxy:
                 connection = None
                 started = False
                 try:
-                    if not proxy.agent.ready or proxy.agent.retired:
+                    if proxy.agent.boundary.unbound or not proxy.agent.ready or proxy.agent.retired:
                         raise ValueError('capability unavailable')
                     parts = self.path.split('/', 3)
                     if len(parts) != 4 or parts[1] != 'proxy':

@@ -1,9 +1,10 @@
 """Narrow localhost custom-tool bridge; secrets/signatures stay in root Agent."""
 import json
 import threading
+from action_runtime import ActionRuntime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-MUTATIONS = {'skills.add', 'skills.create', 'skills.update', 'skills.delete', 'extensions.ensure', 'extensions.remove', 'mcp.add', 'mcp.enable', 'mcp.rename', 'mcp.delete', 'mcp.sync', 'generated-actions.toggle'}
+MUTATIONS = {'skills.add', 'skills.create', 'skills.update', 'skills.delete', 'extensions.ensure', 'extensions.remove', 'mcp.add', 'mcp.enable', 'mcp.rename', 'mcp.delete', 'mcp.sync', 'generated-actions.toggle', 'generated-actions.register', 'generated-actions.update', 'generated-actions.remove'}
 READS = {'skills.list', 'extensions.list', 'generated-actions.list', 'mcp.list', 'settings.get', 'models.providers', 'models.list'}
 
 
@@ -14,6 +15,8 @@ class ControlBridge:
         self.server = None
 
     def dispatch(self, value):
+        if self.agent.boundary.unbound:
+            raise ValueError('unbound node authority unavailable')
         if not isinstance(value, dict) or self.agent.retired or not self.agent.ready:
             raise ValueError('control unavailable')
         session = self.agent.boundary.get('session')
@@ -21,6 +24,17 @@ class ControlBridge:
             raise ValueError('foreign tool session')
         action = value.get('action')
         snapshot = self.agent.boundary.snapshot
+        if action in ('actions.list', 'actions.resolve', 'actions.invoke'):
+            payload = value.get('payload', {})
+            if not isinstance(payload, dict):
+                raise ValueError('invalid action request')
+            runtime = ActionRuntime(snapshot)
+            if action == 'actions.list':
+                return runtime.list()
+            if action == 'actions.invoke':
+                return runtime.invoke(payload.get('id'), payload.get('arguments', {}))
+            plan = runtime.plan(payload.get('id'), payload.get('arguments', {}))
+            return {**runtime.resolve(payload.get('id')), 'plan': plan, 'next': 'Call the exact resolved native/action/MCP tool with these arguments in this same session. Core tool permission and process policies apply; resolution does not grant approval.'}
         if action in READS:
             fields = {'skills.list': 'skills', 'extensions.list': 'catalog', 'generated-actions.list': 'actions', 'mcp.list': 'configuration', 'settings.get': 'defaults', 'models.providers': 'catalog', 'models.list': 'catalog'}
             return {'revision': snapshot['revision'], 'data': snapshot[fields[action]]}
@@ -82,6 +96,19 @@ class ControlBridge:
     const response = await fetch("http://127.0.0.1:''' + str(self.port) + '''/control", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...args,sessionId:context.sessionID})});
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error("Global control operation rejected");
+    return JSON.stringify(result.result);
+  }
+};
+'''
+
+    def actions_tool_source(self):
+        return '''export default {
+  description: "Discover enabled generated Actions from the verified Global snapshot. Resolve an exact ID to its native/action/MCP target and immutable fixed arguments, then call that tool directly. Core tool permissions apply.",
+  args: { action: {type:"string",enum:["list","resolve"]}, id: {type:"string"}, arguments: {type:"object",additionalProperties:true} },
+  async execute(args, context) {
+    const response = await fetch("http://127.0.0.1:''' + str(self.port) + '''/control", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"actions."+args.action,sessionId:context.sessionID,payload:{id:args.id,arguments:args.arguments ?? {}}})});
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error("Action resolution rejected");
     return JSON.stringify(result.result);
   }
 };

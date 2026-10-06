@@ -9,6 +9,7 @@ import mcp_proxy as p
 
 
 class Agent:
+    boundary = type("Boundary", (), {"unbound": False})()
     ready = True
     retired = False
     def __init__(self):

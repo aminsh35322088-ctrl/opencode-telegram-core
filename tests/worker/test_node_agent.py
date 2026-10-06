@@ -435,3 +435,134 @@ class ProcessSupervisorTests(SecurityTests):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class UnboundTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name) / 'agent'
+        self.identity = dict(nodeId='slot', generation=1, chatId=0, threadId=0)
+        self.b = a.Boundary(self.root, 's' * 32, self.identity)
+        self.agent = a.Agent(self.b, 'https://control.invalid')
+
+    def tearDown(self):
+        self.b.db.close()
+        self.temp.cleanup()
+
+    def test_bootstrap_health_and_global_sync_without_session(self):
+        snapshot = dict(version=1, revision=1, configuration={'runtime': {}}, skills=[], actions=[], catalog={}, defaults={}, credentialReferences=[])
+        snapshot['hash'] = a.digest(snapshot)
+        fetches = []
+        self.agent.outbound = lambda op, payload: fetches.append(op) or snapshot
+        self.agent.start_core = lambda: setattr(self.agent, 'ready', True)
+        self.agent.bootstrap()
+        self.assertEqual(fetches, ['snapshot.get'])
+        self.assertEqual(self.b.snapshot, snapshot)
+        self.assertEqual(self.agent.dispatch(self.b.envelope('health', {})), {'ready': True})
+        self.assertFalse(self.agent.dispatch(self.b.envelope('status', {}))['bound'])
+        self.assertEqual(self.agent.dispatch(self.b.envelope('sync-global', {}))['revision'], 1)
+        self.assertIsNone(self.b.get('session'))
+        self.assertNotIn('/data/topic', self.agent.core_environment()['XDG_DATA_HOME'])
+
+    def test_all_unbound_execution_and_local_capability_paths_fail_closed(self):
+        self.agent.ready = True
+        self.b.set('session', 'malicious')
+        self.b.set('runId', 'malicious')
+        self.agent.local = lambda *args, **kwargs: self.fail('unbound RPC reached Core')
+        for operation in ('session.create', 'session.bind', 'session.delete', 'run.prepare', 'run', 'pause', 'resume', 'stop', 'question.list', 'question.reply', 'session.get', 'credential.get', 'mutation.commit'):
+            with self.subTest(operation=operation), self.assertRaises(ValueError):
+                self.agent.dispatch(self.b.envelope(operation, {}))
+        with self.assertRaises(ValueError): self.agent.events(self.b.envelope('session.events', {}))
+        for operation in ('credential.get', 'mutation.prepare', 'mutation.commit'):
+            with self.assertRaises(ValueError): self.agent.outbound(operation, {})
+        with self.assertRaises(ValueError): self.agent.proxy.credential({'capability': 'p', 'credentialId': 'c'})
+        with self.assertRaises(ValueError): self.agent.mcp_proxy.credential({'credentialId': None}, ('malicious', 'malicious'))
+        with self.assertRaises(ValueError): self.agent.mcp_proxy.begin('malicious', 'malicious')
+        with self.assertRaises(ValueError): self.agent.bridge.dispatch({'sessionId': 'malicious', 'action': 'skills.create'})
+
+    def reopen(self, identity, secret='t' * 32):
+        return a.Boundary(self.root, secret, identity)
+
+    def test_binding_is_exact_one_way_and_rotates_secret(self):
+        bound = dict(self.identity, generation=2, chatId=-12, threadId=4)
+        for identity, secret in ((dict(bound, generation=1), 't'*32), (dict(bound, generation=3), 't'*32), (dict(bound, nodeId='foreign'), 't'*32), (bound, 's'*32)):
+            with self.assertRaises(ValueError): self.reopen(identity, secret)
+        old = self.b.envelope('health', {})
+        old_signature = self.b.signature(a.canonical(old))
+        self.agent.stop_core = lambda: None
+        self.assertEqual(self.agent.dispatch(self.b.envelope('retire', {})), {'retired': True})
+        self.b.db.close()
+        self.b = self.reopen(bound)
+        self.assertIsNone(self.b.get('retired'))
+        self.assertFalse(a.Agent(self.b, 'https://control.invalid').retired)
+        with self.assertRaises(ValueError): self.b.authenticate(a.canonical(old), old_signature)
+        with self.assertRaises(ValueError): self.b.authenticate(a.canonical(old), self.b.signature(a.canonical(old)))
+        for identity in (self.identity, dict(bound, generation=3), dict(bound, threadId=5)):
+            with self.assertRaises(ValueError): self.reopen(identity)
+
+    def test_session_run_and_durable_topic_state_prevent_binding(self):
+        bound = dict(self.identity, generation=2, chatId=-12, threadId=4)
+        self.b.set('retired', True)
+        for key in ('session', 'runId', 'runPrepared', 'nativeRunId', 'execution'):
+            self.b.set(key, 'durable')
+            with self.assertRaises(ValueError): self.reopen(bound)
+            self.b.set(key, None)
+        topic = self.root.parent / 'topic'
+        topic.mkdir()
+        (topic / 'state.sqlite').write_bytes(b'durable')
+        with self.assertRaises(ValueError): self.reopen(bound)
+
+    def test_invalid_identity_and_privileged_environment_rejected(self):
+        for changes in (dict(chatId=0, threadId=4), dict(chatId=-12, threadId=0), dict(chatId=-12, threadId=1), dict(generation=0), dict(generation=True), dict(threadId=2**53)):
+            with self.assertRaises(ValueError): a.validate_identity(dict(self.identity, **changes))
+        for name in ('RAILWAY_API_TOKEN', 'RAILWAY_TOKEN', 'RAILWAY_PROJECT_TOKEN'):
+            with self.assertRaisesRegex(ValueError, 'provisioning credential'):
+                a.validate_worker_environment({name: 'fixture'})
+        a.validate_worker_environment({'RAILWAY_SERVICE_ID': 'fixture'})
+        from unittest.mock import patch
+        with patch.object(a.os, 'environ', {'RAILWAY_API_TOKEN': 'fixture'}):
+            with self.assertRaisesRegex(ValueError, 'provisioning credential'):
+                a.main()
+
+    def test_retire_persists_handoff_proof_only_after_core_join(self):
+        joined = []
+        def stop():
+            self.assertTrue(self.agent.retired)
+            self.assertIsNone(self.b.get('retired'))
+            joined.append(True)
+        self.agent.stop_core = stop
+        raw = a.canonical(self.b.envelope('retire', {}))
+        request = self.b.authenticate(raw, self.b.signature(raw))
+        self.assertEqual(self.agent.dispatch(request), {'retired': True})
+        self.assertEqual(joined, [True])
+        self.assertTrue(self.b.get('retired'))
+        self.assertEqual(self.agent.dispatch(self.b.envelope('retire', {})), {'retired': True})
+        self.assertEqual(joined, [True])
+        self.assertTrue(self.agent.dispatch(self.b.envelope('status', {}))['retired'])
+
+    def test_failed_core_join_does_not_authorize_binding(self):
+        def fail():
+            raise RuntimeError('join failed')
+        self.agent.stop_core = fail
+        with self.assertRaises(RuntimeError):
+            self.agent.dispatch(self.b.envelope('retire', {}))
+        self.assertIsNone(self.b.get('retired'))
+        with self.assertRaises(ValueError):
+            self.reopen(dict(self.identity, generation=2, chatId=-12, threadId=4))
+        self.agent.stop_core = lambda: None
+        self.assertEqual(self.agent.dispatch(self.b.envelope('retire', {})), {'retired': True})
+        self.assertTrue(self.b.get('retired'))
+
+    def test_retire_does_not_reuse_proof_for_unjoined_core(self):
+        self.b.set('retired', True)
+        self.agent.retired = True
+        self.agent.process = type('Process', (), {'poll': lambda self: None})()
+        self.agent.process_lease = {'process': self.agent.process, 'intentional': False, 'joined': False}
+        stops = []
+        def fail():
+            stops.append(True)
+            raise RuntimeError('join unconfirmed')
+        self.agent.stop_core = fail
+        with self.assertRaises(RuntimeError):
+            self.agent.dispatch(self.b.envelope('retire', {}))
+        self.assertEqual(stops, [True])

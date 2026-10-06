@@ -16,6 +16,24 @@ from urllib.parse import quote, urlsplit, unquote
 from urllib.request import Request, urlopen
 
 MAX_BODY = 10 * 1024 * 1024
+MAX_SAFE_INTEGER = 9007199254740991
+
+
+def validate_identity(identity):
+    if not isinstance(identity, dict) or set(identity) != {'nodeId', 'generation', 'chatId', 'threadId'}:
+        raise ValueError('invalid node identity')
+    if not isinstance(identity['nodeId'], str) or not re.fullmatch('[A-Za-z0-9_-]{1,128}', identity['nodeId']):
+        raise ValueError('invalid node identity')
+    if any(type(identity[key]) is not int or abs(identity[key]) > MAX_SAFE_INTEGER for key in ('generation', 'chatId', 'threadId')) or identity['generation'] < 1:
+        raise ValueError('invalid node identity')
+    if (identity['chatId'], identity['threadId']) != (0, 0) and (identity['chatId'] == 0 or identity['threadId'] <= 1):
+        raise ValueError('invalid topic identity')
+
+
+def validate_worker_environment(source):
+    # Check names only: privileged provisioning credentials must never enter a Worker.
+    if any(name in source for name in ('RAILWAY_API_TOKEN', 'RAILWAY_TOKEN', 'RAILWAY_PROJECT_TOKEN')):
+        raise ValueError('privileged Railway provisioning credential present')
 
 
 class BoundedHTTPServer(ThreadingHTTPServer):
@@ -109,6 +127,7 @@ def child_environment(source):
 
 class Boundary:
     def __init__(self, root, secret, identity):
+        validate_identity(identity)
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.secret = secret.encode()
@@ -122,10 +141,35 @@ class Boundary:
         self.db.execute('CREATE TABLE IF NOT EXISTS replay (nonce TEXT PRIMARY KEY, expires REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         persisted = self.get('identity')
+        fingerprint = hashlib.sha256(self.secret).hexdigest()
         if persisted is not None and persisted != identity:
-            raise ValueError('persisted node identity mismatch; retire before replacing volume')
-        self.set('identity', identity)
+            # Serialized volume deployment is required. CP must fence the old writer
+            # before rotating env/secret; this ledger cannot fence another container.
+            allowed = (persisted.get('chatId') == 0 and persisted.get('threadId') == 0
+                       and identity['chatId'] != 0 and identity['threadId'] > 1
+                       and persisted.get('nodeId') == identity['nodeId']
+                       and identity['generation'] == persisted.get('generation', 0) + 1
+                       and self.get('secretFingerprint') is not None
+                       and self.get('secretFingerprint') != fingerprint
+                       and self.get('retired') is True)
+            metadata = {'identity', 'secretFingerprint', 'snapshotHighwater', 'pendingGlobalSync', 'retired'}
+            durable = any(json.loads(value) not in (None, False) for key, value in self.db.execute('SELECT key, value FROM state') if key not in metadata)
+            for topic in (self.root / 'topic', self.root.parent / 'topic'):
+                if topic.is_symlink() or (topic.exists() and any(path.is_file() or path.is_symlink() for path in topic.rglob('*'))):
+                    durable = True
+            if not allowed or durable:
+                self.db.close()
+                raise ValueError('persisted node identity mismatch; retire before replacing volume')
+        with self.db:
+            if persisted is not None and persisted != identity:
+                self.db.execute('DELETE FROM state WHERE key=?', ('retired',))
+            self.db.executemany('INSERT OR REPLACE INTO state VALUES (?, ?)',
+                                [('identity', json.dumps(identity)), ('secretFingerprint', json.dumps(fingerprint))])
         self.snapshot = self.restore()
+
+    @property
+    def unbound(self):
+        return self.identity['chatId'] == 0 and self.identity['threadId'] == 0
 
     def get(self, key):
         row = self.db.execute('SELECT value FROM state WHERE key=?', (key,)).fetchone()
@@ -298,7 +342,10 @@ class Agent:
         self.ready = False
         self.lock = threading.RLock()
         self.sync_watcher = None
-        self.workspace = boundary.root / 'topic'
+        self.workspace = (Path('/tmp') / ('unbound-core-' + hashlib.sha256(canonical(boundary.identity)).hexdigest())
+                          if boundary.unbound else boundary.root / 'topic')
+        if self.workspace.is_symlink():
+            raise ValueError('Core workspace cannot be symlink')
         self.workspace.mkdir(exist_ok=True)
         self.retired = boundary.get('retired') is True
         from provider_proxy import ProviderProxy
@@ -309,6 +356,8 @@ class Agent:
         self.bridge = ControlBridge(self)
 
     def outbound(self, operation, payload, session=None):
+        if self.boundary.unbound and (operation != 'snapshot.get' or session is not None):
+            raise ValueError('unbound node authority unavailable')
         raw = canonical(self.boundary.envelope(operation, payload, session))
         request = Request(self.endpoint, data=raw, headers={'Content-Type': 'application/json', 'x-node-signature': self.boundary.signature(raw)}, method='POST')
         # Never follow redirects with the node signature or secret-bearing response.
@@ -425,6 +474,7 @@ class Agent:
             raise ValueError('runtime tool directory cannot be symlink')
         tools.mkdir(exist_ok=True)
         atomic(tools / 'bot.ts', self.bridge.tool_source().encode())
+        atomic(tools / 'actions.ts', self.bridge.actions_tool_source().encode())
         atomic(config / 'opencode.json', canonical(runtime_config))
         atomic(runtime_root / 'global-snapshot.json', canonical(snapshot))
         skills = config / 'skills'
@@ -460,7 +510,7 @@ class Agent:
             raise RuntimeError('production agent requires root to demote Core')
         try:
             process = subprocess.Popen([self.binary, 'serve', '--hostname', '127.0.0.1', '--port', str(self.core_port)], cwd=self.workspace,
-                                       env=child_environment(os.environ), preexec_fn=demote, start_new_session=True)
+                                       env=self.core_environment(), preexec_fn=demote, start_new_session=True)
         except Exception:
             self.fatal_core_exit()
             raise
@@ -480,6 +530,14 @@ class Agent:
                 time.sleep(.1)
         self.stop_core()
         raise RuntimeError('Core startup timeout')
+
+    def core_environment(self):
+        result = child_environment(os.environ)
+        if self.boundary.unbound:
+            # Availability boot must not create durable Topic/session/execution state.
+            result['XDG_DATA_HOME'] = str(self.workspace / 'home/.local/share')
+            result['XDG_STATE_HOME'] = str(self.workspace / 'home/.local/state')
+        return result
 
     def stop_core(self):
         self.mcp_proxy.close_active()
@@ -620,17 +678,35 @@ class Agent:
         if not isinstance(payload, dict):
             raise ValueError('payload must be object')
         with self.lock:
+            if self.boundary.unbound and operation not in ('health', 'status', 'sync-global', 'retire'):
+                raise ValueError('unbound node authority unavailable')
+            if self.boundary.unbound and value.get('sessionId') is not None:
+                raise ValueError('unbound node has no session')
+            if self.boundary.unbound and operation == 'status':
+                return {'ready': self.ready and not self.retired, 'bound': False, 'retired': self.boundary.get('retired') is True}
             if operation == 'health':
                 return {'ready': self.ready and not self.retired}
+            if operation == 'retire':
+                # Gate admission immediately, but persist handoff proof only after
+                # the essential Core lease has been intentionally stopped/joined.
+                self.retired = True
+                with self.process_lock:
+                    lease = self.process_lease
+                    joined = self.process is None or (lease and lease['intentional'] and lease['joined']
+                                                       and lease['process'] is self.process and self.process.poll() == 0)
+                if not (self.boundary.get('retired') is True and joined):
+                    self.stop_core()
+                    self.boundary.set('retired', True)
+                return {'retired': True}
             if self.retired:
                 raise ValueError('node retired')
-            if operation == 'retire':
-                self.boundary.set('retired', True)
-                self.retired = True
-                self.stop_core()
-                return {'retired': True}
             if operation == 'sync-global':
                 self.boundary.set('pendingGlobalSync', True)
+                if self.boundary.unbound:
+                    self.refresh_snapshot(allow_offline=False)
+                    snapshot = self.boundary.snapshot
+                    return {'revision': snapshot['revision'], 'hash': snapshot['hash']}
+
                 session = self.boundary.get('session')
                 prepared = self.boundary.get('runPrepared')
                 execution = self.local('GET', '/session/' + quote(session, safe='') + '/execution') if session else None
@@ -798,6 +874,8 @@ class Agent:
 
     def events(self, value):
         """Only an explicitly requested live-run stream; never reconnects or polls."""
+        if self.boundary.unbound:
+            raise ValueError('unbound node authority unavailable')
         payload = value['payload']
         if not isinstance(payload, dict):
             raise ValueError('invalid stream payload')
@@ -931,6 +1009,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    validate_worker_environment(os.environ)
     # Capture secret before spawning unprivileged Core. Never log configuration.
     secret = os.environ.pop('NODE_SHARED_SECRET')
     identity = dict(nodeId=os.environ['NODE_ID'], generation=int(os.environ['NODE_GENERATION']),
@@ -949,7 +1028,8 @@ def main():
     os.chmod(boundary.root, 0o700)
     agent = Agent(boundary, os.environ['CONTROL_PLANE_URL'])
     # topic is separate from root-only ledger; immutable snapshots must be readable.
-    agent.workspace = root / 'topic'
+    if not boundary.unbound:
+        agent.workspace = root / 'topic'
     agent.workspace.mkdir(exist_ok=True)
     server = BoundedHTTPServer(('0.0.0.0', int(os.environ.get('PORT', '3000'))), Handler)
     server.agent = agent

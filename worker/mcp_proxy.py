@@ -94,6 +94,8 @@ class MCPProxy:
             connection.close()
 
     def begin(self, session, run_id):
+        if self.agent.boundary.unbound:
+            raise ValueError('unbound node authority unavailable')
         self.close_active()
         with self.lock:
             self.active = (session, run_id)
@@ -136,6 +138,8 @@ class MCPProxy:
         return result
 
     def credential(self, route, owner):
+        if self.agent.boundary.unbound:
+            raise ValueError('unbound node authority unavailable')
         if not route['credentialId']:
             return {}
         key = (owner[0], route['capability'], route['credentialId'], route['endpoint'])

@@ -35,6 +35,7 @@ class ProxyTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
                 class Boundary:
+                    unbound = False
                     def get(self, key):
                         return 'ses_owned'
                 self.boundary = Boundary()
@@ -58,6 +59,7 @@ class ProxyHTTPTests(unittest.TestCase):
     def test_caller_auth_is_stripped_and_exact_capability_secret_stays_upstream(self):
         from urllib.request import Request, urlopen
         class Boundary:
+            unbound = False
             def get(self, key):
                 return 'ses_owned'
         class Agent:
