@@ -7,23 +7,30 @@ import {
   HttpClientRequest,
   HttpRouter,
 } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
-import { MoveSession } from "@opencode-ai/core/control-plane/move-session";
+import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
 import { Auth } from "../../src/auth";
-import { Config } from "../../src/config/config";
-import { Installation } from "../../src/installation";
 import { ServerAuth } from "../../src/server/auth";
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api";
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control";
-import { controlPlaneHandlers } from "../../src/server/routes/instance/httpapi/handlers/control-plane";
-import { globalHandlers } from "../../src/server/routes/instance/httpapi/handlers/global";
-import { authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization";
-import { schemaErrorLayer } from "../../src/server/routes/instance/httpapi/middleware/schema-error";
+import { ControlApi } from "../../src/server/routes/instance/httpapi/groups/control";
+import {
+  Authorization,
+  authorizationLayer,
+} from "../../src/server/routes/instance/httpapi/middleware/authorization";
+import {
+  SchemaErrorMiddleware,
+  schemaErrorLayer,
+} from "../../src/server/routes/instance/httpapi/middleware/schema-error";
 import { testEffect } from "../lib/effect";
 
+// Exercise the real control handler and schema without unrelated root API groups.
+const selftestApi = HttpApi.make("opencode-root")
+  .addHttpApi(ControlApi)
+  .middleware(SchemaErrorMiddleware)
+  .middleware(Authorization);
 const layer = HttpRouter.serve(
-  HttpApiBuilder.layer(RootHttpApi).pipe(
-    Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
+  HttpApiBuilder.layer(selftestApi).pipe(
+    Layer.provide(controlHandlers),
     Layer.provide([authorizationLayer, schemaErrorLayer]),
     HttpRouter.provideRequest(
       Layer.succeedContext(Context.empty() as Context.Context<unknown>),
@@ -33,14 +40,6 @@ const layer = HttpRouter.serve(
 ).pipe(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
-  Layer.provide(
-    Layer.mock(MoveSession.Service)({
-      moveSession: () =>
-        Effect.die("unexpected session transfer during selftest"),
-    }),
-  ),
-  Layer.provide(Layer.mock(Config.Service)({})),
-  Layer.provide(Layer.mock(Installation.Service)({})),
   Layer.provide(
     ServerAuth.Config.configLayer({
       password: Option.none(),
@@ -53,6 +52,12 @@ it.live(
   "private runtime selftest routes reject default access and never start a tombstoned run",
   () =>
     Effect.gen(function* () {
+      expect(
+        RootHttpApi.groups.control.endpoints.runtimeSelftest,
+      ).toBeDefined();
+      expect(
+        RootHttpApi.groups.control.endpoints.runtimeSelftestAbort,
+      ).toBeDefined();
       const previous = process.env.OPENCODE_TELEGRAM_RUNTIME_SELFTEST;
       try {
         delete process.env.OPENCODE_TELEGRAM_RUNTIME_SELFTEST;
