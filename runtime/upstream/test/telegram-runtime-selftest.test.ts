@@ -25,7 +25,7 @@ function fixture(stall = false, failCleanup = false) {
           return {
             stdout: JSON.stringify({
               version: 1,
-              profile: "baseline",
+              profile: args.includes("--online") ? "network" : "baseline",
               uid: 1000,
               node: 22,
               toolchain: true,
@@ -36,7 +36,6 @@ function fixture(stall = false, failCleanup = false) {
               chromium: false,
               ...(args.includes("--online")
                 ? {
-                    profile: "network",
                     externalNetworkOperations: [
                       "npm.install",
                       "pip.install",
@@ -85,7 +84,7 @@ test("fixed baseline uses immutable fixture and joins before deleting private ow
   const result = await run.controller.start("baseline", "run_fixed");
   expect(result.joined).toBe(true);
   expect(result.runId).toBe("run_fixed");
-  expect(result.chromium).toBe(false);
+  expect(result).toMatchObject({ success: true, chromium: false });
   expect(run.calls[0].command).toBe("python3");
   expect(run.calls[0].args).toEqual([
     "/opt/worker-runtime/worker-runtime-smoke.py",
@@ -103,7 +102,7 @@ test("fixed baseline uses immutable fixture and joins before deleting private ow
 test("browser profile has only fixed data URL and private relative screenshot", async () => {
   const run = fixture();
   const result = await run.controller.start("browser", "run_browser");
-  expect(result.chromium).toBe(true);
+  expect(result).toMatchObject({ success: true, chromium: true });
   expect(result.profile).toBe("browser");
   const browser = run.calls.filter((call) => call?.action);
   expect(browser.map((call) => call.action)).toEqual([
@@ -176,12 +175,10 @@ test("network profile runs only immutable online fixture and verifies fixed depe
   const result = await run.controller.start("network", "run_network");
   expect(result.success).toBe(true);
   expect(result.profile).toBe("network");
-  expect(result.externalNetworkOperations).toEqual([
-    "npm.install",
-    "pip.install",
-    "git.clone",
-  ]);
-  expect(result.externalRequests).toBeUndefined();
+  expect(result).toMatchObject({
+    externalNetworkOperations: ["npm.install", "pip.install", "git.clone"],
+  });
+  expect("externalRequests" in result).toBe(false);
   expect(run.calls[0].args).toEqual([
     "/opt/worker-runtime/worker-runtime-smoke.py",
     "--tools-only",
@@ -190,22 +187,28 @@ test("network profile runs only immutable online fixture and verifies fixed depe
   expect(run.calls.filter((call) => call?.action)).toEqual([]);
 });
 
-
 test("tombstone capacity is reserved before work and cannot strand a joined owner", async () => {
   const run = fixture(true);
   const active = run.controller.start("baseline", "reserved");
   for (let attempt = 0; !run.calls.length && attempt < 100; attempt++)
     await new Promise((resolve) => setTimeout(resolve, 1));
-  for (let index = 0; index < 7; index++) await run.controller.abort("other_" + index);
+  for (let index = 0; index < 7; index++)
+    await run.controller.abort("other_" + index);
   await expect(run.controller.abort("overflow")).rejects.toThrow("capacity");
-  expect(await run.controller.abort("reserved")).toMatchObject({joined: true, aborted: true});
-  expect(await active).toMatchObject({joined: true, success: false});
+  expect(await run.controller.abort("reserved")).toMatchObject({
+    joined: true,
+    aborted: true,
+  });
+  expect(await active).toMatchObject({ joined: true, success: false });
   const count = run.calls.length;
-  await expect(run.controller.start("baseline", "next")).rejects.toThrow("capacity");
+  await expect(run.controller.start("baseline", "next")).rejects.toThrow(
+    "capacity",
+  );
   expect(run.calls.length).toBe(count);
-  expect((await run.controller.start("baseline", "reserved")).aborted).toBe(true);
+  expect((await run.controller.start("baseline", "reserved")).aborted).toBe(
+    true,
+  );
 });
-
 
 test("expired active reservation survives unrelated abort admission until cleanup joins", async () => {
   const run = fixture(true);
@@ -216,10 +219,16 @@ test("expired active reservation survives unrelated abort admission until cleanu
   const later = realNow() + 301000;
   Date.now = () => later;
   try {
-    for (let index = 0; index < 7; index++) await run.controller.abort("late_" + index);
-    await expect(run.controller.abort("late_overflow")).rejects.toThrow("capacity");
-    expect(await run.controller.abort("slow_cleanup")).toMatchObject({joined: true, aborted: true});
-    expect(await active).toMatchObject({joined: true, success: false});
+    for (let index = 0; index < 7; index++)
+      await run.controller.abort("late_" + index);
+    await expect(run.controller.abort("late_overflow")).rejects.toThrow(
+      "capacity",
+    );
+    expect(await run.controller.abort("slow_cleanup")).toMatchObject({
+      joined: true,
+      aborted: true,
+    });
+    expect(await active).toMatchObject({ joined: true, success: false });
   } finally {
     Date.now = realNow;
   }
