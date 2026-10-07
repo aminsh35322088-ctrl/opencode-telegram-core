@@ -1171,7 +1171,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     validate_worker_environment(os.environ)
     # Capture secret before spawning unprivileged Core. Never log configuration.
-    secret = os.environ.pop('NODE_SHARED_SECRET')
+    bootstrap_token = os.environ.pop('BOOTSTRAP_TOKEN', None)
+    secret = os.environ.pop('NODE_SHARED_SECRET', None)
     root = Path('/data')
     root.mkdir(exist_ok=True)
     if root.is_symlink():
@@ -1180,10 +1181,19 @@ def main():
     os.chmod(root, 0o755)
     if (root / 'agent').is_symlink() or (root / 'topic').is_symlink():
         raise ValueError('persistent root paths cannot be symlinks')
-    from bootstrap_identity import resolve_bootstrap_identity
-    identity = resolve_bootstrap_identity(root / 'agent', os.environ['NODE_ID'],
-                                          int(os.environ['NODE_GENERATION']), secret,
-                                          os.environ['CONTROL_PLANE_URL'])
+    if bootstrap_token is not None or (root / 'agent' / 'node-credentials.json').exists():
+        from cloud_bootstrap import resolve_cloud_identity
+        credentials = resolve_cloud_identity(root / 'agent', bootstrap_token,
+                                              os.environ['CONTROL_PLANE_URL'],
+                                              os.environ.get('RAILWAY_SERVICE_ID'),
+                                              os.environ.get('RAILWAY_PROJECT_ID'))
+        identity, secret = credentials['identity'], credentials['secret']
+    else:
+        # Offline legacy source compatibility remains until the new execution path is proven.
+        from bootstrap_identity import resolve_bootstrap_identity
+        identity = resolve_bootstrap_identity(root / 'agent', os.environ['NODE_ID'],
+                                              int(os.environ['NODE_GENERATION']), secret,
+                                              os.environ['CONTROL_PLANE_URL'])
     boundary = Boundary(root / 'agent', secret, identity)
     os.chmod(boundary.root, 0o700)
     agent = Agent(boundary, os.environ['CONTROL_PLANE_URL'])
