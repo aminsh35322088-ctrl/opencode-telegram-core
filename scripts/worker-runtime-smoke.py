@@ -16,6 +16,21 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout, **kwargs).stdout.strip()
 
 
+def isolated_network_environment(home):
+    # npm treats loading the same file as user and global config as an error.
+    # Distinct empty files also prevent inherited registry/auth configuration.
+    user_config, global_config = home / 'user.npmrc', home / 'global.npmrc'
+    user_config.write_text('')
+    global_config.write_text('')
+    return {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home),
+        'XDG_CONFIG_HOME': str(home / 'config'), 'XDG_CACHE_HOME': str(home / 'cache'),
+        'npm_config_cache': str(home / 'npm-cache'), 'npm_config_userconfig': str(user_config),
+        'npm_config_globalconfig': str(global_config), 'npm_config_registry': 'https://registry.npmjs.org',
+        'npm_config_strict_ssl': 'true', 'PIP_CONFIG_FILE': '/dev/null', 'PIP_CACHE_DIR': str(home / 'pip-cache'),
+        'PIP_DISABLE_PIP_VERSION_CHECK': '1', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+        'GIT_TERMINAL_PROMPT': '0'}
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--tools-only', action='store_true', help='Browser process must be owned by native Core browser capability')
 parser.add_argument('--online', action='store_true', help='Run the three fixed public dependency/repository network operations')
@@ -100,13 +115,7 @@ await p.screenshot({path:process.argv[1]});}finally{await b.close();}})().catch(
     if options.online:
         home = root / 'network-home'
         home.mkdir()
-        network_env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home),
-            'XDG_CONFIG_HOME': str(home / 'config'), 'XDG_CACHE_HOME': str(home / 'cache'),
-            'npm_config_cache': str(home / 'npm-cache'), 'npm_config_userconfig': '/dev/null',
-            'npm_config_globalconfig': '/dev/null', 'npm_config_registry': 'https://registry.npmjs.org',
-            'npm_config_strict_ssl': 'true', 'PIP_CONFIG_FILE': '/dev/null', 'PIP_CACHE_DIR': str(home / 'pip-cache'),
-            'PIP_DISABLE_PIP_VERSION_CHECK': '1', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
-            'GIT_TERMINAL_PROMPT': '0'}
+        network_env = isolated_network_environment(home)
         project = root / 'network-npm'
         project.mkdir()
         (project / 'package.json').write_text('{"name":"fixed-network-smoke","version":"1.0.0","private":true}')
