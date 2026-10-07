@@ -456,7 +456,7 @@ class Agent:
         if self.boundary.unbound and (operation != 'snapshot.get' or session is not None):
             raise ValueError('unbound node authority unavailable')
         raw = canonical(self.boundary.envelope(operation, payload, session))
-        request = Request(self.endpoint, data=raw, headers={'Content-Type': 'application/json', 'x-node-signature': self.boundary.signature(raw)}, method='POST')
+        request = Request(self.endpoint, data=raw, headers={'Content-Type': 'application/json', 'User-Agent': 'OpenCodeTelegramCore/1', 'x-node-signature': self.boundary.signature(raw)}, method='POST')
         # Never follow redirects with the node signature or secret-bearing response.
         import urllib.request
         class NoRedirect(urllib.request.HTTPRedirectHandler):

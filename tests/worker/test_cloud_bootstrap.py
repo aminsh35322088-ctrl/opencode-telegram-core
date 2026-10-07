@@ -39,4 +39,13 @@ class CloudBootstrapTests(unittest.TestCase):
    with self.assertRaises(ValueError):module.resolve_cloud_identity(Path(tmp),'b'*64,'https://control.example','service','project')
    with self.assertRaises(ValueError):module.resolve_cloud_identity(Path(tmp),'b'*64,'http://control.example','service','project')
 
+ def test_bootstrap_identifies_authenticated_api_client(self):
+  from unittest.mock import patch,MagicMock
+  response=MagicMock();response.status=200;response.read.return_value=b'{}'
+  opener=MagicMock();opener.open.return_value.__enter__.return_value=response
+  with patch.object(module,'build_opener',return_value=opener):
+   module._request('https://control.example/nodes/bootstrap',{'bootstrapToken':'synthetic'})
+  request=opener.open.call_args.args[0]
+  self.assertEqual(request.get_header('User-agent'),'OpenCodeTelegramCore/1')
+
 if __name__=='__main__':unittest.main()

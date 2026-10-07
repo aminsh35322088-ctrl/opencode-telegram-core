@@ -53,3 +53,10 @@ class EventTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'snapshot revision mismatch'):
     agent.dispatch(b.envelope('run',{'runId':'run','text':'hello','expectedRevision':1},'owned'))
    self.assertFalse(any(c.args[0]=='POST' for c in agent.local.call_args_list));b.db.close()
+
+ def test_signed_control_requests_identify_api_client(self):
+  from unittest.mock import patch,MagicMock
+  with tempfile.TemporaryDirectory() as root:
+   b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=0,threadId=0));agent=a.Agent(b,'https://control.example');response=MagicMock();response.read.return_value=b'{}';opener=MagicMock();opener.open.return_value.__enter__.return_value=response;b.authenticate=lambda *_:{'operation':'snapshot.get','payload':{},'sessionId':None}
+   with patch('urllib.request.build_opener',return_value=opener):agent.outbound('snapshot.get',{})
+   self.assertEqual(opener.open.call_args.args[0].get_header('User-agent'),'OpenCodeTelegramCore/1');b.db.close()

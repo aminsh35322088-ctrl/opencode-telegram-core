@@ -25,7 +25,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def _request(endpoint,payload):
  raw=json.dumps(payload,separators=(',',':')).encode()
- request=Request(endpoint,data=raw,headers={'Content-Type':'application/json'},method='POST')
+ request=Request(endpoint,data=raw,headers={'Content-Type':'application/json','User-Agent':'OpenCodeTelegramCore/1'},method='POST')
  with build_opener(_NoRedirect()).open(request,timeout=15) as response:
   body=response.read(LIMIT+1)
   if response.status!=200 or len(body)>LIMIT:raise ValueError('bootstrap response rejected')
