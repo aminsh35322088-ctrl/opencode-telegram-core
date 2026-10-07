@@ -30,3 +30,11 @@ class EventTests(unittest.TestCase):
    b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=-100,threadId=42));b.set('session','owned');b.set('runId','run');b.set('callbackRunReceipt',{'runId':'run','state':'SUBMITTED'});agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None;agent.local=Mock(side_effect=AssertionError('must not submit again'))
    result=agent.dispatch(b.envelope('run',{'runId':'run','text':'hello','events':True},'owned'))
    self.assertFalse(result['accepted']);self.assertEqual(result['state'],'SUBMITTED');agent.local.assert_not_called();b.db.close()
+
+ def test_model_preflight_returns_only_nonsecret_core_catalog_metadata(self):
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory() as root:
+   b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=-100,threadId=42));agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None
+   agent.local=Mock(return_value={'connected':['opencode'],'all':[{'id':'opencode','options':{'apiKey':'must-never-return'},'models':{'big-pickle':{'id':'big-pickle','cost':{'input':0,'output':0}}}}]})
+   result=agent.dispatch(b.envelope('model.inspect',{'providerID':'opencode','modelID':'big-pickle'}))
+   self.assertTrue(result['available']);self.assertTrue(result['connected']);self.assertNotIn('must-never-return',json.dumps(result));agent.local.assert_called_once_with('GET','/provider');b.db.close()
