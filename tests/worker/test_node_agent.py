@@ -566,3 +566,15 @@ class UnboundTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.agent.dispatch(self.b.envelope('retire', {}))
         self.assertEqual(stops, [True])
+
+class RuntimeIdentityTests(unittest.TestCase):
+    def test_runtime_identity_reads_image_metadata_and_rejects_invalid_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            filename = Path(directory) / 'build-info.json'
+            metadata = {'telegramCoreCommit': 'a' * 40, 'telegramCoreVersion': '1.18.33-bot.13-pre.17', 'runtimeProfile': 'telegram-headless'}
+            filename.write_text(json.dumps(metadata))
+            self.assertEqual(a.runtime_identity(filename), metadata)
+            metadata['telegramCoreCommit'] = 'moving-main'
+            filename.write_text(json.dumps(metadata))
+            with self.assertRaises(ValueError):
+                a.runtime_identity(filename)

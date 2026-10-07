@@ -23,6 +23,15 @@ MAX_SAFE_INTEGER = 9007199254740991
 BROWSER_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "browser.ts"
 
 
+def runtime_identity(filename=Path('/usr/local/share/core-build-info.json')):
+    # Image-owned compiled build metadata; never trust a Worker environment override.
+    metadata = json.loads(Path(filename).read_text())
+    fields = {key: metadata.get(key) for key in ('telegramCoreCommit', 'telegramCoreVersion', 'runtimeProfile')}
+    if not isinstance(fields['telegramCoreCommit'], str) or not re.fullmatch('[a-f0-9]{40}', fields['telegramCoreCommit']) or not isinstance(fields['telegramCoreVersion'], str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-bot\.[0-9]+-pre\.[0-9]+', fields['telegramCoreVersion']) or fields['runtimeProfile'] != 'telegram-headless':
+        raise ValueError('invalid immutable runtime metadata')
+    return fields
+
+
 def validate_identity(identity):
     if not isinstance(identity, dict) or set(identity) != {'nodeId', 'generation', 'chatId', 'threadId'}:
         raise ValueError('invalid node identity')
@@ -836,7 +845,7 @@ class Agent:
             if self.boundary.unbound and operation == 'status':
                 return {'ready': self.ready and not self.retired, 'bound': False, 'retired': self.boundary.get('retired') is True}
             if operation == 'health':
-                return {'ready': self.ready and not self.retired}
+                return {'ready': self.ready and not self.retired, **({'runtime': runtime_identity()} if Path('/usr/local/share/core-build-info.json').exists() else {})}
             if operation == 'retire':
                 # Gate admission immediately, but persist handoff proof only after
                 # the essential Core lease has been intentionally stopped/joined.

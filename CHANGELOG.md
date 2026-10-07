@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.18.33-bot.13-pre.17
+
+- Report image-owned Core commit/version through authenticated Worker health.
+- Publish a governed immutable Worker image through the existing verified release workflow.
+
 ## Unreleased
 
 - Candidate plugin retirement attempts every disposer, bounds actual startup/cleanup settlement, and propagates uncertainty into workspace quarantine; compiled/cumulative validation is pending.
