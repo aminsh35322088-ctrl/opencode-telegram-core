@@ -436,6 +436,7 @@ class Agent:
         self.ready = False
         self.lock = threading.RLock()
         self.sync_watcher = None
+        self.callback_owner = None
         self.runtime_selftest_owner = None
         self.runtime_selftest_stopping = False
         self.workspace = (Path('/tmp') / ('unbound-core-' + hashlib.sha256(canonical(boundary.identity)).hexdigest())
@@ -896,6 +897,18 @@ class Agent:
                 except OSError:
                     pass
             run_id = self.boundary.get('runId')
+            if operation == 'callback.status':
+                if payload.get('runId') != run_id:
+                    raise ValueError('foreign run')
+                receipt = self.boundary.get('callbackRunReceipt')
+                pending = self.boundary.get('callbackPending')
+                if pending and pending.get('runId') == run_id:
+                    self.outbound('session.event', pending, session=session)
+                    self.boundary.set('callbackPending', None)
+                state = receipt.get('state') if receipt else 'NOT_SUBMITTED'
+                if state == 'ACCEPTED' and not self.callback_owner:
+                    state = 'INCOMPLETE'
+                return {'runId': run_id, 'state': state}
             if operation == 'session.get':
                 return self.local('GET', '/session/' + encoded)
             if operation == 'session.delete':
@@ -923,7 +936,7 @@ class Agent:
                 statuses = self.local('GET', '/session/status')
                 return {session: statuses[session]} if session in statuses else {}
             if operation == 'run':
-                if set(payload) - {'runId', 'text', 'parts', 'model', 'variant', 'agent'}:
+                if set(payload) - {'runId', 'text', 'parts', 'model', 'variant', 'agent', 'events'}:
                     raise ValueError('unsupported prompt options')
                 parts = payload.get('parts')
                 if parts is None:
@@ -954,6 +967,19 @@ class Agent:
                 run_id = payload.get('runId')
                 if not isinstance(run_id, str) or not re.fullmatch('[A-Za-z0-9_-]{1,128}', run_id):
                     raise ValueError('runId required')
+                if 'events' in payload and type(payload['events']) is not bool:
+                    raise ValueError('invalid event callback request')
+                receipt = self.boundary.get('callbackRunReceipt')
+                if payload.get('events') and receipt and receipt['runId'] == run_id:
+                    if receipt['state'] == 'SUBMITTED':
+                        return {'accepted': False, 'runId': run_id, 'reconciled': True, 'state': 'SUBMITTED'}
+                    pending = self.boundary.get('callbackPending')
+                    if pending and pending.get('runId') == run_id:
+                        self.outbound('session.event', pending, session=session)
+                        self.boundary.set('callbackPending', None)
+                    return {'accepted': True, 'runId': run_id, 'reconciled': True}
+                if payload.get('events') and self.callback_owner:
+                    raise ValueError('previous callback owner is still active')
                 execution = self.local('GET', '/session/' + encoded + '/execution')
                 if execution:
                     raise ValueError('execution already active or continuation unavailable')
@@ -970,13 +996,24 @@ class Agent:
                 for key in ('model', 'variant', 'agent'):
                     if key in payload:
                         body[key] = payload[key]
+                callback_stream = None
+                if payload.get('events'):
+                    # Subscribe before prompt admission so even a fast completion is buffered.
+                    callback_stream = urlopen(Request('http://127.0.0.1:' + str(self.core_port) + '/event', headers={'Accept':'text/event-stream','x-opencode-directory':str(self.workspace)}), timeout=30)
+                    self.boundary.set('callbackRunReceipt', {'runId': run_id, 'state': 'SUBMITTED'})
                 self.mcp_proxy.begin(session, run_id)
                 try:
                     self.ensure_sync_watcher(admitting=True)
                     self.local('POST', '/session/' + encoded + '/prompt_async', body)
                 except Exception:
                     self.mcp_proxy.end(session, run_id)
+                    if callback_stream is not None:
+                        callback_stream.close()
                     raise
+                if callback_stream is not None:
+                    self.boundary.set('callbackRunReceipt', {'runId': run_id, 'state': 'ACCEPTED'})
+                    self.callback_owner = threading.Thread(target=self.forward_callbacks, args=(callback_stream,session,run_id), daemon=True)
+                    self.callback_owner.start()
                 return {'accepted': True, 'runId': run_id}
             if operation in ('pause', 'resume'):
                 if payload.get('runId') != run_id:
@@ -1031,6 +1068,32 @@ class Agent:
                 return self.local('GET', '/session/' + encoded + '/message')
             raise ValueError('unsupported operation')
 
+
+    def forward_callbacks(self, stream, session, run_id):
+        """One owned Core stream. Durable pending event; bounded retry, no process spawning."""
+        try:
+            with stream:
+                for frame in self.stream_frames(stream, session, run_id, 0):
+                    payload = json.loads(frame)['envelope']['payload']
+                    event = payload['event']
+                    terminal = event.get('type') in ('session.idle', 'session.error') or (event.get('type') == 'session.status' and event.get('properties', {}).get('status', {}).get('type') == 'idle')
+                    self.boundary.set('callbackPending', payload)
+                    if terminal:
+                        self.boundary.set('callbackRunReceipt', {'runId': run_id, 'state': 'COMPLETED'})
+                    for attempt in range(3):
+                        if self.retired or self.boundary.get('session') != session or self.boundary.get('runId') != run_id:
+                            return
+                        try:
+                            self.outbound('session.event', payload, session=session)
+                            self.boundary.set('callbackPending', None)
+                            break
+                        except Exception:
+                            if attempt == 2:
+                                return
+                            time.sleep(.25 * (attempt + 1))
+        finally:
+            with self.lock:
+                self.callback_owner = None
 
     def events(self, value):
         """Only an explicitly requested live-run stream; never reconnects or polls."""
