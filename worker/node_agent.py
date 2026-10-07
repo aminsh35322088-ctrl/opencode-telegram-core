@@ -943,7 +943,7 @@ class Agent:
                 statuses = self.local('GET', '/session/status')
                 return {session: statuses[session]} if session in statuses else {}
             if operation == 'run':
-                if set(payload) - {'runId', 'text', 'parts', 'model', 'variant', 'agent', 'events'}:
+                if set(payload) - {'runId', 'text', 'parts', 'model', 'variant', 'agent', 'events', 'expectedRevision'}:
                     raise ValueError('unsupported prompt options')
                 parts = payload.get('parts')
                 if parts is None:
@@ -995,6 +995,9 @@ class Agent:
                     raise ValueError('foreign or expired prepared run')
                 if not prepared:
                     self.refresh_snapshot()
+                expected_revision = payload.get('expectedRevision')
+                if expected_revision is not None and (type(expected_revision) is not int or not self.boundary.snapshot or self.boundary.snapshot['revision'] != expected_revision):
+                    raise ValueError('snapshot revision mismatch')
                 self.boundary.set('runPrepared', None)
                 self.boundary.set('runId', run_id)
                 self.boundary.set('nativeRunId', None)
@@ -1080,7 +1083,7 @@ class Agent:
         """One owned Core stream. Durable pending event; bounded retry, no process spawning."""
         try:
             with stream:
-                for frame in self.stream_frames(stream, session, run_id, 0):
+                for frame in self.stream_frames(stream, session, run_id, 0, require_start=True):
                     payload = json.loads(frame)['envelope']['payload']
                     event = payload['event']
                     terminal = event.get('type') in ('session.idle', 'session.error') or (event.get('type') == 'session.status' and event.get('properties', {}).get('status', {}).get('type') == 'idle')
@@ -1131,10 +1134,11 @@ class Agent:
         response = urlopen(request, timeout=15)
         return response, session, run_id, after
 
-    def stream_frames(self, stream, session, run_id, cursor, stream_nonce=None):
+    def stream_frames(self, stream, session, run_id, cursor, stream_nonce=None, require_start=False):
         lines = []
         size = 0
         sequence = 0
+        started = not require_start
         stream_nonce = secrets.token_hex(24) if stream_nonce is None else stream_nonce
         for raw_line in stream:
             if self.retired or not self.ready or self.boundary.get('runId') != run_id or self.boundary.get('session') != session:
@@ -1170,6 +1174,12 @@ class Agent:
             sequence += 1
             properties = event.get('properties', {})
             terminal = event.get('type') in ('session.idle', 'session.error') or (event.get('type') == 'session.status' and properties.get('status', {}).get('type') == 'idle')
+            if event.get('type') == 'session.status' and properties.get('status', {}).get('type') == 'busy':
+                started = True
+            if event.get('type') == 'message.updated' and properties.get('info', {}).get('role') == 'user':
+                started = True
+            if terminal and not started:
+                continue
             if terminal:
                 self.mcp_proxy.end(session, run_id)
             envelope = self.boundary.envelope('session.event', {'runId': run_id, 'event': event, 'streamNonce': stream_nonce, 'sequence': sequence}, session)
