@@ -10,3 +10,5 @@
 0010-telegram-credential-store-serialization.patch
 0011-telegram-plugin-retirement.patch
 0012-telegram-shutdown-uncertainty.patch
+0013-telegram-generated-action-context.patch
+0014-telegram-worker-runtime-selftest.patch

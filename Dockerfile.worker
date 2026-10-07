@@ -12,12 +12,31 @@ ARG CORE_SOURCE_COMMIT
 ENV CORE_SOURCE_COMMIT=${CORE_SOURCE_COMMIT:-${RAILWAY_GIT_COMMIT_SHA}}
 RUN test -n "$CORE_SOURCE_COMMIT" && ./scripts/build-runtime.sh
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends tini python3 git ripgrep ca-certificates && rm -rf /var/lib/apt/lists/* && groupadd -g 1000 core && useradd -u 1000 -g 1000 -M core
+FROM node:22.14.0-bookworm-slim AS runtime
+# Toolchain for Topic-owned development and governed native/custom tool children.
+# No Bot control-plane modules, shared secrets, VPN daemon or persistent caches.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini ca-certificates bash coreutils findutils lsof python3 python3-pip python3-venv \
+    git git-lfs build-essential pkg-config libsqlite3-dev libssl-dev zlib1g-dev sqlite3 jq ripgrep fd-find \
+    curl wget unzip zip rsync openssh-client gh dnsutils iputils-ping iproute2 \
+    procps file tree less ffmpeg imagemagick \
+    && git lfs install --system \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupmod -n core node && usermod -l core -d /nonexistent node
+RUN npm install --global @playwright/cli@0.1.18 \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright-cli install-browser chromium --with-deps \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod -R a+rX,go-w /opt/ms-playwright /usr/local/lib/node_modules
 COPY --from=build /core/dist/runtime/opencode /usr/local/bin/opencode
 COPY --from=build /core/dist/build-info.json /usr/local/share/core-build-info.json
 COPY worker /opt/worker
-ENV PORT=3000 OPENCODE_TELEGRAM_PROCESS_BUDGET=1
-EXPOSE 3000
+COPY scripts/worker-runtime-smoke.py scripts/worker-runtime-inventory.py /opt/worker-runtime/
+ENV OPENCODE_TELEGRAM_PROCESS_BUDGET=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    npm_config_cache=/tmp/npm-cache PIP_CACHE_DIR=/tmp/pip-cache \
+    XDG_CACHE_HOME=/tmp/core-cache BUN_INSTALL_CACHE_DIR=/tmp/bun-cache
+EXPOSE 8080
 ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 CMD ["python3", "-u", "/opt/worker/node_agent.py"]

@@ -17,7 +17,13 @@ readiness uses a separate signed acknowledgment before prompt dispatch.
 
 Global snapshots use canonical JSON hashes, verified Skill hashes, immutable
 staging and atomic activation. Only current and rollback artifact versions are
-retained. Core configuration and tools are root-owned; session data and the
+retained. Each materialization admits at most 32 MiB including filesystem block
+overhead and reserves 16 MiB free disk; interrupted staging is reclaimed before
+a retry. Verified revision fencing is separate from known-good activation proof:
+a failed Core activation may restore only the exact prior known-good hash, while
+corrupt active caches cannot restore an older successfully activated revision.
+Public request admission is capped at eight threads before header/body reads,
+with a 15-second header timeout. Core configuration and tools are root-owned; session data and the
 Topic workspace remain UID 1000-owned. Package and build caches use `/tmp`.
 Snapshots contain credential references, never plaintext credentials.
 

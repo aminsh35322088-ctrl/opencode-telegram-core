@@ -2959,7 +2959,7 @@ index 9974b19..872180e 100644
 -      return true
 -    })
 -
--    return handlers.handle("authSet", authSet).handle("authRemove", authRemove).handle("log", log)
-+    return handlers.handle("authSet", authSet).handle("authRemove", authRemove)
+-    return handlers.handle("runtimeSelftest", selftest).handle("runtimeSelftestAbort", abortSelftest).handle("authSet", authSet).handle("authRemove", authRemove).handle("log", log)
++    return handlers.handle("runtimeSelftest", selftest).handle("runtimeSelftestAbort", abortSelftest).handle("authSet", authSet).handle("authRemove", authRemove)
    }),
  )

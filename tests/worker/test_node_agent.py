@@ -172,7 +172,7 @@ class LifecycleTests(SecurityTests):
         self.b.apply(first)
         directory = self.b.apply(second)
         (directory / 'snapshot.json').write_text('{}')
-        self.assertEqual(self.b.restore(), first)
+        self.assertIsNone(self.b.restore())
         with self.assertRaises(ValueError):
             self.b.apply(first)
 
@@ -184,7 +184,7 @@ class LifecycleTests(SecurityTests):
         self.assertEqual(self.b.restore()['revision'], 11)
         current = self.b.root / 'versions' / json.loads((self.b.root / 'active.json').read_text())['directory']
         (current / 'snapshot.json').write_text('{}')
-        self.assertEqual(self.b.restore()['revision'], 10)
+        self.assertIsNone(self.b.restore())
 
 
 class DeferredSyncTests(LifecycleTests):

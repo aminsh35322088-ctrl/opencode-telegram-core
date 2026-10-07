@@ -1,0 +1,103 @@
+diff --git a/packages/opencode/src/tool/registry.ts b/packages/opencode/src/tool/registry.ts
+--- a/packages/opencode/src/tool/registry.ts
++++ b/packages/opencode/src/tool/registry.ts
+@@ -163,4 +163,5 @@
+                   ask: (req) => bridge.promise(toolCtx.ask(req)),
+                   directory: ctx.directory,
+                   worktree: ctx.worktree,
++                  generatedAction: toolCtx.extra?.generatedActionInvoke as PluginToolContext["generatedAction"],
+                 }
+diff --git a/packages/opencode/src/session/tools.ts b/packages/opencode/src/session/tools.ts
+--- a/packages/opencode/src/session/tools.ts
++++ b/packages/opencode/src/session/tools.ts
+@@ -1,3 +1,4 @@
++import { createGeneratedActionInvoker, type GeneratedActionPlan } from "@opencode-ai/core/telegram-generated-action"
+ import { Agent } from "@/agent/agent"
+ import { SessionV1 } from "@opencode-ai/core/v1/session"
+ import { Provider } from "@/provider/provider"
+@@ -73,12 +75,64 @@
+   const truncate = yield* Truncate.Service
+   const flags = yield* RuntimeFlags.Service
+ 
++  const mcpTargets = new Map<string, { key: string; server: string; tool: string }>()
++  const generatedTarget = (plan: GeneratedActionPlan): string => {
++    if (plan.invocation.kind !== "mcp-tool") {
++      if (plan.invocation.tool === "actions" || !tools[plan.invocation.tool]?.execute) throw new Error("Generated Action target unavailable")
++      return plan.invocation.tool
++    }
++    const matches = [...mcpTargets.values()].filter(target => target.server === plan.invocation.server && target.tool === plan.invocation.tool)
++    if (matches.length !== 1) throw new Error("Exact MCP Action target unavailable")
++    return matches[0].key
++  }
++
+   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
+     sessionID: input.session.id,
+     abort: options.abortSignal!,
+     messageID: input.processor.message.id,
+     callID: options.toolCallId,
+-    extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
++    extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps,
++      generatedActionInvoke: createGeneratedActionInvoker({
++        sessionID: input.session.id, signal: options.abortSignal!,
++        checkpoint: async () => {
++          if (!execution || epoch === undefined || execution.owner.sessionId !== input.session.id) throw new Error("Generated Action requires the captured session execution")
++          options.abortSignal?.throwIfAborted()
++          await execution.checkpoint(options.abortSignal, epoch)
++        },
++        resolve: async (id, arguments_) => {
++          const response = await fetch("http://127.0.0.1:4098/control", {
++            method: "POST", redirect: "error", signal: options.abortSignal,
++            headers: {"Content-Type": "application/json"},
++            body: JSON.stringify({action: "actions.resolve", sessionId: input.session.id, payload: {id, arguments: arguments_}}),
++          })
++          if (!response.ok) throw new Error("Generated Action resolution rejected")
++          const raw = await response.text()
++          if (raw.length > 1048576) throw new Error("Generated Action resolution exceeds limit")
++          const resolved = JSON.parse(raw)
++          if (resolved.ok !== true || !resolved.result?.plan) throw new Error("Generated Action resolution rejected")
++          return resolved.result.plan
++        },
++        authorize: async (plan) => {
++          const target = generatedTarget(plan)
++          const ruleset = Permission.merge(input.agent.permission, input.session.permission ?? [])
++          const lastUser = input.messages.findLast(message => message.info.role === "user")
++          if (Permission.disabled([target], ruleset).has(target) || lastUser?.info.role === "user" && lastUser.info.tools?.[target] === false) throw new Error("Generated Action target disabled")
++          await bridge.promise(context(args, options).ask({permission: target, patterns: ["*"], always: ["*"], metadata: {generatedAction: plan.id, risk: plan.risk, revision: plan.revision}}))
++        },
++        execute: async (plan) => {
++          const target = generatedTarget(plan)
++          const delegated = tools[target]
++          if (!delegated?.execute) throw new Error("Generated Action target unavailable")
++          const schema = asSchema(delegated.inputSchema)
++          const decoded = schema.validate ? await schema.validate(plan.arguments) : {success: true as const, value: plan.arguments}
++          if (!decoded.success) throw decoded.error
++          const arguments_ = decoded.value
++          const result = await delegated.execute(arguments_, options)
++          if (!isRecord(result)) throw new Error("Generated Action target result unavailable")
++          return {...result, metadata: {...(isRecord(result.metadata) ? result.metadata : {}), generatedAction: plan.id, generatedActionRisk: plan.risk, generatedActionRevision: plan.revision}}
++        },
++      }),
++    },
+     agent: input.agent.name,
+     messages: input.messages,
+     metadata: (val) =>
+@@ -404,7 +457,10 @@
+ 
+   if (flags.experimentalCodeMode) return tools
+ 
++  const mcpClients = yield* mcp.clients()
+   for (const [key, entry] of Object.entries(yield* mcp.tools())) {
++    const servers = Object.entries(mcpClients).filter(([, client]) => client === entry.client).map(([server]) => server)
++    if (servers.length === 1) mcpTargets.set(key, {key, server: servers[0], tool: entry.def.name})
+     const item = McpCatalog.convertTool(entry.def, entry.client, entry.timeout)
+     const execute = item.execute
+     if (!execute) continue
+diff --git a/packages/plugin/src/tool.ts b/packages/plugin/src/tool.ts
+--- a/packages/plugin/src/tool.ts
++++ b/packages/plugin/src/tool.ts
+@@ -17,3 +17,5 @@
+   metadata(input: { title?: string; metadata?: { [key: string]: any } }): void
+   ask(input: AskInput): Promise<void>
++  /** Exact generated Action ID only; uses the captured session's Core tool policies. */
++  generatedAction?: (id: string, arguments_: Record<string, unknown>) => Promise<unknown>
+ }

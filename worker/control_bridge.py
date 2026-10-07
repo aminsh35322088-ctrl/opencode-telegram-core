@@ -103,9 +103,13 @@ class ControlBridge:
 
     def actions_tool_source(self):
         return '''export default {
-  description: "Discover enabled generated Actions from the verified Global snapshot. Resolve an exact ID to its native/action/MCP target and immutable fixed arguments, then call that tool directly. Core tool permissions apply.",
-  args: { action: {type:"string",enum:["list","resolve"]}, id: {type:"string"}, arguments: {type:"object",additionalProperties:true} },
+  description: "Discover enabled generated Actions from the verified Global snapshot. Resolve an exact ID to its native/action/MCP target and immutable fixed arguments, invoke runs that exact target through the captured Core tool context. Core tool permissions apply.",
+  args: { action: {type:"string",enum:["list","resolve","invoke"]}, id: {type:"string"}, arguments: {type:"object",additionalProperties:true} },
   async execute(args, context) {
+    if (args.action === "invoke") {
+      if (typeof context.generatedAction !== "function") throw new Error("Action invocation requires the captured Core tool context");
+      return await context.generatedAction(args.id, args.arguments ?? {});
+    }
     const response = await fetch("http://127.0.0.1:''' + str(self.port) + '''/control", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"actions."+args.action,sessionId:context.sessionID,payload:{id:args.id,arguments:args.arguments ?? {}}})});
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error("Action resolution rejected");

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import sqlite3
 import subprocess
 import shutil
@@ -16,7 +17,10 @@ from urllib.parse import quote, urlsplit, unquote
 from urllib.request import Request, urlopen
 
 MAX_BODY = 10 * 1024 * 1024
+MAX_SNAPSHOT_DISK = 32 * 1024 * 1024
+SNAPSHOT_DISK_RESERVE = 16 * 1024 * 1024
 MAX_SAFE_INTEGER = 9007199254740991
+BROWSER_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "browser.ts"
 
 
 def validate_identity(identity):
@@ -48,6 +52,8 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             self.shutdown_request(request)
             return
         try:
+            # Bound the header read too, before allocating a handler thread.
+            request.settimeout(15)
             super().process_request(request, address)
         except BaseException:
             self.admission.release()
@@ -112,6 +118,25 @@ def atomic(path, data):
         os.close(fd)
 
 
+def materialize_browser_tool(tools):
+    # Source belongs to the immutable image, never a Topic snapshot/workspace.
+    try:
+        fd = os.open(BROWSER_TOOL_SOURCE, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise ValueError('browser adapter source unavailable or unsafe') from error
+    try:
+        source = os.fstat(fd)
+        if not stat.S_ISREG(source.st_mode) or source.st_uid != 0 or source.st_mode & 0o022 or source.st_size > 65536:
+            raise ValueError('browser adapter source must be immutable root-owned image code')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            data = stream.read(65537)
+        if len(data) > 65536:
+            raise ValueError('browser adapter source exceeds bound')
+    finally:
+        os.close(fd)
+    atomic(tools / 'browser.ts', data)
+
+
 def child_environment(source):
     # Allowlist rather than guessing every credential variable's name.
     allowed = {'PATH', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'SSL_CERT_DIR'}
@@ -119,7 +144,8 @@ def child_environment(source):
     result.update(HOME='/data/runtime/home', XDG_DATA_HOME='/data/topic/home/.local/share',
                   XDG_CONFIG_HOME='/data/runtime', XDG_STATE_HOME='/data/topic/home/.local/state',
                   XDG_CACHE_HOME='/tmp/core-cache', BUN_INSTALL_CACHE_DIR='/tmp/bun-cache', npm_config_cache='/tmp/npm-cache',
-                  TMPDIR='/tmp', PLAYWRIGHT_BROWSERS_PATH='/tmp/playwright-cache', OPENCODE_TELEGRAM_PROCESS_BUDGET='1',
+                  PIP_CACHE_DIR='/tmp/pip-cache', PYTHONUSERBASE='/tmp/python-user',
+                  TMPDIR='/tmp', PLAYWRIGHT_BROWSERS_PATH='/opt/ms-playwright', OPENCODE_TELEGRAM_PROCESS_BUDGET='1',
                   OPENCODE_DISABLE_MODELS_FETCH='1', OPENCODE_DISABLE_AUTOUPDATE='1',
                   OPENCODE_DISABLE_PROJECT_CONFIG='1', OPENCODE_CONFIG_DIR='/data/runtime/opencode')
     return result
@@ -152,7 +178,7 @@ class Boundary:
                        and self.get('secretFingerprint') is not None
                        and self.get('secretFingerprint') != fingerprint
                        and self.get('retired') is True)
-            metadata = {'identity', 'secretFingerprint', 'snapshotHighwater', 'pendingGlobalSync', 'retired'}
+            metadata = {'identity', 'secretFingerprint', 'snapshotHighwater', 'activatedSnapshotHighwater', 'pendingGlobalSync', 'retired'}
             durable = any(json.loads(value) not in (None, False) for key, value in self.db.execute('SELECT key, value FROM state') if key not in metadata)
             for topic in (self.root / 'topic', self.root.parent / 'topic'):
                 if topic.is_symlink() or (topic.exists() and any(path.is_file() or path.is_symlink() for path in topic.rglob('*'))):
@@ -243,8 +269,11 @@ class Boundary:
                     raise ValueError('invalid snapshot marker')
                 value = json.loads((self.root / 'versions' / marker['directory'] / 'snapshot.json').read_bytes())
                 self.verify_snapshot(value)
-                if value['hash'] != marker['hash']:
+                if value['hash'] != marker['hash'] or marker['directory'] != str(value['revision']) + '-' + value['hash']:
                     raise ValueError('active snapshot corrupt')
+                highest = self.get('activatedSnapshotHighwater') or self.get('snapshotHighwater')
+                if highest and (value['revision'] < highest['revision'] or (value['revision'] == highest['revision'] and value['hash'] != highest['hash'])):
+                    raise ValueError('persisted snapshot is below highwater')
                 if candidate != current:
                     atomic(current, canonical(marker))
                 return value
@@ -253,9 +282,18 @@ class Boundary:
         # Leave Core unready until an authenticated bootstrap repairs the cache.
         return None
 
-    def apply(self, value):
+    def apply(self, value, activate=True):
         raw = self.verify_snapshot(value)
         with self.lock:
+            # Include duplicated projections and filesystem allocation overhead,
+            # not just the signed JSON body. Tiny skills also consume disk blocks.
+            block = max(4096, os.statvfs(self.root).f_frsize)
+            allocated = lambda size: max(block, ((size + block - 1) // block) * block)
+            projection = canonical(value['configuration'].get('runtime', {}))
+            required = allocated(len(raw)) + allocated(len(projection)) + 2 * block
+            required += sum(allocated(len(skill['content'].encode())) + block for skill in value['skills'])
+            if required > MAX_SNAPSHOT_DISK:
+                raise ValueError('snapshot materialization quota exceeded')
             previous = self.snapshot
             highest = self.get('snapshotHighwater')
             if highest and (value['revision'] < highest['revision'] or (value['revision'] == highest['revision'] and value['hash'] != highest['hash'])):
@@ -276,6 +314,30 @@ class Boundary:
                 except (OSError, ValueError, KeyError, TypeError):
                     intact = False
             if not intact:
+                # Interrupted staging and obsolete versions are disposable. Prune
+                # before allocating another candidate, retaining only proven markers.
+                retained = set()
+                for marker_path in (self.root / 'active.json', self.root / 'previous.json'):
+                    try:
+                        marker = json.loads(marker_path.read_bytes())
+                        if not re.fullmatch(r'[0-9]+-[0-9a-f]{64}', marker['directory']):
+                            continue
+                        cached = json.loads((versions / marker['directory'] / 'snapshot.json').read_bytes())
+                        self.verify_snapshot(cached)
+                        if marker['hash'] == cached['hash'] and marker['directory'] == str(cached['revision']) + '-' + cached['hash']:
+                            retained.add(marker['directory'])
+                    except (OSError, ValueError, KeyError, TypeError):
+                        continue
+                for cached in versions.iterdir():
+                    if cached.name not in retained:
+                        if cached.is_symlink():
+                            cached.unlink()
+                        elif cached.is_dir():
+                            shutil.rmtree(cached)
+                        else:
+                            cached.unlink()
+                if shutil.disk_usage(self.root).free < required + SNAPSHOT_DISK_RESERVE:
+                    raise ValueError('snapshot materialization quota has insufficient free disk')
                 # Rebuild only from authenticated, fully hash-verified bytes. The
                 # revision/hash highwater checks above still prohibit replacement.
                 staged = versions / ('.repair-' + secrets.token_hex(12))
@@ -307,9 +369,13 @@ class Boundary:
             current = self.root / 'active.json'
             if current.exists() and previous and previous['hash'] != value['hash']:
                 atomic(self.root / 'previous.json', current.read_bytes())
-            atomic(current, canonical(dict(directory=name, hash=value['hash'])))
+            # Fence old configuration durably before publishing the new marker.
+            # A crash between these writes remains unready until verified repair.
             self.set('snapshotHighwater', {'revision': value['revision'], 'hash': value['hash']})
+            atomic(current, canonical(dict(directory=name, hash=value['hash'])))
             self.snapshot = value
+            if activate:
+                self.confirm_activation()
             # Disposable immutable cache retains current and rollback only. Durable
             # sessions remain outside this root-owned artifact directory.
             retained = {name}
@@ -320,6 +386,25 @@ class Boundary:
                 if cached.name not in retained and cached.is_dir() and not cached.is_symlink():
                     shutil.rmtree(cached)
             return directory
+
+    def confirm_activation(self):
+        with self.lock:
+            if self.snapshot is None:
+                raise ValueError('no snapshot to activate')
+            self.verify_snapshot(self.snapshot)
+            self.set('activatedSnapshotHighwater', {'revision': self.snapshot['revision'], 'hash': self.snapshot['hash']})
+
+    def rollback_failed_activation(self, previous):
+        with self.lock:
+            activated = self.get('activatedSnapshotHighwater')
+            if not previous or not activated or activated != {'revision': previous['revision'], 'hash': previous['hash']}:
+                raise ValueError('rollback requires exact known-good activation proof')
+            marker = dict(directory=str(previous['revision']) + '-' + previous['hash'], hash=previous['hash'])
+            stored = json.loads((self.root / 'versions' / marker['directory'] / 'snapshot.json').read_bytes())
+            if self.verify_snapshot(stored) != canonical(previous):
+                raise ValueError('rollback snapshot integrity failed')
+            atomic(self.root / 'active.json', canonical(marker))
+            self.snapshot = previous
 
 
 class Agent:
@@ -342,6 +427,8 @@ class Agent:
         self.ready = False
         self.lock = threading.RLock()
         self.sync_watcher = None
+        self.runtime_selftest_owner = None
+        self.runtime_selftest_stopping = False
         self.workspace = (Path('/tmp') / ('unbound-core-' + hashlib.sha256(canonical(boundary.identity)).hexdigest())
                           if boundary.unbound else boundary.root / 'topic')
         if self.workspace.is_symlink():
@@ -376,11 +463,12 @@ class Agent:
         if self.retired:
             return
         try:
-            self.boundary.apply(self.outbound('snapshot.get', {}))
+            self.boundary.apply(self.outbound('snapshot.get', {}), activate=False)
         except (OSError, TimeoutError):
             if self.boundary.snapshot is None:
                 return
         self.start_core()
+        self.boundary.confirm_activation()
 
     def fatal_core_exit(self):
         with self.process_lock:
@@ -475,6 +563,7 @@ class Agent:
         tools.mkdir(exist_ok=True)
         atomic(tools / 'bot.ts', self.bridge.tool_source().encode())
         atomic(tools / 'actions.ts', self.bridge.actions_tool_source().encode())
+        materialize_browser_tool(tools)
         atomic(config / 'opencode.json', canonical(runtime_config))
         atomic(runtime_root / 'global-snapshot.json', canonical(snapshot))
         skills = config / 'skills'
@@ -525,6 +614,7 @@ class Agent:
                     if self.process is not process or self.process_stopping or process.poll() is not None:
                         raise RuntimeError('Core startup lease ended')
                     self.ready = True
+                    self.runtime_selftest_stopping = False
                 return
             except Exception:
                 time.sleep(.1)
@@ -537,9 +627,13 @@ class Agent:
             # Availability boot must not create durable Topic/session/execution state.
             result['XDG_DATA_HOME'] = str(self.workspace / 'home/.local/share')
             result['XDG_STATE_HOME'] = str(self.workspace / 'home/.local/state')
+            result['OPENCODE_TELEGRAM_RUNTIME_SELFTEST'] = '1'
         return result
 
     def stop_core(self):
+        with self.lock:
+            self.runtime_selftest_stopping = True
+        self.cancel_runtime_selftest()
         self.mcp_proxy.close_active()
         with self.lifecycle_lock:
             with self.process_lock:
@@ -611,18 +705,20 @@ class Agent:
         self.boundary.verify_snapshot(latest)
         current = self.boundary.snapshot
         if current and latest['hash'] == current['hash']:
-            self.boundary.apply(latest)
+            self.boundary.apply(latest, activate=False)
+            if not self.ready:
+                self.start_core()
+            self.boundary.confirm_activation()
             self.boundary.set('pendingGlobalSync', False)
             return True
-        self.boundary.apply(latest)
+        self.boundary.apply(latest, activate=False)
         self.stop_core()
         try:
             self.start_core()
+            self.boundary.confirm_activation()
         except Exception:
             if current:
-                marker = dict(directory=str(current['revision']) + '-' + current['hash'], hash=current['hash'])
-                atomic(self.boundary.root / 'active.json', canonical(marker))
-                self.boundary.snapshot = current
+                self.boundary.rollback_failed_activation(current)
                 self.start_core()
             raise
         self.boundary.set('pendingGlobalSync', False)
@@ -673,11 +769,66 @@ class Agent:
         self.sync_watcher = threading.Thread(target=observe, daemon=True)
         self.sync_watcher.start()
 
+    def runtime_selftest(self, value):
+        payload = value.get('payload')
+        if (not self.boundary.unbound or value.get('sessionId') is not None or not isinstance(payload, dict)
+                or set(payload) != {'profile'} or payload['profile'] not in ('baseline', 'browser', 'network')):
+            raise ValueError('invalid runtime selftest capability')
+        with self.lock:
+            if (self.retired or not self.ready or self.runtime_selftest_stopping or self.runtime_selftest_owner
+                    or self.fatal_exit_requested or not self.process or self.process.poll() is not None
+                    or self.boundary.get('session') or self.boundary.get('runId')):
+                raise ValueError('runtime selftest unavailable')
+            owner = {'runId': secrets.token_hex(24), 'profile': payload['profile'], 'done': threading.Event()}
+            self.runtime_selftest_owner = owner
+        try:
+            result = self.local('POST', '/telegram/runtime-selftest',
+                                {'runId': owner['runId'], 'profile': owner['profile']}, timeout=210)
+            if not isinstance(result, dict) or result.get('runId') != owner['runId'] or result.get('profile') != owner['profile'] or result.get('joined') is not True:
+                raise RuntimeError('runtime selftest has no exact join proof')
+            with self.lock:
+                if self.runtime_selftest_owner is owner:
+                    self.runtime_selftest_owner = None
+            return result
+        except Exception:
+            # Unknown native retirement is not permission to reuse the owner.
+            self.fatal_core_exit()
+            raise
+        finally:
+            owner['done'].set()
+
+    def cancel_runtime_selftest(self):
+        with self.lock:
+            owner = self.runtime_selftest_owner
+        if not owner:
+            return
+        try:
+            result = self.local('POST', '/telegram/runtime-selftest/' + owner['runId'] + '/abort', {}, timeout=30)
+            if not isinstance(result, dict) or result.get('runId') != owner['runId'] or result.get('joined') is not True:
+                raise RuntimeError('runtime selftest cancellation has no exact join proof')
+            if not owner['done'].wait(10):
+                raise RuntimeError('runtime selftest request did not join')
+            with self.lock:
+                if self.runtime_selftest_owner is owner:
+                    self.runtime_selftest_owner = None
+        except Exception:
+            self.fatal_core_exit()
+            raise
+
     def dispatch(self, value):
         operation, payload = value['operation'], value['payload']
+        if operation == 'runtime.selftest':
+            return self.runtime_selftest(value)
+        if operation == 'retire':
+            with self.lock:
+                self.retired = True
+                self.runtime_selftest_stopping = True
+            self.cancel_runtime_selftest()
         if not isinstance(payload, dict):
             raise ValueError('payload must be object')
         with self.lock:
+            if operation == 'sync-global' and self.runtime_selftest_owner:
+                raise ValueError('runtime selftest owns idle Core')
             if self.boundary.unbound and operation not in ('health', 'status', 'sync-global', 'retire'):
                 raise ValueError('unbound node authority unavailable')
             if self.boundary.unbound and value.get('sessionId') is not None:
@@ -1012,10 +1163,6 @@ def main():
     validate_worker_environment(os.environ)
     # Capture secret before spawning unprivileged Core. Never log configuration.
     secret = os.environ.pop('NODE_SHARED_SECRET')
-    identity = dict(nodeId=os.environ['NODE_ID'], generation=int(os.environ['NODE_GENERATION']),
-                    chatId=int(os.environ['NODE_CHAT_ID']), threadId=int(os.environ['NODE_THREAD_ID']))
-    if identity['generation'] < 1:
-        raise ValueError('generation must be positive')
     root = Path('/data')
     root.mkdir(exist_ok=True)
     if root.is_symlink():
@@ -1024,6 +1171,10 @@ def main():
     os.chmod(root, 0o755)
     if (root / 'agent').is_symlink() or (root / 'topic').is_symlink():
         raise ValueError('persistent root paths cannot be symlinks')
+    from bootstrap_identity import resolve_bootstrap_identity
+    identity = resolve_bootstrap_identity(root / 'agent', os.environ['NODE_ID'],
+                                          int(os.environ['NODE_GENERATION']), secret,
+                                          os.environ['CONTROL_PLANE_URL'])
     boundary = Boundary(root / 'agent', secret, identity)
     os.chmod(boundary.root, 0o700)
     agent = Agent(boundary, os.environ['CONTROL_PLANE_URL'])
@@ -1031,7 +1182,7 @@ def main():
     if not boundary.unbound:
         agent.workspace = root / 'topic'
     agent.workspace.mkdir(exist_ok=True)
-    server = BoundedHTTPServer(('0.0.0.0', int(os.environ.get('PORT', '3000'))), Handler)
+    server = BoundedHTTPServer(('0.0.0.0', 8080), Handler)
     server.agent = agent
     threading.Thread(target=agent.bootstrap, daemon=True).start()
     try:

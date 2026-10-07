@@ -4,6 +4,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 tree="${1:?usage: install-runtime-overlays.sh WORKTREE [--tests]}"
 [[ -d "$tree/packages/core/src" ]] || die "upstream Core source missing"
+cp "$CORE_ROOT/runtime/upstream/telegram-runtime-selftest.ts" "$tree/packages/core/src/telegram-runtime-selftest.ts"
+cp "$CORE_ROOT/runtime/upstream/telegram-generated-action.ts" "$tree/packages/core/src/telegram-generated-action.ts"
 cp "$CORE_ROOT/runtime/upstream/session-execution-control.ts" "$tree/packages/core/src/session-execution-control.ts"
 cp "$CORE_ROOT/runtime/upstream/telegram-execution-context.ts" "$tree/packages/core/src/telegram-execution-context.ts"
 cp "$CORE_ROOT/runtime/src/opencode/event-provenance.ts" "$tree/packages/core/src/telegram-event-provenance.ts"
