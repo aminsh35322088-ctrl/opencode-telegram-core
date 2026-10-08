@@ -303,6 +303,58 @@ class LifecycleTests(SecurityTests):
         self.assertTrue(self.agent.dispatch(self.request('question.reject', {'runId': 'run_owned', 'requestId': 'q_owned'})))
         self.assertEqual(calls[-1], ('POST', '/question/q_owned/reject', {}))
 
+class CompactionTests(LifecycleTests):
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+        self.agent.local = lambda method, route, payload=None: self.calls.append((method, route, payload)) or None
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.ensure_sync_watcher = lambda **kwargs: None
+
+    def test_compaction_uses_owned_async_native_summary(self):
+        result = self.agent.dispatch(self.request('session.compact', {'runId': 'compact_1', 'model': {'providerID': 'opencode', 'modelID': 'big-pickle'}}))
+        self.assertEqual(result, {'accepted': True, 'runId': 'compact_1'})
+        self.assertEqual(self.calls[-1], ('POST', '/session/ses_owned/summarize', {'providerID': 'opencode', 'modelID': 'big-pickle', 'async': True}))
+        self.assertEqual(self.b.get('runId'), 'compact_1')
+        self.assertEqual(self.b.get('runMode'), 'native')
+
+    def test_compaction_rejects_foreign_busy_and_invalid_options(self):
+        payload = {'runId': 'compact_1', 'model': {'providerID': 'opencode', 'modelID': 'big-pickle'}}
+        for invalid in ({'runId': 'compact_1'}, {**payload, 'model': None}, {**payload, 'text': 'not a summary'}, {**payload, 'model': {'providerID': 'opencode'}}, {**payload, 'events': 'yes'}):
+            with self.assertRaises(ValueError):
+                self.agent.dispatch(self.request('session.compact', invalid))
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.request('session.compact', payload, session='ses_other'))
+        self.agent.local = lambda *args: {'runId': 'native_active'}
+        with self.assertRaisesRegex(ValueError, 'execution already active'):
+            self.agent.dispatch(self.request('session.compact', payload))
+        self.assertFalse(any(method == 'POST' for method, _, _ in self.calls))
+
+    def test_compaction_callback_admission_is_idempotent_and_native_stop_is_fenced(self):
+        import io
+        from unittest.mock import patch
+        payload = {'runId': 'compact_1', 'model': {'providerID': 'opencode', 'modelID': 'big-pickle'}, 'events': True}
+        with patch.object(a, 'urlopen', return_value=io.BytesIO()), patch.object(a.threading, 'Thread'):
+            self.assertTrue(self.agent.dispatch(self.request('session.compact', payload))['accepted'])
+        self.assertEqual(self.b.get('callbackRunReceipt'), {'runId': 'compact_1', 'state': 'ACCEPTED'})
+        self.assertTrue(self.agent.dispatch(self.request('session.compact', payload))['reconciled'])
+        self.assertEqual(sum(method == 'POST' for method, _, _ in self.calls), 1)
+        calls = []
+        self.agent.local = lambda method, route, payload=None: calls.append((method, route, payload)) or {'runId': 'native_compaction', 'continuation': 'live'}
+        self.agent.dispatch(self.request('stop', {'runId': 'compact_1'}))
+        self.assertEqual(calls[-1], ('POST', '/session/ses_owned/abort', {'runId': 'native_compaction'}))
+
+    def test_compaction_obeys_prepared_run_and_revision_fence(self):
+        self.b.set('runPrepared', {'runId': 'reserved', 'expiresAt': a.time.time() + 30})
+        payload = {'runId': 'other', 'model': {'providerID': 'opencode', 'modelID': 'big-pickle'}}
+        with self.assertRaisesRegex(ValueError, 'foreign or expired'):
+            self.agent.dispatch(self.request('session.compact', payload))
+        payload['runId'] = 'reserved'
+        payload['expectedRevision'] = 1
+        with self.assertRaisesRegex(ValueError, 'snapshot revision mismatch'):
+            self.agent.dispatch(self.request('session.compact', payload))
+        self.assertFalse(any(method == 'POST' for method, _, _ in self.calls))
+
 class DeferredSyncTests(LifecycleTests):
     def test_prepared_run_does_not_refresh_during_control_outage(self):
         calls = []

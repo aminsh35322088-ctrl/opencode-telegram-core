@@ -1,0 +1,39 @@
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+@@ -63,6 +63,7 @@
+   messageID: MessageID,
+ })
+ export const SummarizePayload = Schema.Struct({
++  async: Schema.optional(Schema.Boolean),
+   providerID: ProviderV2.ID,
+   modelID: ModelV2.ID,
+   auto: Schema.optional(Schema.Boolean),
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
+@@ -288,7 +288,23 @@
+         },
+         auto: ctx.payload.auto ?? false,
+       })
+-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID })
++      const loop = promptSvc.loop({ sessionID: ctx.params.sessionID })
++      if (ctx.payload.async) {
++        yield* loop.pipe(
++          Effect.catchCause((cause) =>
++            Effect.gen(function* () {
++              yield* Effect.logError("summarize_async failed", { sessionID: ctx.params.sessionID, cause })
++              yield* events.publish(Session.Event.Error, {
++                sessionID: ctx.params.sessionID,
++                error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
++              })
++            }),
++          ),
++          Effect.forkIn(scope, { startImmediately: true }),
++        )
++      } else {
++        yield* loop
++      }
+       return true
+     })
+ 

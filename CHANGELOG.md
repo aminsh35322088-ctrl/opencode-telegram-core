@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.18.33-bot.13-pre.25
+
+- Add signed, governed per-Topic `session.compact` with existing run preparation,
+  cancellation, model selection, snapshot fencing and idempotent event callbacks.
+- Native summarize accepts optional async admission while preserving synchronous
+  SDK behavior and owned Core session execution.
+
 ## 1.18.33-bot.13-pre.17
 
 - Report image-owned Core commit/version through authenticated Worker health.

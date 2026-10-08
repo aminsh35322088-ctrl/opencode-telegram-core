@@ -4,7 +4,7 @@
   "commit": "51ef4be1d3c122f18fefb510dca8d778571f4f18",
   "version": "1.18.33",
   "bun": "1.3.14",
-  "telegramCoreVersion": "1.18.33-bot.13-pre.24",
+  "telegramCoreVersion": "1.18.33-bot.13-pre.25",
   "runtimeProfile": "telegram-headless",
   "runtimeMaxBytes": 120000000
 }

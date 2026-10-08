@@ -120,3 +120,34 @@ Offline proofs retain `externalRequests: 0`. The network proof reports
 `publicClone` URL. It does not invent an HTTP subrequest count. Actual network
 success must be checked on the built canary; providing the profile is not proof
 that those egress operations have succeeded or that a real model task ran.
+
+### Governed per-Topic compaction
+
+The signed Worker RPC operation `session.compact` uses the current owned
+`sessionId` and payload:
+
+```json
+{"runId":"compact_1","model":{"providerID":"opencode","modelID":"big-pickle"},"events":true}
+```
+
+`runId` and the explicit model are required; `events` and `expectedRevision` are
+optional. Callers may reserve the run through `run.prepare`. Admission, snapshot
+revision fencing, active-execution exclusion, native execution identity,
+stop/pause/resume and durable callback receipts follow the existing `run`
+protocol. Queue consumers should request `events:true`, use the same run ID when
+reconciling an uncertain admission, and finish only on the owned terminal
+`session.event` callback. Acceptance returns `{"accepted":true,"runId":"compact_1"}`;
+reconciliation can also return `reconciled:true` and the existing submitted state.
+
+Core creates the native compaction marker and forks its existing session prompt
+loop in the application Effect scope. The internal request is
+`POST /session/:sessionId/summarize` with
+`{"providerID":"opencode","modelID":"big-pickle","async":true}`. Ordinary
+summarize calls retain their synchronous behavior. The Worker does not start a
+separate process, synthesize a summary prompt, or transfer runtime ownership to
+Bot. Provider failures are native session error events.
+
+No dedicated speech-transcription or image-generation operation is exposed:
+the current Core interfaces do not supply a governed implementation for those
+operations. Model attachment input and provider modality metadata do not imply
+an output-generation or transcription service.

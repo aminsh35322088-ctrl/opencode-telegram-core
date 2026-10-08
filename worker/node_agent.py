@@ -1051,15 +1051,18 @@ class Agent:
             if operation == 'session.status':
                 statuses = self.local('GET', '/session/status')
                 return {session: statuses[session]} if session in statuses else {}
-            if operation == 'run':
+            if operation in ('run', 'session.compact'):
+                compact = operation == 'session.compact'
+                if compact and (set(payload) - {'runId', 'model', 'events', 'expectedRevision'} or payload.get('model') is None):
+                    raise ValueError('compaction requires model and governed run options')
                 if set(payload) - {'runId', 'text', 'parts', 'model', 'variant', 'agent', 'events', 'expectedRevision'}:
                     raise ValueError('unsupported prompt options')
-                parts = payload.get('parts')
+                parts = [] if compact else payload.get('parts')
                 if parts is None:
                     if not isinstance(payload.get('text'), str) or not payload['text']:
                         raise ValueError('text or parts required')
                     parts = [{'type': 'text', 'text': payload['text']}]
-                if not isinstance(parts, list) or not 1 <= len(parts) <= 128:
+                if not isinstance(parts, list) or not (0 if compact else 1) <= len(parts) <= 128:
                     raise ValueError('invalid parts')
                 for part in parts:
                     if not isinstance(part, dict) or part.get('type') not in ('text', 'file'):
@@ -1123,7 +1126,10 @@ class Agent:
                 self.mcp_proxy.begin(session, run_id)
                 try:
                     self.ensure_sync_watcher(admitting=True)
-                    self.local('POST', '/session/' + encoded + '/prompt_async', body)
+                    if compact:
+                        self.local('POST', '/session/' + encoded + '/summarize', {**model, 'async': True})
+                    else:
+                        self.local('POST', '/session/' + encoded + '/prompt_async', body)
                 except Exception:
                     self.mcp_proxy.end(session, run_id)
                     if callback_stream is not None:
