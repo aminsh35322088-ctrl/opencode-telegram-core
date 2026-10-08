@@ -36,7 +36,7 @@ class EventTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as root:
    b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=-100,threadId=42));agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None
    agent.local=Mock(return_value={'providers':[{'id':'opencode','options':{'apiKey':'must-never-return'},'models':{'big-pickle':{'id':'big-pickle','cost':{'input':0,'output':0}}}}]})
-   result=agent.dispatch(b.envelope('model.inspect',{'providerID':'opencode','modelID':'big-pickle'}))
+   b.set('session','owned');result=agent.dispatch(b.envelope('model.inspect',{'providerID':'opencode','modelID':'big-pickle'},'owned'))
    self.assertTrue(result['available']);self.assertTrue(result['connected']);self.assertNotIn('must-never-return',json.dumps(result));agent.local.assert_called_once_with('GET','/config/providers');b.db.close()
 
  def test_old_idle_cannot_complete_new_callback_run(self):
@@ -65,7 +65,7 @@ class EventTests(unittest.TestCase):
   from unittest.mock import Mock
   with tempfile.TemporaryDirectory() as root:
    b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=-100,threadId=42));agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None;agent.local=Mock(return_value={'providers':[{'id':'opencode','models':{'big-pickle':{'cost':{'input':0,'output':0}}}}],'default':{'opencode':'big-pickle'}})
-   result=agent.dispatch(b.envelope('model.inspect',{'providerID':'opencode','modelID':'big-pickle'}));self.assertTrue(result['available']);self.assertTrue(result['connected']);agent.local.assert_called_once_with('GET','/config/providers');b.db.close()
+   b.set('session','owned');result=agent.dispatch(b.envelope('model.inspect',{'providerID':'opencode','modelID':'big-pickle'},'owned'));self.assertTrue(result['available']);self.assertTrue(result['connected']);agent.local.assert_called_once_with('GET','/config/providers');b.db.close()
 
 
  def test_callback_retry_ack_preserves_newer_pending_terminal_event(self):

@@ -1,4 +1,5 @@
 """Request-driven, authenticated boundary around the localhost-only compiled Core."""
+import base64
 import hashlib
 import hmac
 import json
@@ -893,12 +894,14 @@ class Agent:
             if not self.ready or not self.process or self.process.poll() is not None:
                 raise ValueError('node not ready')
             if operation == 'model.inspect':
+                if not self.boundary.get('session') or value.get('sessionId') != self.boundary.get('session'):
+                    raise ValueError('foreign session')
                 if set(payload) != {'providerID', 'modelID'} or any(not isinstance(payload[key], str) or not payload[key] or len(payload[key]) > 128 for key in payload):
                     raise ValueError('invalid model selection')
                 catalog = self.local('GET', '/config/providers')
                 provider = next((entry for entry in catalog.get('providers', []) if entry.get('id') == payload['providerID']), None)
                 model = provider.get('models', {}).get(payload['modelID']) if provider else None
-                return {**payload, 'available': model is not None, 'connected': provider is not None, 'cost': model.get('cost', {}) if model else {}}
+                return {**payload, 'available': model is not None, 'connected': provider is not None, 'cost': {key: model.get('cost', {})[key] for key in ('input', 'output', 'cache_read', 'cache_write') if key in model.get('cost', {})} if model else {}}
             session = self.boundary.get('session')
             if operation == 'session.create':
                 if session:
@@ -915,6 +918,100 @@ class Agent:
                     self.converge_pending_sync()
                 except OSError:
                     pass
+            if operation == 'models.list':
+                if payload:
+                    raise ValueError('catalog payload must be empty')
+                catalog = self.local('GET', '/config/providers')
+                # Only public DTO fields; provider options/auth never cross this boundary.
+                fields = ('id', 'name', 'attachment', 'reasoning', 'tool_call')
+                providers = []
+                for provider in catalog.get('providers', []):
+                    models = {}
+                    for model_id, model in provider.get('models', {}).items():
+                        models[model_id] = {**{key: model[key] for key in fields if key in model},
+                                            'variants': list(model.get('variants', {})),
+                                            **{key: {field: model.get(key, {})[field] for field in allowed if field in model.get(key, {})}
+                                               for key, allowed in {'cost': ('input', 'output', 'cache_read', 'cache_write'),
+                                                                    'limit': ('context', 'input', 'output'),
+                                                                    'modalities': ('input', 'output')}.items()}}
+                    providers.append({'id': provider['id'], 'name': provider.get('name', provider['id']), 'models': models})
+                return {'providers': providers}
+            if operation in ('agents.list', 'commands.list'):
+                if payload:
+                    raise ValueError('catalog payload must be empty')
+                entries = self.local('GET', '/agent' if operation == 'agents.list' else '/command')
+                fields = ('name', 'description', 'mode', 'hidden')
+                return [{key: item[key] for key in fields if key in item} for item in entries]
+            if operation in ('session.todos', 'session.diff', 'session.children'):
+                if payload:
+                    raise ValueError('inspection payload must be empty')
+                suffix = {'session.todos': 'todo', 'session.diff': 'diff', 'session.children': 'children'}[operation]
+                return self.local('GET', '/session/' + encoded + '/' + suffix)
+            if operation == 'session.child-messages':
+                if set(payload) != {'childId'} or not isinstance(payload['childId'], str):
+                    raise ValueError('invalid child inspection')
+                children = self.local('GET', '/session/' + encoded + '/children')
+                if not any(item.get('id') == payload['childId'] and item.get('parentID') == session for item in children):
+                    raise ValueError('foreign child')
+                return self.local('GET', '/session/' + quote(payload['childId'], safe='') + '/message')
+            if operation == 'session.rename':
+                if set(payload) != {'title'} or not isinstance(payload['title'], str) or not 1 <= len(payload['title'].strip()) <= 128:
+                    raise ValueError('invalid session title')
+                return self.local('PATCH', '/session/' + encoded, {'title': payload['title'].strip()})
+            if operation in ('file.list', 'file.read'):
+                if set(payload) != {'path'} or not isinstance(payload['path'], str) or len(payload['path']) > 1024:
+                    raise ValueError('invalid workspace path')
+                relative = Path(payload['path'])
+                if relative.is_absolute() or '..' in relative.parts or '\x00' in payload['path']:
+                    raise ValueError('foreign workspace path')
+                # Open each component relative to an already opened directory.
+                # O_NOFOLLOW closes the check/open race with model file mutations.
+                descriptor = os.open(self.workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    components = relative.parts
+                    for index, component in enumerate(components):
+                        directory = index < len(components) - 1 or operation == 'file.list'
+                        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_DIRECTORY if directory else 0)
+                        opened = os.open(component, flags, dir_fd=descriptor)
+                        os.close(descriptor)
+                        descriptor = opened
+                    if operation == 'file.list':
+                        nodes = []
+                        with os.scandir(descriptor) as entries:
+                            for count, entry in enumerate(entries):
+                                if count >= 1000:
+                                    raise ValueError('directory too large')
+                                metadata = entry.stat(follow_symlinks=False)
+                                if not (stat.S_ISDIR(metadata.st_mode) or (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1)):
+                                    continue
+                                nodes.append({'name': entry.name, 'path': str(relative / entry.name),
+                                              'type': 'directory' if stat.S_ISDIR(metadata.st_mode) else 'file', 'ignored': False})
+                        return sorted(nodes, key=lambda item: (item['type'] != 'directory', item['name']))
+                    metadata = os.fstat(descriptor)
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > 262144:
+                        raise ValueError('file unavailable or too large')
+                    chunks = []
+                    remaining = 262145
+                    while remaining:
+                        chunk = os.read(descriptor, min(65536, remaining))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    content = b''.join(chunks)
+                    if len(content) > 262144:
+                        raise ValueError('file too large')
+                    try:
+                        if b'\x00' in content:
+                            raise UnicodeError('binary')
+                        return {'type': 'text', 'content': content.decode('utf-8')}
+                    except UnicodeError:
+                        return {'type': 'binary', 'content': base64.b64encode(content).decode('ascii'),
+                                'encoding': 'base64', 'mimeType': 'application/octet-stream'}
+                except OSError as error:
+                    raise ValueError('workspace file unavailable') from error
+                finally:
+                    os.close(descriptor)
             run_id = self.boundary.get('runId')
             if operation == 'callback.status':
                 if payload.get('runId') != run_id:
@@ -1070,7 +1167,17 @@ class Agent:
             if operation == 'status':
                 execution = self.local('GET', '/session/' + encoded + '/execution')
                 return {**execution, 'externalRunId': run_id} if execution else None
-            if operation in ('question.list', 'question.reply'):
+            if operation in ('permission.list', 'permission.reply'):
+                pending = self.local('GET', '/permission')
+                owned = [item for item in pending if item.get('sessionID') == session]
+                if operation == 'permission.list':
+                    return owned
+                if (not isinstance(run_id, str) or not run_id or set(payload) != {'runId', 'requestId', 'reply'} or payload.get('runId') != run_id
+                        or payload.get('reply') not in ('once', 'always', 'reject')
+                        or not any(item.get('id') == payload.get('requestId') for item in owned)):
+                    raise ValueError('foreign permission or invalid reply')
+                return self.local('POST', '/permission/' + quote(payload['requestId'], safe='') + '/reply', {'reply': payload['reply']})
+            if operation in ('question.list', 'question.reply', 'question.reject'):
                 questions = self.local('GET', '/question')
                 owned = [question for question in questions if question.get('sessionID') == session]
                 if operation == 'question.list':
@@ -1079,6 +1186,10 @@ class Agent:
                     raise ValueError('foreign run')
                 request_id = payload.get('requestId')
                 matches = [question for question in owned if question.get('id') == request_id]
+                if operation == 'question.reject':
+                    if len(matches) != 1 or set(payload) != {'runId', 'requestId'}:
+                        raise ValueError('foreign question')
+                    return self.local('POST', '/question/' + quote(request_id, safe='') + '/reject', {})
                 answers = payload.get('answers')
                 if len(matches) != 1 or not isinstance(answers, list) or len(answers) != len(matches[0]['questions']) or any(not isinstance(answer, list) or any(not isinstance(label, str) or len(label) > 10000 for label in answer) for answer in answers):
                     raise ValueError('foreign question or invalid answers')

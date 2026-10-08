@@ -187,6 +187,122 @@ class LifecycleTests(SecurityTests):
         self.assertIsNone(self.b.restore())
 
 
+    def test_ui_catalog_never_projects_provider_credentials(self):
+        self.agent.local = lambda *args: {'providers': [{'id': 'fixture', 'name': 'Fixture', 'options': {'apiKey': 'private-key'}, 'models': {'m': {'id': 'm', 'name': 'M', 'cost': {'input': 0}, 'variants': {'fast': {}}, 'options': {'secret': 'hidden'}}}}]}
+        result = self.agent.dispatch(self.request('models.list'))
+        self.assertEqual(result['providers'][0]['models']['m']['name'], 'M')
+        self.assertNotIn('private-key', json.dumps(result))
+        self.assertNotIn('hidden', json.dumps(result))
+
+    def test_ui_permission_reply_requires_session_run_and_owned_request(self):
+        calls = []
+        def local(method, route, payload=None):
+            calls.append((method, route, payload))
+            return [{'id': 'p_foreign', 'sessionID': 'other'}, {'id': 'p_owned', 'sessionID': 'ses_owned'}] if method == 'GET' else True
+        self.agent.local = local
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.request('permission.reply', {'runId': 'run_owned', 'requestId': 'p_foreign', 'reply': 'once'}))
+        self.assertTrue(all(call[0] == 'GET' for call in calls))
+        result = self.agent.dispatch(self.request('permission.reply', {'runId': 'run_owned', 'requestId': 'p_owned', 'reply': 'once'}))
+        self.assertTrue(result)
+        self.assertEqual(calls[-1], ('POST', '/permission/p_owned/reply', {'reply': 'once'}))
+
+    def test_ui_rename_only_updates_exact_owned_session(self):
+        calls = []
+        self.agent.local = lambda method, route, payload=None: calls.append((method, route, payload)) or {}
+        self.agent.dispatch(self.request('session.rename', {'title': 'Persian topic'}))
+        self.assertEqual(calls, [('PATCH', '/session/ses_owned', {'title': 'Persian topic'})])
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.request('session.rename', {'title': 'unsafe', 'directory': '/data/agent'}))
+
+    def test_ui_child_history_is_read_only_and_descendant_bound(self):
+        def local(method, route, payload=None):
+            if route == '/session/ses_owned/children':
+                return [{'id': 'ses_child', 'parentID': 'ses_owned'}]
+            if route == '/session/ses_child/message':
+                return [{'info': {'role': 'assistant'}, 'parts': []}]
+            self.fail('foreign child reached Core')
+        self.agent.local = local
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.request('session.child-messages', {'childId': 'ses_other'}))
+        self.assertEqual(len(self.agent.dispatch(self.request('session.child-messages', {'childId': 'ses_child'}))), 1)
+
+    def test_ui_file_paths_cannot_escape_topic_or_read_symlink(self):
+        calls = []
+        self.agent.local = lambda *args: calls.append(args) or []
+        (self.agent.workspace / 'escape').symlink_to(self.b.root / 'agent.sqlite')
+        for path in ('../agent.sqlite', '/data/agent.sqlite', 'escape'):
+            with self.assertRaises(ValueError):
+                self.agent.dispatch(self.request('file.read', {'path': path}))
+        self.assertEqual(calls, [])
+        self.agent.dispatch(self.request('file.list', {'path': '.'}))
+        self.assertEqual(calls, [])
+
+    def test_ui_files_work_without_retired_http_file_routes(self):
+        self.agent.local = lambda *args: self.fail('retired file HTTP API called')
+        (self.agent.workspace / 'note.txt').write_text('hello\n')
+        (self.agent.workspace / 'binary').write_bytes(b'\x00\xff')
+        self.assertEqual(self.agent.dispatch(self.request('file.read', {'path': 'note.txt'})), {'type': 'text', 'content': 'hello\n'})
+        self.assertEqual(self.agent.dispatch(self.request('file.read', {'path': 'binary'}))['encoding'], 'base64')
+        nodes = self.agent.dispatch(self.request('file.list', {'path': '.'}))
+        self.assertEqual({node['path'] for node in nodes}, {'note.txt', 'binary'})
+        self.assertTrue(all('absolute' not in node for node in nodes))
+
+    def test_ui_file_open_rejects_symlink_swap_during_read(self):
+        from unittest.mock import patch
+        import os
+        note = self.agent.workspace / 'note'
+        note.write_text('public')
+        private = self.b.root / 'private'
+        private.write_text('private-key')
+        original = os.open
+        def swapped(path, flags, *args, **kwargs):
+            if path == 'note':
+                note.unlink()
+                note.symlink_to(private)
+            return original(path, flags, *args, **kwargs)
+        with patch.object(a.os, 'open', swapped), self.assertRaises(ValueError):
+            self.agent.dispatch(self.request('file.read', {'path': 'note'}))
+
+    def test_ui_files_reject_special_hardlinked_and_oversized_files(self):
+        import os
+        self.agent.local = lambda *args: self.fail('unsafe file reached HTTP API')
+        private = self.b.root / 'private'
+        private.write_text('private-key')
+        os.link(private, self.agent.workspace / 'hardlink')
+        os.mkfifo(self.agent.workspace / 'fifo')
+        (self.agent.workspace / 'large').write_bytes(b'x' * 262145)
+        for path in ('hardlink', 'fifo', 'large'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.agent.dispatch(self.request('file.read', {'path': path}))
+
+    def test_ui_all_new_operations_reject_foreign_session_before_core(self):
+        self.agent.local = lambda *args: self.fail('foreign authority reached Core')
+        for op in ('models.list', 'agents.list', 'commands.list', 'session.todos', 'session.diff', 'session.children', 'session.child-messages', 'session.rename', 'file.list', 'file.read', 'permission.list', 'permission.reply', 'question.reject', 'model.inspect'):
+            with self.subTest(operation=op), self.assertRaisesRegex(ValueError, 'foreign session'):
+                self.agent.dispatch(self.request(op, session='ses_other'))
+
+    def test_ui_model_nested_dtos_drop_unknown_secret_fields(self):
+        self.agent.local = lambda *args: {'providers': [{'id': 'fixture', 'models': {'m': {'id': 'm', 'cost': {'input': 1, 'apiKey': 'private-key'}, 'limit': {'context': 100, 'secret': 'private-key'}, 'modalities': {'input': ['text'], 'secret': 'private-key'}}}}]}
+        self.assertNotIn('private-key', json.dumps(self.agent.dispatch(self.request('models.list'))))
+
+    def test_ui_model_inspection_drops_nonpublic_cost_fields(self):
+        self.agent.local = lambda *args: {'providers': [{'id': 'fixture', 'models': {'m': {'cost': {'input': 1, 'secret': 'private-key'}}}}]}
+        result = self.agent.dispatch(self.request('model.inspect', {'providerID': 'fixture', 'modelID': 'm'}))
+        self.assertEqual(result['cost'], {'input': 1})
+
+    def test_ui_permission_reply_requires_nonempty_owned_run(self):
+        self.b.set('runId', None)
+        self.agent.local = lambda *args: [{'id': 'p_owned', 'sessionID': 'ses_owned'}]
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.request('permission.reply', {'runId': None, 'requestId': 'p_owned', 'reply': 'once'}))
+
+    def test_ui_question_reject_is_owned(self):
+        calls = []
+        self.agent.local = lambda method, route, payload=None: calls.append((method, route, payload)) or ([{'id': 'q_owned', 'sessionID': 'ses_owned', 'questions': [{}]}] if method == 'GET' else True)
+        self.assertTrue(self.agent.dispatch(self.request('question.reject', {'runId': 'run_owned', 'requestId': 'q_owned'})))
+        self.assertEqual(calls[-1], ('POST', '/question/q_owned/reject', {}))
+
 class DeferredSyncTests(LifecycleTests):
     def test_prepared_run_does_not_refresh_during_control_outage(self):
         calls = []
