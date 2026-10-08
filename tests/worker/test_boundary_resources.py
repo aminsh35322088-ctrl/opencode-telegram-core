@@ -20,6 +20,35 @@ class BoundaryResourceTests(unittest.TestCase):
         self.boundary.db.close()
         self.temp.cleanup()
 
+    def test_callback_write_cannot_commit_or_observe_another_thread_transaction(self):
+        started, done = threading.Event(), threading.Event()
+        errors = []
+        def callback():
+            started.set()
+            try:
+                self.boundary.set('callbackPending', {'runId': 'owned'})
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                done.set()
+        thread = threading.Thread(target=callback)
+        try:
+            with self.boundary.lock:
+                with self.assertRaisesRegex(RuntimeError, 'rollback admission'):
+                    with self.boundary.db:
+                        self.boundary.db.execute('INSERT INTO state VALUES (?,?)', ('uncommitted', 'true'))
+                        thread.start()
+                        self.assertTrue(started.wait(1))
+                        self.assertFalse(done.wait(.05), 'callback committed the in-flight admission transaction')
+                        raise RuntimeError('rollback admission')
+        finally:
+            if thread.ident is not None:
+                thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertIsNone(self.boundary.get('uncommitted'))
+        self.assertEqual(self.boundary.get('callbackPending'), {'runId': 'owned'})
+
     def snapshot(self, revision):
         value = dict(version=1, revision=revision, configuration={'runtime': {}}, skills=[], actions=[], catalog={}, defaults={}, credentialReferences=[])
         value['hash'] = a.digest(value)

@@ -207,11 +207,14 @@ class Boundary:
         return self.identity['chatId'] == 0 and self.identity['threadId'] == 0
 
     def get(self, key):
-        row = self.db.execute('SELECT value FROM state WHERE key=?', (key,)).fetchone()
-        return json.loads(row[0]) if row else None
+        with self.lock:
+            row = self.db.execute('SELECT value FROM state WHERE key=?', (key,)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def set(self, key, value):
-        with self.db:
+        # Callback, configuration, and RPC threads share one connection. SQLite
+        # transactions must never commit a different thread's in-flight write.
+        with self.lock, self.db:
             self.db.execute('INSERT OR REPLACE INTO state VALUES (?,?)', (key, json.dumps(value)))
 
     def envelope(self, operation, payload, session=None):
