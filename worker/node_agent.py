@@ -883,10 +883,10 @@ class Agent:
             if operation == 'model.inspect':
                 if set(payload) != {'providerID', 'modelID'} or any(not isinstance(payload[key], str) or not payload[key] or len(payload[key]) > 128 for key in payload):
                     raise ValueError('invalid model selection')
-                catalog = self.local('GET', '/provider')
-                provider = next((entry for entry in catalog.get('all', []) if entry.get('id') == payload['providerID']), None)
+                catalog = self.local('GET', '/config/providers')
+                provider = next((entry for entry in catalog.get('providers', []) if entry.get('id') == payload['providerID']), None)
                 model = provider.get('models', {}).get(payload['modelID']) if provider else None
-                return {**payload, 'available': model is not None, 'connected': payload['providerID'] in catalog.get('connected', []), 'cost': model.get('cost', {}) if model else {}}
+                return {**payload, 'available': model is not None, 'connected': provider is not None, 'cost': model.get('cost', {}) if model else {}}
             session = self.boundary.get('session')
             if operation == 'session.create':
                 if session:
