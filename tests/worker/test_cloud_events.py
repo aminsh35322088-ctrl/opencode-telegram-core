@@ -66,3 +66,31 @@ class EventTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as root:
    b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=-100,threadId=42));agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None;agent.local=Mock(return_value={'providers':[{'id':'opencode','models':{'big-pickle':{'cost':{'input':0,'output':0}}}}],'default':{'opencode':'big-pickle'}})
    result=agent.dispatch(b.envelope('model.inspect',{'providerID':'opencode','modelID':'big-pickle'}));self.assertTrue(result['available']);self.assertTrue(result['connected']);agent.local.assert_called_once_with('GET','/config/providers');b.db.close()
+
+
+ def test_callback_retry_ack_preserves_newer_pending_terminal_event(self):
+  from unittest.mock import Mock
+  for operation in ('callback.status','run'):
+   with self.subTest(operation=operation),tempfile.TemporaryDirectory() as root:
+    b=a.Boundary(root,'s'*64,dict(nodeId='node',generation=1,chatId=-100,threadId=42));agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None;b.set('session','owned');b.set('runId','run');b.set('callbackRunReceipt',{'runId':'run','state':'COMPLETED'})
+    old={'runId':'run','streamNonce':'stream','sequence':1,'event':{'type':'session.status'}}
+    new={'runId':'run','streamNonce':'stream','sequence':2,'event':{'type':'session.idle'}}
+    b.set('callbackPending',old)
+    def acknowledge(_op,payload,session=None):
+     self.assertEqual(payload,old)
+     b.set('callbackPending',new)
+     return {'accepted':True}
+    agent.outbound=acknowledge
+    payload={'runId':'run'} if operation=='callback.status' else {'runId':'run','text':'hello','events':True}
+    agent.dispatch(b.envelope(operation,payload,'owned'))
+    self.assertEqual(b.get('callbackPending'),new)
+    b.db.close()
+
+
+ def test_accepted_run_observability_omits_prompt_and_authentication_material(self):
+  from unittest.mock import Mock
+  from contextlib import redirect_stdout
+  with tempfile.TemporaryDirectory() as root:
+   b=a.Boundary(root,'synthetic-node-secret-value'*3,dict(nodeId='node',generation=1,chatId=-100,threadId=42));agent=a.Agent(b,'https://control.example');agent.ready=True;agent.process=Mock();agent.process.poll.return_value=None;b.set('session','owned');agent.local=Mock(return_value=None);agent.refresh_snapshot=Mock();agent.ensure_sync_watcher=Mock();agent.mcp_proxy=Mock();output=io.StringIO()
+   with redirect_stdout(output):agent.dispatch(b.envelope('run',{'runId':'run','text':'synthetic-private-prompt','model':{'providerID':'opencode','modelID':'big-pickle'}},'owned'))
+   log=json.loads(output.getvalue());self.assertEqual(log['event'],'worker_run_accepted');self.assertEqual(log['runId'],'run');self.assertEqual(log['generation'],1);self.assertEqual(log['modelID'],'big-pickle');self.assertNotIn('synthetic-private-prompt',output.getvalue());self.assertNotIn('synthetic-node-secret-value',output.getvalue());b.db.close()

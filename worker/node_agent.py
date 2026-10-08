@@ -217,6 +217,15 @@ class Boundary:
         with self.lock, self.db:
             self.db.execute('INSERT OR REPLACE INTO state VALUES (?,?)', (key, json.dumps(value)))
 
+    def clear_if_matches(self, key, expected):
+        # An HTTP acknowledgement may race with publication of a newer event.
+        # Only consume the exact durable receipt that was acknowledged.
+        with self.lock:
+            if self.get(key) != expected:
+                return False
+            self.set(key, None)
+            return True
+
     def envelope(self, operation, payload, session=None):
         value = dict(version=1, **self.identity, operation=operation, payload=payload,
                      timestamp=int(time.time() * 1000), nonce=secrets.token_hex(24))
@@ -914,7 +923,7 @@ class Agent:
                 pending = self.boundary.get('callbackPending')
                 if pending and pending.get('runId') == run_id:
                     self.outbound('session.event', pending, session=session)
-                    self.boundary.set('callbackPending', None)
+                    self.boundary.clear_if_matches('callbackPending', pending)
                 state = receipt.get('state') if receipt else 'NOT_SUBMITTED'
                 if state == 'ACCEPTED' and not self.callback_owner:
                     state = 'INCOMPLETE'
@@ -986,7 +995,7 @@ class Agent:
                     pending = self.boundary.get('callbackPending')
                     if pending and pending.get('runId') == run_id:
                         self.outbound('session.event', pending, session=session)
-                        self.boundary.set('callbackPending', None)
+                        self.boundary.clear_if_matches('callbackPending', pending)
                     return {'accepted': True, 'runId': run_id, 'reconciled': True}
                 if payload.get('events') and self.callback_owner:
                     raise ValueError('previous callback owner is still active')
@@ -1027,6 +1036,10 @@ class Agent:
                     self.boundary.set('callbackRunReceipt', {'runId': run_id, 'state': 'ACCEPTED'})
                     self.callback_owner = threading.Thread(target=self.forward_callbacks, args=(callback_stream,session,run_id), daemon=True)
                     self.callback_owner.start()
+                print(json.dumps({'event': 'worker_run_accepted', 'nodeId': self.boundary.identity['nodeId'],
+                                  'generation': self.boundary.identity['generation'], 'runId': run_id,
+                                  'providerID': (model or {}).get('providerID'),
+                                  'modelID': (model or {}).get('modelID')}), flush=True)
                 return {'accepted': True, 'runId': run_id}
             if operation in ('pause', 'resume'):
                 if payload.get('runId') != run_id:
@@ -1098,7 +1111,7 @@ class Agent:
                             return
                         try:
                             self.outbound('session.event', payload, session=session)
-                            self.boundary.set('callbackPending', None)
+                            self.boundary.clear_if_matches('callbackPending', payload)
                             break
                         except Exception:
                             if attempt == 2:
