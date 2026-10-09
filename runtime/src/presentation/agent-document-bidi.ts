@@ -530,3 +530,117 @@ export const BIDI_ISOLATE = {
   FSI: "\u2068",
   PDI: "\u2069",
 } as const;
+
+/** Native clients implement Unicode bidi; direction metadata does not alter visible text. */
+export function withAgentDocumentDirection(
+  document: AgentDocument,
+): AgentDocument {
+  if (document.rtl !== undefined) return document;
+  return detectDocumentDirection(document) === "rtl"
+    ? { ...document, rtl: true }
+    : document;
+}
+
+/** Strip untrusted directional overrides in semantic prose, preserving authored code/ZWNJ. */
+export function sanitizeAgentDocumentBidi(
+  document: AgentDocument,
+): AgentDocument {
+  const clean = (text: string): string =>
+    text.replace(/[\u202a-\u202e\u2066-\u2069]/gu, "");
+  const inline = (value: AgentInline): AgentInline => {
+    if (typeof value === "string") return clean(value);
+    if (isInlineArray(value)) return value.map(inline);
+    if (
+      value.type === "code" ||
+      value.type === "math" ||
+      value.type === "anchor" ||
+      value.type === "button"
+    )
+      return value;
+    if (value.type === "custom_emoji")
+      return { ...value, alternativeText: clean(value.alternativeText) };
+    return { ...value, text: inline(value.text) };
+  };
+  const caption = (value: AgentCaption): AgentCaption => ({
+    text: inline(value.text),
+    ...(value.credit === undefined ? {} : { credit: inline(value.credit) }),
+  });
+  const block = (value: AgentBlock): AgentBlock => {
+    switch (value.type) {
+      case "code":
+      case "math":
+      case "divider":
+      case "anchor":
+      case "buttons":
+        return value;
+      case "paragraph":
+      case "heading":
+      case "thinking":
+      case "footer":
+        return { ...value, text: inline(value.text) };
+      case "pullquote":
+        return {
+          ...value,
+          text: inline(value.text),
+          ...(value.credit === undefined
+            ? {}
+            : { credit: inline(value.credit) }),
+        };
+      case "quote":
+        return {
+          ...value,
+          text: inline(value.text),
+          ...(value.blocks === undefined
+            ? {}
+            : { blocks: value.blocks.map(block) }),
+          ...(value.credit === undefined
+            ? {}
+            : { credit: inline(value.credit) }),
+        };
+      case "list":
+        return {
+          ...value,
+          items: value.items.map((item) => ({
+            ...item,
+            blocks: item.blocks.map(block),
+          })),
+        };
+      case "table":
+        return {
+          ...value,
+          cells: value.cells.map((row) =>
+            row.map((cell) => ({
+              ...cell,
+              ...(cell.text === undefined ? {} : { text: inline(cell.text) }),
+            })),
+          ),
+          ...(value.caption === undefined
+            ? {}
+            : { caption: caption(value.caption) }),
+        };
+      case "details":
+        return {
+          ...value,
+          summary: inline(value.summary),
+          blocks: value.blocks.map(block),
+        };
+      case "collage":
+      case "slideshow":
+        return {
+          ...value,
+          blocks: value.blocks.map(block),
+          ...(value.caption === undefined
+            ? {}
+            : { caption: caption(value.caption) }),
+        };
+      default:
+        return {
+          ...value,
+          ...(value.caption === undefined
+            ? {}
+            : { caption: caption(value.caption) }),
+        };
+    }
+  };
+  return { ...document, blocks: document.blocks.map(block) };
+}

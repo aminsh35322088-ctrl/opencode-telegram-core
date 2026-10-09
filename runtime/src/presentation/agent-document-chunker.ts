@@ -548,6 +548,12 @@ function splitTable(block: Extract<AgentBlock, { type: "table" }>, limits: Resol
     return splitNaturalText(blockPlainText(block), limits.maxCharacters)
       .map((text): AgentBlock => ({ type: "paragraph", text }));
   }
+  const headers: AgentTableCell[][] = [];
+  for (const row of block.cells) {
+    if (!row.length || !row.every(cell => cell.isHeader)) break;
+    headers.push([...row]);
+  }
+  const headerCharacters = headers.reduce((sum, row) => sum + unicodeLength(rowPlainText(row)), 0);
   const output: AgentBlock[] = [];
   let rows: AgentTableCell[][] = [];
   let currentCharacters = 0;
@@ -574,6 +580,14 @@ function splitTable(block: Extract<AgentBlock, { type: "table" }>, limits: Resol
         currentBlocks + 1 > limits.maxBlocks)
     ) {
       flush();
+    }
+    // Repeat headers only when they fit alongside this row within both budgets.
+    if (!rows.length && output.length && headers.length &&
+      headerCharacters + rowCharacters <= limits.maxCharacters &&
+      headers.length + 2 <= limits.maxBlocks) {
+      rows.push(...headers.map(header => [...header]));
+      currentCharacters = headerCharacters;
+      currentBlocks = 1 + headers.length;
     }
     rows.push([...row]);
     currentCharacters += rowCharacters;

@@ -35,3 +35,4 @@ export * from "./telegram/grammy-rich-port.js";
 export * from "./telegram/grammy-transport.js";
 export * from "./telegram/rich-stream.js";
 export * from "./telegram/routes.js";
+export * from "./presentation/telegram-message-renderer.js";

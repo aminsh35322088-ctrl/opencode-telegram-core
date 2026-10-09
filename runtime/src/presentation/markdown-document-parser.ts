@@ -143,10 +143,13 @@ function decodeHtml(value: string): string {
     ldquo: "“",
     rdquo: "”",
   };
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#([0-9]+);/g, (_, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
-    .replace(/&([a-z]+);/gi, (match, entity: string) => named[entity.toLowerCase()] ?? match);
+  return value.replace(/&(?:#x([0-9a-f]+)|#([0-9]+)|([a-z]+));/gi,
+    (match, hex: string | undefined, decimal: string | undefined, entity: string | undefined) => {
+      if (entity) return named[entity.toLowerCase()] ?? match;
+      const point = Number.parseInt(hex ?? decimal ?? "", hex === undefined ? 10 : 16);
+      return point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)
+        ? String.fromCodePoint(point) : "\ufffd";
+    });
 }
 
 function parseHtmlTag(raw: string): HtmlTag | null {
@@ -1115,7 +1118,7 @@ function blocksFromNodes(nodes: readonly MdNode[], context: ParseContext): Agent
         blocks.push(...(
           parseSpecialHtml(raw, context) ??
           parseHtmlSequence(raw, context) ??
-          [{ type: "paragraph", text: raw }]
+          [{ type: "paragraph", text: decodeHtml(raw) }]
         ));
         break;
       }

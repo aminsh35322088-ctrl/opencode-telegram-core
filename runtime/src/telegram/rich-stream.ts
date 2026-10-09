@@ -1,5 +1,5 @@
 import type { InputRichMessageWithoutUpload } from "grammy/types";
-import { detectMarkdownDirection, optimizeAgentDocumentBidi } from "../presentation/agent-document-bidi.js";
+import { detectMarkdownDirection, withAgentDocumentDirection, sanitizeAgentDocumentBidi } from "../presentation/agent-document-bidi.js";
 import { chunkAgentDocument } from "../presentation/agent-document-chunker.js";
 import type { AgentDocument } from "../presentation/agent-document.js";
 import { parseMarkdownDocument } from "../presentation/markdown-document-parser.js";
@@ -108,7 +108,7 @@ export class TelegramRichStreamController {
     const key = routeKey(route, draftId);
     const lease: DraftLease = { run, route, draftId };
     this.#leases.set(key, lease);
-    const optimized = optimizeAgentDocumentBidi(document);
+    const optimized = withAgentDocumentDirection(sanitizeAgentDocumentBidi(document));
     const preview = chunkAgentDocument(optimized)[0] ?? optimized;
     try {
       if (!await this.#deliver(key, lease, signal, () =>
@@ -262,7 +262,7 @@ export class TelegramRichStreamController {
       return false;
     }
     const documents = chunkAgentDocument(
-      optimizeAgentDocumentBidi(parseMarkdownDocument(markdown)),
+      withAgentDocumentDirection(sanitizeAgentDocumentBidi(parseMarkdownDocument(markdown))),
     );
     if (documents.length === 0 && markdown.trim().length === 0) {
       this.#dropLease(key, lease, "Draft finalized empty");
@@ -296,7 +296,7 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft update");
       return false;
     }
-    const optimized = optimizeAgentDocumentBidi(document);
+    const optimized = withAgentDocumentDirection(sanitizeAgentDocumentBidi(document));
     const preview = chunkAgentDocument(optimized)[0] ?? optimized;
     return await this.#deliver(key, lease, signal, () =>
       this.port.sendDraft(route, draftId, renderTelegramRichDocument(preview, { draft: true }), signal)) !== null;
@@ -316,7 +316,7 @@ export class TelegramRichStreamController {
       this.#dropLease(key, lease, "Stale draft finalize");
       return false;
     }
-    const documents = chunkAgentDocument(optimizeAgentDocumentBidi(document));
+    const documents = chunkAgentDocument(withAgentDocumentDirection(sanitizeAgentDocumentBidi(document)));
     return this.#finalizeDocuments(key, lease, route, documents, signal);
   }
 
