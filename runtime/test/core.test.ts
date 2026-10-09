@@ -251,15 +251,20 @@ describe("TelegramNativeCore composition", () => {
 
     const beginning = core.beginRun("a", "stale-run");
     await started;
+    let signalReplacement!: () => void;
+    const replacementPersisted = new Promise<void>((resolve) => { signalReplacement = resolve; });
+    const replace = core.bindings.replace.bind(core.bindings);
+    core.bindings.replace = async (...args: Parameters<typeof replace>) => {
+      await replace(...args);
+      signalReplacement();
+    };
     const rotating = core.rotateBinding("a", {
       sessionId: "session-a-2",
       normalizedDirectory: "/workspace/a2",
     });
 
-    for (let i = 0; i < 100; i += 1) {
-      if (core.bindings.registry.getById("a")?.bindingGeneration === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    }
+    // Synchronize on the actual durable fencing point, not filesystem timing.
+    await replacementPersisted;
     expect(core.bindings.registry.getById("a")?.bindingGeneration).toBe(2);
     releaseStart();
 
