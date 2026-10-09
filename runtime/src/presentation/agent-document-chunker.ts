@@ -6,6 +6,7 @@ import type {
   AgentTableCell,
 } from "./agent-document.js";
 import type { AgentInline } from "./agent-inline.js";
+import { renderTelegramMessageDocument } from "./telegram-message-renderer.js";
 import { blockPlainText, inlinePlainText, inlineTelegramCharacterCount, unicodeLength } from "./agent-document-text.js";
 
 export const TELEGRAM_RICH_MESSAGE_LIMITS = {
@@ -481,6 +482,30 @@ function splitInline(value: AgentInline, maxCharacters: number): AgentInline[] {
       }
     }
     if (current.length > 0) result.push(current.length === 1 ? current[0]! : current);
+    // Inline marks may change inside a single emoji/combining sequence. Per-node
+    // segmentation cannot recognize that boundary; use the canonical semantic
+    // renderer only when a candidate split actually cuts a whole-text grapheme.
+    if (result.length > 1 && maxCharacters >= 2 && maxCharacters <= 4096) {
+      const text = inlinePlainText(value);
+      const boundaries = new Set<number>([0]);
+      let offset = 0;
+      for (const grapheme of graphemes(text)) {
+        offset += grapheme.length;
+        boundaries.add(offset);
+      }
+      offset = 0;
+      const unsafe = result.slice(0, -1).some((piece) => {
+        offset += inlinePlainText(piece).length;
+        return !boundaries.has(offset);
+      });
+      if (unsafe) {
+        return renderTelegramMessageDocument(
+          { blocks: [{ type: "paragraph", text: value }] },
+          { maxCharacters },
+        ).map((chunk) => chunk.document.blocks.flatMap((block) =>
+          block.type === "paragraph" ? [block.text] : []));
+      }
+    }
     return result;
   }
   if (value.type === "math") {

@@ -349,3 +349,14 @@ test("independent native table continuations repeat their header within the budg
         expect(block.cells[0]?.[0]?.text).toBe("Name");
     }
 });
+
+
+test("native chunking preserves a grapheme crossing inline marks at a message boundary", () => {
+  const source = "x".repeat(3798) + "**👨**‍💻 end";
+  const document = parseMarkdownDocument(source);
+  const parts = chunkAgentDocument(document, { maxCharacters: 3800 })
+    .flatMap((chunk) => renderTelegramMessageDocument(chunk, { maxCharacters: 3800 }));
+  expect(parts.map((part) => part.text).join("")).toBe("x".repeat(3798) + "👨‍💻 end");
+  expect(parts.some((part) => part.text.includes("👨‍💻"))).toBe(true);
+  expect(parts.every((part) => part.text.length <= 3800)).toBe(true);
+});
