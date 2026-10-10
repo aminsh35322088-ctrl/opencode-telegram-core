@@ -43,6 +43,9 @@ jobs:
         working-directory: runtime
         run: bun test
 
+      - name: Test unbound session probe boundary
+        run: python3 -m unittest tests.worker.test_node_agent.UnboundTests.test_session_probe_creates_addresses_deletes_and_verifies_without_durable_authority tests.worker.test_node_agent.UnboundTests.test_session_probe_cleanup_failure_fails_closed_without_persisting_session tests.worker.test_node_agent.UnboundTests.test_session_probe_rejects_payload_session_bound_and_not_ready_authority -v
+
       - name: Test toolchain and release contracts
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
