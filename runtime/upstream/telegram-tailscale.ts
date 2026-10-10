@@ -1,6 +1,7 @@
 import { closeSync, readFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
-import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled } from "./telegram-process-budget"
+import { setTimeout as delay } from "node:timers/promises"
+import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled, TelegramProcessBudgetError } from "./telegram-process-budget"
 import type { SessionExecutionLease } from "./session-execution-control"
 
 export interface NetworkRequest {
@@ -27,6 +28,37 @@ const delegated = (() => {
     return Object.freeze({token:data.token as string,endpoint:data.endpoint as string})
   } finally { closeSync(fd) }
 })()
+
+// Reserve both scopes together. A transient startup/helper or utility scope
+// must retire through the existing governor before network admission proceeds.
+// Never retain one reservation while waiting for the other.
+export async function acquireNetworkBudget(
+  execution: SessionExecutionLease, epoch: number, signal: AbortSignal,
+  acquire = acquireTelegramProcessBudget,
+) {
+  const admission = AbortSignal.any([signal, execution.signal, AbortSignal.timeout(5_000)])
+  for (;;) {
+    admission.throwIfAborted()
+    await execution.checkpoint(admission, epoch)
+    execution.assertOwned(epoch)
+    let daemon: ReturnType<typeof acquireTelegramProcessBudget> = null
+    let command: ReturnType<typeof acquireTelegramProcessBudget> = null
+    try {
+      daemon = acquire("tailscaled", process.env, "helper")
+      command = acquire("tailscale", process.env, "utility")
+      if (!daemon || !command) throw new Error("network budget admission unavailable")
+      admission.throwIfAborted()
+      execution.assertOwned(epoch)
+      return [daemon, command] as const
+    } catch (error) {
+      command?.release()
+      daemon?.release()
+      if (!(error instanceof TelegramProcessBudgetError) || error.reason === "memory_pressure") throw error
+    }
+    try { await delay(25, undefined, {signal:admission}) }
+    catch (error) { if (admission.aborted) throw admission.reason; throw error }
+  }
+}
 
 export async function executeTailscale(
   execution: SessionExecutionLease | undefined, epoch: number | undefined,
@@ -58,9 +90,7 @@ export async function executeTailscale(
   let detach: (() => void) | undefined
   let attempted = false
   try {
-    daemon = acquireTelegramProcessBudget("tailscaled", process.env, "helper")
-    command = acquireTelegramProcessBudget("tailscale", process.env, "utility")
-    if (!daemon || !command) throw new Error("network budget admission unavailable")
+    ;[daemon, command] = await acquireNetworkBudget(execution, epoch, cancellation)
     detach = execution.attach({
       // Pause retires this invocation's scopes. Resume can retry using persisted
       // node identity; no network traffic is retained while the Topic sleeps.
