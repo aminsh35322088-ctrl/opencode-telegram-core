@@ -27,6 +27,7 @@ import base64, pathlib, sys
 encoded = base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode('ascii')
 pathlib.Path(sys.argv[2]).write_text('export const processScopeBinary = "' + encoded + '"\n')
 PY
+cp "$CORE_ROOT/runtime/upstream/telegram-tailscale.ts" "$tree/packages/core/src/telegram-tailscale.ts"
 cp "$CORE_ROOT/runtime/upstream/telegram-tool-process.ts" "$tree/packages/core/src/telegram-tool-process.ts"
 cp "$CORE_ROOT/runtime/src/opencode/tool-process.ts" "$tree/packages/core/src/telegram-tool-process-contract.ts"
 cp "$CORE_ROOT/runtime/src/opencode/tool-process.ts" "$tree/packages/plugin/src/tool-process.ts"

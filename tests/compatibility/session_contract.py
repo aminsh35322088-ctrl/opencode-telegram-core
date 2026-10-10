@@ -49,10 +49,11 @@ def isolated_environment(root):
 
 
 class Server:
-    def __init__(self, binary, readiness_path="/api/session", configure=None):
+    def __init__(self, binary, readiness_path="/api/session", configure=None, pass_fds=()):
         self.binary = Path(binary).resolve()
         self.readiness_path = readiness_path
         self.configure = configure
+        self.pass_fds = pass_fds
         self.headers = {}
         self.temp = None
         self.process = None
@@ -77,6 +78,7 @@ class Server:
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            pass_fds=self.pass_fds,
         )
         deadline = time.monotonic() + 15
         last_error = None

@@ -14,7 +14,7 @@ with open('/usr/local/bin/opencode', 'rb') as stream:
         sha.update(block)
 inventory = {'core': json.loads(Path('/usr/local/share/core-build-info.json').read_text()),
     'coreBinarySha256': sha.hexdigest(), 'node': run('node', '--version'), 'npm': run('npm', '--version'),
-    'python': run('python3', '--version'), 'gitLfs': run('git', 'lfs', 'version'),
+    'python': run('python3', '--version'), 'tailscale': run('tailscale', 'version').splitlines()[0], 'gitLfs': run('git', 'lfs', 'version'),
     'lsofPackage': run('dpkg-query', '-W', '-f=${Version}', 'lsof'),
     'gh': run('gh', '--version').splitlines()[0], 'playwrightCLI': run('playwright-cli', '--version'),
     'playwrightCore': run('node', '-e', "const r=require('module').createRequire('/usr/local/lib/node_modules/@playwright/cli/package.json');console.log(r('playwright-core/package.json').version)"),

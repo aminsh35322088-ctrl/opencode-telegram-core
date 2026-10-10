@@ -30,7 +30,7 @@ class ProxyTests(unittest.TestCase):
         provider = next(iter(proxy.providers.values()))
         self.assertEqual(provider['capability'], 'model-provider:p')
 
-    def test_credential_lease_is_request_scoped_cached_and_expiry_closed(self):
+    def test_credential_lease_is_fresh_each_request_and_expiry_closed(self):
         class Agent:
             def __init__(self):
                 self.calls = []
@@ -48,8 +48,8 @@ class ProxyTests(unittest.TestCase):
         with patch.object(p.time, 'time', return_value=100):
             self.assertEqual(proxy.credential(provider), 'fixture-provider-key')
             proxy.credential(provider)
-            self.assertEqual(len(agent.calls), 1)
-            self.assertEqual(proxy.leases[('model-provider:p', 'api-key')][1], 160)
+            self.assertEqual(len(agent.calls), 2)
+            self.assertEqual(proxy.leases, {})
         with patch.object(p.time, 'time', return_value=201):
             with self.assertRaises(ValueError):
                 proxy.credential(provider)
@@ -74,7 +74,7 @@ class ProxyHTTPTests(unittest.TestCase):
             def __init__(self, host, address):
                 self.chunks = [b'model-result', b'']
             def request(self, method, route, body=None, headers=None):
-                requests.append((method, route, body, headers))
+                requests.append((method, route, body, dict(headers)))
             def getresponse(self):
                 return self
             status = 200
@@ -99,3 +99,31 @@ class ProxyHTTPTests(unittest.TestCase):
         finally:
             proxy.server.shutdown()
             proxy.server.server_close()
+
+class GenericProviderTests(unittest.TestCase):
+    def test_canonical_reference_uses_validated_broker_each_request_and_releases(self):
+        import sys, time
+        from types import SimpleNamespace
+        sys.path.insert(0,str(Path(__file__).parents[2]/'worker'))
+        from credential_broker import CredentialBroker
+        calls=[]
+        identity=dict(nodeId='worker',chatId=-100,threadId=42,generation=3)
+        boundary=SimpleNamespace(unbound=False,identity=identity,get=lambda _:'session')
+        agent=SimpleNamespace(boundary=boundary,ready=True,retired=False)
+        def outbound(operation,payload,session=None):
+            calls.append((operation,payload))
+            if operation=='credential.acquire':return dict(value='fixture-generic-token',leaseId='lease',expiresAt=(time.time()+40)*1000)
+            return dict(valid=True)
+        agent.outbound=outbound;agent.credentials=CredentialBroker(agent)
+        proxy=p.ProviderProxy(agent)
+        config={'provider':{'p':{'options':{'apiKey':'bot-credential-proxy:model-provider:p:cid','baseURL':'https://provider.example/v1'}}}}
+        proxy.rewrite(config,[dict(integrationId='provider:p',credentialId='cid',configured=True)])
+        provider=next(iter(proxy.providers.values()))
+        for _ in range(2):
+            with proxy.acquire(provider) as lease:self.assertEqual(lease.consume(len),21)
+        self.assertEqual(sum(op=='credential.acquire' for op,_ in calls),2)
+        self.assertEqual(sum(op=='credential.validate' for op,_ in calls),2)
+        self.assertEqual(sum(op=='credential.release' for op,_ in calls),2)
+        self.assertEqual(calls[0][1]['capability'],'provider.request')
+        self.assertEqual(calls[0][1]['integrationId'],'provider:p')
+        self.assertNotIn('fixture-generic-token',str(config))

@@ -1,5 +1,11 @@
 /** Process capability supplied by the runtime to a single custom-tool invocation. */
 export interface ToolProcessPort {
+  network?(request: {
+    readonly action: "connect" | "status" | "devices" | "ssh" | "disconnect" | "logout";
+    readonly target?: string;
+    readonly user?: string;
+    readonly command?: string;
+  }): Promise<Readonly<Record<string, unknown>>>;
   /** Persistent browser authority belongs to the captured workspace/session. */
   browser(request: {
     readonly session?: string;

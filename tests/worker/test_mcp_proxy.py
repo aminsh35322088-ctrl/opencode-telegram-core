@@ -50,11 +50,11 @@ class MCPTests(unittest.TestCase):
         route = self.proxy.routes[self.route]
         self.proxy.credential(route, ('session-one', 'run-one'))
         self.proxy.credential(route, ('session-one', 'run-one'))
-        self.assertEqual(len(self.agent.calls), 1)
+        self.assertEqual(len(self.agent.calls), 2)
         self.assertEqual(self.agent.calls[0], ('credential.get', {'purpose': 'mcp.request', 'capability': 'mcp:tools', 'credentialId': 'a' * 64, 'endpoint': 'https://mcp.example/api'}, 'session-one'))
         self.proxy.begin('session-two', 'run-two')
         self.proxy.credential(route, ('session-two', 'run-two'))
-        self.assertEqual(len(self.agent.calls), 2)
+        self.assertEqual(len(self.agent.calls), 3)
         self.proxy.rewrite(self.original, [self.ref])
         self.assertEqual(self.proxy.leases, {})
         self.assertIsNone(self.proxy.active)
@@ -108,7 +108,7 @@ class MCPTests(unittest.TestCase):
             def __init__(self, *_):
                 self.chunks = list(chunks)
             def request(self, method, path, body=None, headers=None):
-                captured.append((method, path, headers))
+                captured.append((method, path, dict(headers)))
             def getresponse(self):
                 return self
             def getheader(self, name, default=None):
@@ -159,6 +159,32 @@ class MCPTests(unittest.TestCase):
 
 
 class CancellationTests(unittest.TestCase):
+    def test_end_does_not_hold_owner_lock_while_joining_forwarding_gate(self):
+        import threading
+        from credential_transport import LeaseTransport
+        proxy=p.MCPProxy(Agent());proxy.active=('session','run')
+        entered,go,closing,ended=threading.Event(),threading.Event(),threading.Event(),threading.Event()
+        class Connection:
+            def close(self):closing.set()
+        def owner():
+            if threading.current_thread().name=='gate-writer':entered.set();go.wait(2)
+            return proxy.live(proxy.epoch,('session','run'))
+        transport=LeaseTransport(None,Connection(),owner)
+        proxy.transports.add(transport)
+        errors=[]
+        def forward():
+            try:transport.forward(lambda:None)
+            except ValueError:errors.append(True)
+        writer=threading.Thread(target=forward,name='gate-writer',daemon=True);writer.start()
+        retirement=threading.Thread(target=lambda:(proxy.end('session','run'),ended.set()),daemon=True)
+        try:
+            self.assertTrue(entered.wait(.5));retirement.start()
+            self.assertTrue(closing.wait(.5));go.set()
+            self.assertTrue(ended.wait(.5),'end deadlocked with concurrent forwarding owner check')
+            writer.join(.5);self.assertFalse(writer.is_alive())
+            self.assertTrue(errors)
+        finally:go.set()
+
     def test_blocked_lease_does_not_hold_retirement_lock(self):
         import threading
         entered, release = threading.Event(), threading.Event()
@@ -196,6 +222,26 @@ class CancellationTests(unittest.TestCase):
             create.assert_not_called()
 
 
+    def test_retirement_cancels_blocked_response_headers(self):
+        import socket, threading
+        left,right=socket.socketpair()
+        connection=p.PinnedConnection('mcp.example','8.8.8.8')
+        connection.sock=left
+        connection._HTTPConnection__state='Request-sent'
+        errors=[];entered=threading.Event()
+        def read():
+            entered.set()
+            try:connection.getresponse()
+            except Exception as error:errors.append(error)
+        thread=threading.Thread(target=read);thread.start()
+        try:
+            self.assertTrue(entered.wait(.5))
+            connection.close();thread.join(.5)
+            self.assertFalse(thread.is_alive(),'retirement did not cancel header read')
+            self.assertTrue(connection.cancelled.is_set())
+            self.assertTrue(errors)
+        finally:right.close();left.close();thread.join(1)
+
     def test_retirement_cancels_pending_tcp_without_waiting_for_connect(self):
         import threading
         entered, released = threading.Event(), threading.Event()
@@ -231,3 +277,29 @@ class CancellationTests(unittest.TestCase):
         self.assertTrue(connection.cancelled.is_set())
         self.assertTrue(errors)
         self.assertFalse(proxy.connections)
+
+class GenericMCPTests(unittest.TestCase):
+    def test_canonical_reference_consumes_private_json_headers_with_validation(self):
+        import json,time
+        from types import SimpleNamespace
+        from credential_broker import CredentialBroker
+        calls=[]
+        agent=SimpleNamespace(ready=True,retired=False,boundary=SimpleNamespace(unbound=False,
+            identity=dict(nodeId='worker',generation=3,chatId=-100,threadId=42),get=lambda _:'session'))
+        def outbound(operation,payload,session=None):
+            calls.append((operation,payload))
+            if operation=='credential.acquire':return dict(value=json.dumps({'Authorization':'Bearer fixture-mcp-token'}),leaseId='lease',expiresAt=(time.time()+40)*1000)
+            return dict(valid=True)
+        agent.outbound=outbound;agent.credentials=CredentialBroker(agent)
+        proxy=p.MCPProxy(agent)
+        config=proxy.rewrite({'mcp':{'server':{'type':'remote','url':'https://mcp.example/api'}}},
+            [dict(integrationId='mcp:server',credentialId='cid',configured=True)])
+        proxy.begin('session','run');route=next(iter(proxy.routes.values()))
+        for _ in range(2):
+            with proxy.acquire(route,proxy.active) as lease:
+                self.assertEqual(lease.consume(proxy.headers),{'Authorization':'Bearer fixture-mcp-token'})
+        self.assertEqual(sum(op=='credential.acquire' for op,_ in calls),2)
+        self.assertEqual(calls[0][1]['capability'],'mcp.request')
+        self.assertNotIn('fixture-mcp-token',str(config))
+        for material in ('{}','{"Host":"host"}','{"Authorization":"\\r\\nInjected"}'):
+            with self.assertRaises(ValueError):proxy.headers(material)

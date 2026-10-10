@@ -6,6 +6,7 @@ import type { SessionExecutionLease } from "./session-execution-control"
 import { acquireTelegramProcessBudget, isTelegramProcessBudgetEnabled } from "./telegram-process-budget"
 import { withDeadline } from "./telegram-deadline"
 import { spawnProcessTree, processTree } from "./telegram-process-tree"
+import { executeTailscale } from "./telegram-tailscale"
 import type { WorkspaceBrowsers } from "./telegram-browser-process"
 
 export class ToolProcessError extends Error {
@@ -158,6 +159,14 @@ export function createToolProcessScope(
     return output
   }
   const port: ToolProcessPort = Object.freeze({
+    network: (request: Parameters<NonNullable<ToolProcessPort["network"]>>[0]) => {
+      if (closedInvocation) return Promise.reject(new Error("tool invocation closed"))
+      const operation = executeTailscale(execution, epoch, sessionId, directory,
+        AbortSignal.any([signal, invocation.signal]), request)
+      pending.add(operation)
+      void operation.then(() => pending.delete(operation), () => pending.delete(operation))
+      return operation
+    },
     browser: (request: Parameters<ToolProcessPort["browser"]>[0]) => {
       if (closedInvocation) return Promise.reject(new Error("tool invocation closed"))
       if (!execution || epoch === undefined || !browsers)

@@ -50,7 +50,9 @@ run('gh', '--version')
 run('pip3', '--version')
 run('lsof', '-p', str(os.getpid()))
 run('ssh', '-V')
-assert not Path('/usr/local/bin/tailscaled').exists(), 'Worker must not own a VPN daemon'
+assert run('tailscale', 'version').splitlines()[0] == '1.104.1'
+for protected in ('/usr/local/bin/tailscale', '/usr/local/bin/tailscaled', '/usr/local/libexec/opencode-process-scope'):
+    assert Path(protected).is_file() and not os.access(protected, os.W_OK), 'delegated runtime must be immutable to Core'
 assert not os.access('/opt/ms-playwright', os.W_OK), 'browser artifacts must be immutable to Core'
 with tempfile.TemporaryDirectory(prefix='worker-runtime-smoke-') as tmp:
     root = Path(tmp)

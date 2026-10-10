@@ -129,9 +129,17 @@ def atomic(path, data):
 
 
 def materialize_browser_tool(tools):
+    materialize_image_tool(tools, BROWSER_TOOL_SOURCE, 'browser.ts')
+
+
+def materialize_network_tool(tools):
+    materialize_image_tool(tools, Path('/opt/worker/runtime_tools/network.ts'), 'network.ts')
+
+
+def materialize_image_tool(tools, source_path, filename):
     # Source belongs to the immutable image, never a Topic snapshot/workspace.
     try:
-        fd = os.open(BROWSER_TOOL_SOURCE, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as error:
         raise ValueError('browser adapter source unavailable or unsafe') from error
     try:
@@ -144,7 +152,7 @@ def materialize_browser_tool(tools):
             raise ValueError('browser adapter source exceeds bound')
     finally:
         os.close(fd)
-    atomic(tools / 'browser.ts', data)
+    atomic(tools / filename, data)
 
 
 def child_environment(source):
@@ -458,6 +466,11 @@ class Agent:
             raise ValueError('Core workspace cannot be symlink')
         self.workspace.mkdir(exist_ok=True)
         self.retired = boundary.get('retired') is True
+        from credential_broker import CredentialBroker
+        self.credentials = CredentialBroker(self)
+        self.network = None
+        from github_proxy import GitHubProxy
+        self.github = GitHubProxy(self)
         from provider_proxy import ProviderProxy
         self.proxy = ProviderProxy(self)
         from mcp_proxy import MCPProxy
@@ -499,7 +512,12 @@ class Agent:
                 return
             self.fatal_exit_requested = True
             self.ready = False
-            self.exit_on_crash(1)
+            try:
+                self.proxy.close_active()
+                self.mcp_proxy.close_active()
+                self.github.close_active()
+                if self.network is not None:self.network.retire_core()
+            finally:self.exit_on_crash(1)
 
     def supervise_core(self, process):
         with self.process_lock:
@@ -587,6 +605,15 @@ class Agent:
         atomic(tools / 'bot.ts', self.bridge.tool_source().encode())
         atomic(tools / 'actions.ts', self.bridge.actions_tool_source().encode())
         materialize_browser_tool(tools)
+        network_configured = not self.boundary.unbound and any(isinstance(ref,dict) and ref.get('integrationId') == 'tailscale'
+            and ref.get('configured') is True for ref in snapshot['credentialReferences'])
+        if network_configured:
+            materialize_network_tool(tools)
+            if self.network is None:
+                from tailscale_runtime import TailscaleRuntime
+                self.network = TailscaleRuntime(self)
+        else:
+            (tools / 'network.ts').unlink(missing_ok=True)
         atomic(config / 'opencode.json', canonical(runtime_config))
         atomic(runtime_root / 'global-snapshot.json', canonical(snapshot))
         skills = config / 'skills'
@@ -620,12 +647,20 @@ class Agent:
                 os.setuid(1000)
         else:
             raise RuntimeError('production agent requires root to demote Core')
+        delegated_fd = None
         try:
+            environment = self.core_environment()
+            if network_configured:
+                delegated_fd = self.network.core_descriptor()
+                environment['CORE_DELEGATED_FD'] = str(delegated_fd)
             process = subprocess.Popen([self.binary, 'serve', '--hostname', '127.0.0.1', '--port', str(self.core_port)], cwd=self.workspace,
-                                       env=self.core_environment(), preexec_fn=demote, start_new_session=True)
+                                       env=environment, preexec_fn=demote, start_new_session=True,
+                                       pass_fds=() if delegated_fd is None else (delegated_fd,))
         except Exception:
             self.fatal_core_exit()
             raise
+        finally:
+            if delegated_fd is not None:os.close(delegated_fd)
         self.supervise_core(process)
         # Bounded startup checks only; no background polling or idle traffic.
         for _ in range(100):
@@ -646,6 +681,10 @@ class Agent:
 
     def core_environment(self):
         result = child_environment(os.environ)
+        if not self.boundary.unbound and any(isinstance(ref, dict) and ref.get('integrationId') == 'github' and
+            ref.get('configured') is True for ref in (self.boundary.snapshot or {}).get('credentialReferences', [])):
+            self.github.start()
+            result['CORE_GIT_PROXY_URL'] = 'http://127.0.0.1:4100/github/'
         if self.boundary.unbound:
             # Availability boot must not create durable Topic/session/execution state.
             result['XDG_DATA_HOME'] = str(self.workspace / 'home/.local/share')
@@ -658,6 +697,9 @@ class Agent:
             self.runtime_selftest_stopping = True
         self.cancel_runtime_selftest()
         self.mcp_proxy.close_active()
+        self.proxy.close_active()
+        self.github.close_active()
+        if self.network is not None:self.network.retire_core()
         with self.lifecycle_lock:
             with self.process_lock:
                 process, lease = self.process, self.process_lease

@@ -335,6 +335,63 @@ class ProductionExecution(unittest.TestCase):
             provider.shutdown(); provider.server_close(); thread.join(3)
             registry.shutdown(); registry.server_close()
 
+
+    def test_compiled_custom_network_capability_uses_private_descriptor_and_joins_scopes(self):
+        import tempfile,subprocess,secrets
+        sys.path.insert(0,str(Path(__file__).parents[2]/'worker'))
+        from tailscale_runtime import Scope
+        provider=ThreadingHTTPServer(('127.0.0.1',0),Model);provider.tool='network_probe'
+        threading.Thread(target=provider.serve_forever,daemon=True).start()
+        registry=plugin_registry();token=secrets.token_hex(32);calls=[];scopes=[];cancel=threading.Event()
+        with tempfile.TemporaryDirectory() as directory:
+            runner=Path(directory)/'scope'
+            subprocess.run(['cc','-std=c11','-O2',str(Path(__file__).parents[2]/'runtime/linux/process-scope.c'),'-o',str(runner)],check=True)
+            class Delegate(BaseHTTPRequestHandler):
+                def log_message(self,*_):pass
+                def do_POST(self):
+                    if self.headers.get('x-core-admission')!=token:
+                        self.send_error(403);return
+                    value=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                    calls.append((self.path,value))
+                    self.send_response(200);self.send_header('Connection','close');self.end_headers()
+                    if self.path=='/start':
+                        scope=Scope(str(runner),['/bin/sh','-c','sleep 60'],directory,quiet=True);scopes.append(scope)
+                        self.wfile.write(json.dumps(dict(ok=True,result=dict(pid=scope.pid))).encode())
+                    elif self.path=='/execute':
+                        scope=Scope(str(runner),['/bin/sh','-c','printf bounded-network-result'],directory);scopes.append(scope)
+                        self.wfile.write(json.dumps(dict(pid=scope.pid)).encode()+b'\n');self.wfile.flush()
+                        output=scope.output(cancel);scope.retire()
+                        self.wfile.write(json.dumps(dict(ok=True,result=dict(stdout=output,runtimeState='stopped',connectionMode='on-demand',connected=False))).encode()+b'\n')
+                    elif self.path=='/stop':
+                        for scope in reversed(scopes):scope.retire()
+                        self.wfile.write(b'{"ok":true,"result":{"joined":true}}')
+            delegate=ThreadingHTTPServer(('127.0.0.1',0),Delegate)
+            threading.Thread(target=delegate.serve_forever,daemon=True).start()
+            fd=os.memfd_create('core-test-admission',flags=0)
+            os.write(fd,json.dumps(dict(token=token,endpoint='http://127.0.0.1:'+str(delegate.server_port))).encode());os.lseek(fd,0,0)
+            def configure(root,env):
+                config_dir=root/'network-config';tools=config_dir/'tools';tools.mkdir(parents=True)
+                (tools/'network_probe.ts').write_text("export default {description:'Compiled protected network probe',args:{},async execute(args,context){if(process.env.CORE_DELEGATED_FD!==undefined)throw Error('descriptor exposed');return JSON.stringify(await context.process.network({action:'status'}));}}")
+                (config_dir/'.npmrc').write_text(f'registry=http://127.0.0.1:{registry.server_port}/\n')
+                env.update(CORE_DELEGATED_FD=str(fd),OPENCODE_TELEGRAM_PROCESS_BUDGET='1',NPM_CONFIG_REGISTRY=f'http://127.0.0.1:{registry.server_port}/',OPENCODE_CONFIG_DIR=str(config_dir))
+                env['OPENCODE_CONFIG_CONTENT']=json.dumps({'model':'fixture/fixture','permission':'allow','provider':{'fixture':{'npm':'@ai-sdk/openai-compatible','name':'Fixture','options':{'baseURL':f'http://127.0.0.1:{provider.server_port}/v1','apiKey':'fixture'},'models':{'fixture':{'name':'Fixture','limit':{'context':32000,'output':2048}}}}}})
+            try:
+                with Server(BINARY,readiness_path='/global/health',configure=configure,pass_fds=(fd,)) as server:
+                    client=Client(server.base);sid=client.request('POST','/session',{})['id']
+                    client.request('POST',f'/session/{sid}/message',{'parts':[{'type':'text','text':'Run network probe'}],'model':{'providerID':'fixture','modelID':'fixture'}},timeout=45)
+                    history=json.dumps(client.request('GET',f'/session/{sid}/message'))
+                    self.assertIn('bounded-network-result',history,history);self.assertNotIn(token,history)
+                    self.assertEqual([path for path,_ in calls],['/start','/execute','/stop'])
+                    self.assertEqual(calls[0][1]['sessionId'],sid)
+                    for scope in scopes:
+                        self.assertTrue(scope.empty)
+                        with self.assertRaises(ProcessLookupError):os.kill(scope.pid,0)
+                    self.assertTrue(client.request('POST','/global/dispose'))
+            finally:
+                os.close(fd)
+                for scope in scopes:scope.retire()
+                delegate.shutdown();delegate.server_close();provider.shutdown();provider.server_close();registry.shutdown();registry.server_close()
+
     def test_compiled_mcp_stdio_owns_descendants_and_disconnect(self):
         root_holder = []
         def configure(root, env): root_holder.append(root)
