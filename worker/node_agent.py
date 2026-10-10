@@ -838,10 +838,55 @@ class Agent:
             self.fatal_core_exit()
             raise
 
+    def session_probe(self, value):
+        payload = value.get('payload')
+        if (not self.boundary.unbound or value.get('sessionId') is not None or payload != {}
+                or self.retired or not self.ready or self.boundary.get('session') or self.boundary.get('runId')):
+            raise ValueError('session probe unavailable')
+        session = None
+        probe_error = None
+        delete_error = None
+        try:
+            created = self.local('POST', '/session', {})
+            session = created.get('id') if isinstance(created, dict) else None
+            if not isinstance(session, str) or not session:
+                raise RuntimeError('session probe create returned no identity')
+            addressed = self.local('GET', '/session/' + quote(session, safe=''))
+            if not isinstance(addressed, dict) or addressed.get('id') != session:
+                raise RuntimeError('session probe address verification failed')
+        except Exception as error:
+            probe_error = error
+        if session is None:
+            self.fatal_core_exit()
+            raise RuntimeError('session probe create could not be reconciled') from probe_error
+        try:
+            deleted = self.local('DELETE', '/session/' + quote(session, safe=''))
+            if deleted is not True:
+                delete_error = RuntimeError('session probe delete was not acknowledged')
+        except Exception as error:
+            delete_error = error
+        try:
+            remaining = self.local('GET', '/session')
+            cleanup_proven = (isinstance(remaining, list)
+                              and not any(isinstance(item, dict) and item.get('id') == session for item in remaining))
+        except Exception as error:
+            cleanup_proven = False
+            if delete_error is None:
+                delete_error = error
+        if not cleanup_proven:
+            self.fatal_core_exit()
+            raise RuntimeError('session probe cleanup could not be proven') from delete_error
+        if probe_error is not None:
+            raise RuntimeError('session probe verification failed') from probe_error
+        return {'created': True, 'deleted': True}
+
     def dispatch(self, value):
         operation, payload = value['operation'], value['payload']
         if operation == 'runtime.selftest':
             return self.runtime_selftest(value)
+        if operation == 'session.probe':
+            with self.lock:
+                return self.session_probe(value)
         if operation == 'retire':
             with self.lock:
                 self.retired = True

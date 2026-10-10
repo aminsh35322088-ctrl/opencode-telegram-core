@@ -648,6 +648,82 @@ class UnboundTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.agent.mcp_proxy.begin('malicious', 'malicious')
         with self.assertRaises(ValueError): self.agent.bridge.dispatch({'sessionId': 'malicious', 'action': 'skills.create'})
 
+    def test_session_probe_creates_addresses_deletes_and_verifies_without_durable_authority(self):
+        self.agent.ready = True
+        calls = []
+        sessions = {}
+        def local(method, route, payload=None, timeout=30):
+            calls.append((method, route, payload))
+            if (method, route) == ('POST', '/session'):
+                sessions['ses_probe'] = {'id': 'ses_probe'}
+                return sessions['ses_probe']
+            if (method, route) == ('GET', '/session/ses_probe'):
+                return sessions['ses_probe']
+            if (method, route) == ('DELETE', '/session/ses_probe'):
+                sessions.pop('ses_probe', None)
+                return True
+            if (method, route) == ('GET', '/session'):
+                return list(sessions.values())
+            self.fail(f'unexpected local call: {method} {route}')
+        self.agent.local = local
+
+        result = self.agent.dispatch(self.b.envelope('session.probe', {}))
+
+        self.assertEqual(result, {'created': True, 'deleted': True})
+        self.assertEqual(calls, [
+            ('POST', '/session', {}),
+            ('GET', '/session/ses_probe', None),
+            ('DELETE', '/session/ses_probe', None),
+            ('GET', '/session', None),
+        ])
+        self.assertIsNone(self.b.get('session'))
+        self.assertIsNone(self.b.get('runId'))
+
+    def test_session_probe_rejects_payload_session_bound_and_not_ready_authority(self):
+        self.agent.ready = True
+        self.agent.local = lambda *args, **kwargs: self.fail('rejected probe reached Core')
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.b.envelope('session.probe', {'unexpected': True}))
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.b.envelope('session.probe', {}, 'ses_foreign'))
+        self.agent.ready = False
+        with self.assertRaises(ValueError):
+            self.agent.dispatch(self.b.envelope('session.probe', {}))
+
+        bound_root = Path(self.temp.name) / 'bound-agent'
+        bound = a.Boundary(bound_root, 'b' * 32, dict(nodeId='bound', generation=1, chatId=-12, threadId=4))
+        try:
+            agent = a.Agent(bound, 'https://control.invalid')
+            agent.ready = True
+            agent.local = lambda *args, **kwargs: self.fail('bound probe reached Core')
+            with self.assertRaises(ValueError):
+                agent.dispatch(bound.envelope('session.probe', {}))
+        finally:
+            bound.db.close()
+
+    def test_session_probe_cleanup_failure_fails_closed_without_persisting_session(self):
+        self.agent.ready = True
+        fatal = []
+        self.agent.fatal_core_exit = lambda: fatal.append(True)
+        def local(method, route, payload=None, timeout=30):
+            if (method, route) == ('POST', '/session'):
+                return {'id': 'ses_probe'}
+            if (method, route) == ('GET', '/session/ses_probe'):
+                return {'id': 'ses_probe'}
+            if (method, route) == ('DELETE', '/session/ses_probe'):
+                raise OSError('delete uncertain')
+            if (method, route) == ('GET', '/session'):
+                return [{'id': 'ses_probe'}]
+            self.fail(f'unexpected local call: {method} {route}')
+        self.agent.local = local
+
+        with self.assertRaises(RuntimeError):
+            self.agent.dispatch(self.b.envelope('session.probe', {}))
+
+        self.assertEqual(fatal, [True])
+        self.assertIsNone(self.b.get('session'))
+        self.assertIsNone(self.b.get('runId'))
+
     def reopen(self, identity, secret='t' * 32):
         return a.Boundary(self.root, secret, identity)
 

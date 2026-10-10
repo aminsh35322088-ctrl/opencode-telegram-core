@@ -26,3 +26,4 @@ OPENCODE_PACKAGE_DIR="$tree/packages/opencode" "$BUN" test "$CORE_ROOT/tests/com
 )
 (cd "$tree/packages/core" && "$BUN" test test/filesystem/search.test.ts test/ripgrep.test.ts test/npm.test.ts test/npm-config.test.ts --timeout 30000)
 "$CORE_ROOT/scripts/run-compatibility.sh"
+python3 "$CORE_ROOT/tests/worker/compiled_session_probe.py" --binary "$CORE_ROOT/dist/runtime/opencode"
