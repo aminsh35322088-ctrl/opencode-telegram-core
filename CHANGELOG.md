@@ -1,3 +1,9 @@
+## 1.18.33-bot.13-pre.30
+
+- Added safe reusable Railway Worker generations across persistent volumes.
+- Added retirement sanitization that wipes tenant state without deleting the Service or Volume.
+- Enforced clean retired generation + rotated secret before bound/unbound identity rotation.
+
 # Changelog
 
 ## 1.18.33-bot.13-pre.25
