@@ -744,6 +744,29 @@ class UnboundTests(unittest.TestCase):
         for identity in (self.identity, dict(bound, generation=3), dict(bound, threadId=5)):
             with self.assertRaises(ValueError): self.reopen(identity)
 
+    def test_sanitized_retirement_wipes_volume_tenant_state_and_allows_bound_to_unbound_rotation(self):
+        bound = dict(self.identity, generation=2, chatId=-12, threadId=4)
+        self.agent.stop_core = lambda: None
+        volume = self.root.parent
+        (volume / 'topic').mkdir(); (volume / 'topic' / 'work.txt').write_text('tenant')
+        (volume / 'runtime').mkdir(); (volume / 'runtime' / 'config.json').write_text('tenant')
+        (volume / 'other-cache').mkdir(); (volume / 'other-cache' / 'x').write_text('tenant')
+        (self.root / 'node-credentials.json').write_text('{}')
+        self.b.set('session', 'owned')
+        result = self.agent.dispatch(self.b.envelope('retire', {'sanitize': True}))
+        self.assertEqual(result, {'retired': True, 'sanitized': True})
+        self.assertFalse((volume / 'topic').exists());self.assertFalse((volume / 'runtime').exists());self.assertFalse((volume / 'other-cache').exists())
+        self.assertFalse((self.root / 'node-credentials.json').exists());self.assertIsNone(self.b.get('session'));self.assertTrue(self.b.get('retired'))
+        self.b.db.close()
+        self.b = self.reopen(bound)
+        self.agent = a.Agent(self.b, 'https://control.invalid')
+        self.agent.stop_core = lambda: None
+        self.assertEqual(self.agent.dispatch(self.b.envelope('retire', {'sanitize': True})), {'retired': True, 'sanitized': True})
+        self.b.db.close()
+        unbound = dict(self.identity, generation=3, chatId=0, threadId=0)
+        self.b = self.reopen(unbound, 'u' * 32)
+        self.assertTrue(self.b.unbound)
+
     def test_session_run_and_durable_topic_state_prevent_binding(self):
         bound = dict(self.identity, generation=2, chatId=-12, threadId=4)
         self.b.set('retired', True)

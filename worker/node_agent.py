@@ -189,8 +189,9 @@ class Boundary:
         if persisted is not None and persisted != identity:
             # Serialized volume deployment is required. CP must fence the old writer
             # before rotating env/secret; this ledger cannot fence another container.
-            allowed = (persisted.get('chatId') == 0 and persisted.get('threadId') == 0
-                       and identity['chatId'] != 0 and identity['threadId'] > 1
+            prior_unbound = persisted.get('chatId') == 0 and persisted.get('threadId') == 0
+            next_unbound = identity['chatId'] == 0 and identity['threadId'] == 0
+            allowed = (prior_unbound != next_unbound
                        and persisted.get('nodeId') == identity['nodeId']
                        and identity['generation'] == persisted.get('generation', 0) + 1
                        and self.get('secretFingerprint') is not None
@@ -922,6 +923,31 @@ class Agent:
             raise RuntimeError('session probe verification failed') from probe_error
         return {'created': True, 'deleted': True}
 
+    def sanitize_for_reuse(self):
+        if self.boundary.get('retired') is not True:
+            raise RuntimeError('retirement proof required before sanitize')
+        metadata = {'identity', 'secretFingerprint', 'snapshotHighwater', 'activatedSnapshotHighwater', 'pendingGlobalSync', 'retired'}
+        with self.boundary.lock, self.boundary.db:
+            self.boundary.db.execute('DELETE FROM replay')
+            placeholders = ','.join('?' for _ in metadata)
+            self.boundary.db.execute(f'DELETE FROM state WHERE key NOT IN ({placeholders})', tuple(metadata))
+        volume = self.boundary.root.parent
+        for child in list(volume.iterdir()):
+            if child == self.boundary.root:
+                continue
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+        for child in list(self.boundary.root.iterdir()):
+            if child.name.startswith('agent.sqlite'):
+                continue
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+        self.boundary.snapshot = None
+
     def dispatch(self, value):
         operation, payload = value['operation'], value['payload']
         if operation == 'runtime.selftest':
@@ -948,6 +974,8 @@ class Agent:
             if operation == 'health':
                 return {'ready': self.ready and not self.retired, **({'runtime': runtime_identity()} if Path('/usr/local/share/core-build-info.json').exists() else {})}
             if operation == 'retire':
+                if set(payload) - {'sanitize'} or ('sanitize' in payload and type(payload['sanitize']) is not bool):
+                    raise ValueError('invalid retirement payload')
                 # Gate admission immediately, but persist handoff proof only after
                 # the essential Core lease has been intentionally stopped/joined.
                 self.retired = True
@@ -958,6 +986,9 @@ class Agent:
                 if not (self.boundary.get('retired') is True and joined):
                     self.stop_core()
                     self.boundary.set('retired', True)
+                if payload.get('sanitize') is True:
+                    self.sanitize_for_reuse()
+                    return {'retired': True, 'sanitized': True}
                 return {'retired': True}
             if self.retired:
                 raise ValueError('node retired')
