@@ -21,8 +21,8 @@ class BindingRotationTests(unittest.TestCase):
             os.chmod(root, 0o700)
             agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
             agent.dispatch({'operation':'retire','payload':{'sanitize':True}})
-            listeners = [Mock(), Mock(), Mock()]
-            for proxy, listener in zip((agent.proxy, agent.mcp_proxy, agent.github), listeners):
+            listeners = [Mock(), Mock(), Mock(), Mock()]
+            for proxy, listener in zip((agent.proxy, agent.mcp_proxy, agent.github, agent.bridge), listeners):
                 proxy.server = listener
             resolve = cloud_bootstrap.resolve_cloud_identity
             def bootstrap(*args):
@@ -40,6 +40,55 @@ class BindingRotationTests(unittest.TestCase):
             self.assertEqual(cached['identity'],new)
             next_agent.boundary.db.close()
             boundary.db.close()
+
+    def test_rotation_releases_every_listener_for_rebinding(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            old = {'nodeId':'worker-04','generation':1,'chatId':0,'threadId':0}
+            new = {**old,'generation':2,'chatId':-100,'threadId':43}
+            boundary = a.Boundary(Path(tmp)/'agent', 's'*64, old)
+            os.chmod(boundary.root, 0o700)
+            agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
+            agent.dispatch({'operation':'retire','payload':{'sanitize':True}})
+            owners = (agent.proxy, agent.mcp_proxy, agent.github, agent.bridge)
+            servers, threads, ports = [], [], []
+            replacement = None
+            try:
+                for owner in owners:
+                    try:
+                        server = ThreadingHTTPServer(('127.0.0.1', 0), BaseHTTPRequestHandler)
+                    except PermissionError:
+                        self.skipTest('local TCP listeners unavailable in this environment')
+                    owner.server = server
+                    servers.append(server)
+                    ports.append(server.server_address[1])
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    threads.append(thread)
+                resolve = cloud_bootstrap.resolve_cloud_identity
+                def bootstrap(*args):
+                    return resolve(*args, transport=lambda *_:{'version':1,'identity':new,'secret':'t'*64,'revision':1})
+                with patch.dict(os.environ, {'RAILWAY_SERVICE_ID':'service','RAILWAY_PROJECT_ID':'project'}), patch.object(cloud_bootstrap, 'resolve_cloud_identity', bootstrap):
+                    replacement = agent.rotate_binding({'bootstrapToken':'b'*64})
+                for owner, port in zip((replacement.proxy, replacement.mcp_proxy, replacement.github, replacement.bridge), ports):
+                    owner.port = port
+                    owner.start()
+                    self.assertEqual(owner.server.server_address[1], port)
+                for thread in threads:
+                    thread.join(timeout=2)
+                    self.assertFalse(thread.is_alive())
+            finally:
+                for server in servers:
+                    server.shutdown()
+                    server.server_close()
+                if replacement:
+                    for owner in (replacement.proxy, replacement.mcp_proxy, replacement.github, replacement.bridge):
+                        if owner.server:
+                            owner.server.shutdown()
+                            owner.server.server_close()
+                    replacement.boundary.db.close()
+                boundary.db.close()
 
     def test_live_worker_rejects_rotation_before_bootstrap(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -958,7 +958,7 @@ class Agent:
             raise ValueError('clean retired worker required for binding rotation')
         # Retirement joins active requests/children; also relinquish listeners before
         # a replacement Agent starts proxies on the same loopback ports.
-        for proxy in (self.proxy, self.mcp_proxy, self.github):
+        for proxy in (self.proxy, self.mcp_proxy, self.github, self.bridge, self.network):
             server = getattr(proxy, 'server', None)
             if server is not None:
                 server.shutdown()
