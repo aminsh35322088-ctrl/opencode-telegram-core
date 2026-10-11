@@ -956,6 +956,14 @@ class Agent:
                 or not self.retired or self.boundary.get('retired') is not True
                 or self.process is not None and self.process.poll() is None):
             raise ValueError('clean retired worker required for binding rotation')
+        # Retirement joins active requests/children; also relinquish listeners before
+        # a replacement Agent starts proxies on the same loopback ports.
+        for proxy in (self.proxy, self.mcp_proxy, self.github):
+            server = getattr(proxy, 'server', None)
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+                proxy.server = None
         from cloud_bootstrap import resolve_cloud_identity
         credentials = resolve_cloud_identity(self.boundary.root, payload['bootstrapToken'],
                                              self.endpoint.removesuffix('/node-control'),

@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).parents[2] / 'worker'))
 import cloud_bootstrap
 spec = importlib.util.spec_from_file_location('rotation_agent', Path(__file__).parents[2] / 'worker' / 'node_agent.py')
@@ -21,11 +21,17 @@ class BindingRotationTests(unittest.TestCase):
             os.chmod(root, 0o700)
             agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
             agent.dispatch({'operation':'retire','payload':{'sanitize':True}})
+            listeners = [Mock(), Mock(), Mock()]
+            for proxy, listener in zip((agent.proxy, agent.mcp_proxy, agent.github), listeners):
+                proxy.server = listener
             resolve = cloud_bootstrap.resolve_cloud_identity
             def bootstrap(*args):
                 return resolve(*args, transport=lambda *_:{'version':1,'identity':new,'secret':'t'*64,'revision':1})
             with patch.dict(os.environ, {'RAILWAY_SERVICE_ID':'service','RAILWAY_PROJECT_ID':'project'}), patch.object(cloud_bootstrap, 'resolve_cloud_identity', bootstrap):
                 next_agent = agent.rotate_binding({'bootstrapToken':'b'*64})
+            for listener in listeners:
+                listener.shutdown.assert_called_once_with()
+                listener.server_close.assert_called_once_with()
             self.assertEqual(next_agent.boundary.identity, new)
             self.assertFalse(next_agent.retired)
             self.assertEqual(next_agent.boundary.secret, b't'*64)
