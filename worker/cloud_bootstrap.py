@@ -83,7 +83,7 @@ def _save(root,cached):
  finally:
   if temporary.exists():temporary.unlink()
 
-def resolve_cloud_identity(root,bootstrap_token,control_url,service_id,project_id,*,transport=_request):
+def resolve_cloud_identity(root,bootstrap_token,control_url,service_id,project_id,*,transport=_request,prefer_cached=False):
  url=urlsplit(control_url)
  if url.scheme!='https' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ('','/'):
   raise ValueError('invalid control endpoint')
@@ -94,6 +94,7 @@ def resolve_cloud_identity(root,bootstrap_token,control_url,service_id,project_i
   raise ValueError('invalid bootstrap root')
  target=root/'node-credentials.json';cached=_cached(target,control_url,service_id,project_id)
  # A consumed/missing bootstrap token is a normal restart: the durable cache is authoritative.
+ if prefer_cached and cached:return cached
  if not isinstance(bootstrap_token,str) or len(bootstrap_token)<48:
   if cached:return cached
   raise ValueError('bootstrap token unavailable')

@@ -948,6 +948,26 @@ class Agent:
                 shutil.rmtree(child)
         self.boundary.snapshot = None
 
+    def rotate_binding(self, payload):
+        # Only a signed Control Plane request may invoke this after clean retirement.
+        if (not isinstance(payload, dict) or set(payload) != {'bootstrapToken'}
+                or not isinstance(payload['bootstrapToken'], str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{48,128}', payload['bootstrapToken'])
+                or not self.retired or self.boundary.get('retired') is not True
+                or self.process is not None and self.process.poll() is None):
+            raise ValueError('clean retired worker required for binding rotation')
+        from cloud_bootstrap import resolve_cloud_identity
+        credentials = resolve_cloud_identity(self.boundary.root, payload['bootstrapToken'],
+                                             self.endpoint.removesuffix('/node-control'),
+                                             os.environ.get('RAILWAY_SERVICE_ID'),
+                                             os.environ.get('RAILWAY_PROJECT_ID'))
+        boundary = Boundary(self.boundary.root, credentials['secret'], credentials['identity'])
+        replacement = Agent(boundary, credentials['controlUrl'], self.binary, self.core_port, self.exit_on_crash)
+        if not boundary.unbound:
+            replacement.workspace = boundary.root.parent / 'topic'
+            replacement.workspace.mkdir(exist_ok=True)
+        return replacement
+
     def dispatch(self, value):
         operation, payload = value['operation'], value['payload']
         if operation == 'runtime.selftest':
@@ -972,7 +992,7 @@ class Agent:
             if self.boundary.unbound and operation == 'status':
                 return {'ready': self.ready and not self.retired, 'bound': False, 'retired': self.boundary.get('retired') is True}
             if operation == 'health':
-                return {'ready': self.ready and not self.retired, **({'runtime': runtime_identity()} if Path('/usr/local/share/core-build-info.json').exists() else {})}
+                return {'ready': self.ready and not self.retired, 'bindingRotation': True, **({'runtime': runtime_identity()} if Path('/usr/local/share/core-build-info.json').exists() else {})}
             if operation == 'retire':
                 if set(payload) - {'sanitize'} or ('sanitize' in payload and type(payload['sanitize']) is not bool):
                     raise ValueError('invalid retirement payload')
@@ -1444,14 +1464,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def respond(self, code, payload, signed=False):
+    def respond(self, code, payload, signed=False, boundary=None):
         raw = canonical(payload)
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(raw)))
         self.send_header('Connection', 'close')
         if signed:
-            self.send_header('x-node-signature', self.server.agent.boundary.signature(raw))
+            self.send_header('x-node-signature', (boundary or self.server.agent.boundary).signature(raw))
         self.end_headers()
         self.wfile.write(raw)
 
@@ -1471,11 +1491,26 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ValueError('truncated body')
-            boundary = self.server.agent.boundary
+            agent = self.server.agent
+            boundary = agent.boundary
             value = boundary.authenticate(raw, self.headers.get('x-node-signature'))
         except Exception:
             return self.respond(401, {'error': 'request rejected'})
         try:
+            if value['operation'] == 'binding.rotate':
+                with self.server.rotation_lock:
+                    if self.server.agent is not agent or value.get('sessionId') is not None:
+                        raise ValueError('stale binding rotation')
+                    replacement = agent.rotate_binding(value['payload'])
+                    response = boundary.envelope('binding.rotate', {'ok': True, 'result': {'rotated': True, 'identity': replacement.boundary.identity}})
+                    self.server.agent = replacement
+                    try:
+                        self.respond(200, response, True, boundary)
+                    finally:
+                        threading.Thread(target=replacement.bootstrap, daemon=True).start()
+                return
+            if self.server.agent is not agent:
+                raise ValueError('stale request owner')
             if value['operation'] == 'session.events':
                 stream, session, run_id, cursor = self.server.agent.events(value)
                 self.send_response(200)
@@ -1492,11 +1527,14 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 return
-            result = self.server.agent.dispatch(value)
+            with self.server.rotation_lock:
+                if self.server.agent is not agent:
+                    raise ValueError('stale request owner')
+                result = agent.dispatch(value)
             response = boundary.envelope(value['operation'], {'ok': True, 'result': result}, value.get('sessionId'))
-            self.respond(200, response, True)
+            self.respond(200, response, True, boundary)
         except Exception:
-            self.respond(409, boundary.envelope(value['operation'], {'ok': False, 'error': 'operation rejected'}, value.get('sessionId')), True)
+            self.respond(409, boundary.envelope(value['operation'], {'ok': False, 'error': 'operation rejected'}, value.get('sessionId')), True, boundary)
 
 
 def main():
@@ -1517,7 +1555,7 @@ def main():
         credentials = resolve_cloud_identity(root / 'agent', bootstrap_token,
                                               os.environ['CONTROL_PLANE_URL'],
                                               os.environ.get('RAILWAY_SERVICE_ID'),
-                                              os.environ.get('RAILWAY_PROJECT_ID'))
+                                              os.environ.get('RAILWAY_PROJECT_ID'), prefer_cached=True)
         identity, secret = credentials['identity'], credentials['secret']
     else:
         # Offline legacy source compatibility remains until the new execution path is proven.
@@ -1534,11 +1572,12 @@ def main():
     agent.workspace.mkdir(exist_ok=True)
     server = BoundedHTTPServer(('0.0.0.0', 8080), Handler)
     server.agent = agent
+    server.rotation_lock = threading.RLock()
     threading.Thread(target=agent.bootstrap, daemon=True).start()
     try:
         server.serve_forever()
     finally:
-        agent.stop_core()
+        server.agent.stop_core()
 
 
 if __name__ == '__main__':

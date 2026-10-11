@@ -626,7 +626,7 @@ class UnboundTests(unittest.TestCase):
         self.agent.bootstrap()
         self.assertEqual(fetches, ['snapshot.get'])
         self.assertEqual(self.b.snapshot, snapshot)
-        self.assertEqual(self.agent.dispatch(self.b.envelope('health', {})), {'ready': True})
+        self.assertEqual(self.agent.dispatch(self.b.envelope('health', {})), {'ready': True, 'bindingRotation': True})
         self.assertFalse(self.agent.dispatch(self.b.envelope('status', {}))['bound'])
         self.assertEqual(self.agent.dispatch(self.b.envelope('sync-global', {}))['revision'], 1)
         self.assertIsNone(self.b.get('session'))
