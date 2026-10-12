@@ -90,12 +90,92 @@ class BindingRotationTests(unittest.TestCase):
                     replacement.boundary.db.close()
                 boundary.db.close()
 
-    def test_live_worker_rejects_rotation_before_bootstrap(self):
+    def test_clean_bound_worker_recycles_to_ready_unbound_then_binds_next_topic_directly(self):
         with tempfile.TemporaryDirectory() as tmp:
-            boundary = a.Boundary(Path(tmp)/'agent', 's'*64, {'nodeId':'worker-01','generation':1,'chatId':0,'threadId':0})
+            root = Path(tmp) / 'agent'
+            old = {'nodeId':'worker-reuse','generation':1,'chatId':-100,'threadId':42}
+            unbound_identity = {'nodeId':'worker-reuse','generation':2,'chatId':0,'threadId':0}
+            next_topic = {'nodeId':'worker-reuse','generation':3,'chatId':-100,'threadId':43}
+            boundary = a.Boundary(root, 'fixture-old-secret-' * 4, old)
+            os.chmod(root, 0o700)
+            agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
+            agent.stop_core = lambda: None
+            unbound = rebound = None
+            try:
+                self.assertEqual(agent.dispatch(boundary.envelope('retire', {'sanitize': True})), {'retired': True, 'sanitized': True})
+                with patch.object(cloud_bootstrap, 'resolve_cloud_identity', return_value={'identity':unbound_identity,'secret':'fixture-unbound-secret-' * 4,'controlUrl':'https://control.example'}):
+                    unbound = agent.rotate_binding({'bootstrapToken':'fixture_bootstrap_' * 4})
+                self.assertTrue(unbound.boundary.unbound)
+                self.assertEqual(unbound.readiness_state(), 'ready-unbound')
+                self.assertFalse(unbound.retired)
+                stale = boundary.envelope('health', {})
+                stale_raw = a.canonical(stale)
+                stale_signature = boundary.signature(stale_raw)
+                with self.assertRaises(ValueError):
+                    unbound.boundary.authenticate(stale_raw, stale_signature)
+
+                with patch.object(cloud_bootstrap, 'resolve_cloud_identity', return_value={'identity':next_topic,'secret':'fixture-next-secret-' * 4,'controlUrl':'https://control.example'}):
+                    rebound = unbound.rotate_binding({'bootstrapToken':'fixture_rebind_' * 4})
+                self.assertFalse(rebound.boundary.unbound)
+                self.assertEqual(rebound.boundary.identity, next_topic)
+                self.assertEqual(rebound.readiness_state(), 'warming')
+            finally:
+                if rebound is not None:
+                    rebound.boundary.db.close()
+                if unbound is not None:
+                    unbound.boundary.db.close()
+                boundary.db.close()
+
+    def test_listener_cleanup_failure_never_returns_reusable_slot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = a.Boundary(Path(tmp)/'agent', 'fixture-cleanup-secret-' * 3, {'nodeId':'worker-fail','generation':1,'chatId':-100,'threadId':42})
+            os.chmod(boundary.root, 0o700)
+            agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
+            agent.stop_core = lambda: None
+            try:
+                agent.dispatch(boundary.envelope('retire', {'sanitize': True}))
+                listener = Mock()
+                listener.shutdown.side_effect = OSError('listener did not join')
+                agent.bridge.server = listener
+                with patch.object(cloud_bootstrap, 'resolve_cloud_identity', side_effect=AssertionError('bootstrap must not run')):
+                    with self.assertRaisesRegex(OSError, 'listener did not join'):
+                        agent.rotate_binding({'bootstrapToken':'fixture_cleanup_' * 4})
+                self.assertEqual(agent.slot.state.value, 'RETIRING')
+                self.assertEqual(agent.readiness_state(), 'retiring')
+            finally:
+                boundary.db.close()
+
+    def test_callback_stream_must_join_before_reuse(self):
+        class StuckCallback:
+            def __init__(self):
+                self.joined = False
+            def join(self, timeout=None):
+                self.joined = True
+            def is_alive(self):
+                return True
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = a.Boundary(Path(tmp)/'agent', 'fixture-callback-secret-' * 3, {'nodeId':'worker-callback','generation':1,'chatId':-100,'threadId':42})
+            agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
+            agent.stop_core = lambda: None
+            callback = StuckCallback()
+            try:
+                agent.dispatch(boundary.envelope('retire', {'sanitize': True}))
+                agent.callback_owner = callback
+                with patch.object(cloud_bootstrap, 'resolve_cloud_identity', side_effect=AssertionError('bootstrap must not run')):
+                    with self.assertRaisesRegex(RuntimeError, 'callback stream did not join'):
+                        agent.rotate_binding({'bootstrapToken':'fixture_callback_' * 4})
+                self.assertTrue(callback.joined)
+                self.assertEqual(agent.readiness_state(), 'retiring')
+            finally:
+                boundary.db.close()
+
+    def test_bound_live_worker_rejects_rotation_before_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = a.Boundary(Path(tmp)/'agent', 'fixture-bound-secret-' * 4, {'nodeId':'worker-01','generation':1,'chatId':-100,'threadId':42})
             agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
             with patch.object(cloud_bootstrap, 'resolve_cloud_identity', side_effect=AssertionError('bootstrap contacted')):
-                with self.assertRaises(ValueError):agent.rotate_binding({'bootstrapToken':'b'*64})
+                with self.assertRaisesRegex(ValueError, 'clean retired worker'):
+                    agent.rotate_binding({'bootstrapToken':'fixture_bound_' * 4})
             boundary.db.close()
 
     def test_rotation_reply_uses_previous_secret_and_bootstraps_replacement(self):

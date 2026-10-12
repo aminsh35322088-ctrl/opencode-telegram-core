@@ -67,20 +67,22 @@ real Core discovery and tool execution, while DNS/TLS rejection is unit-tested.
 
 Pending credential and TCP/TLS requests are cancellable without holding the runtime retirement lock. Unsupported remote transport configuration marks only that runtime capability unavailable; it does not block ordinary Topic AI or alter canonical Global enabled settings.
 
-## Unbound cluster slots
+## Single-slot reuse and unbound capacity
 
-A slot with `chatId=0` and `threadId=0` is explicitly unbound. It may bootstrap a
-verified Global snapshot and serve authenticated health/status/sync/retire only.
-Its Core workspace, data and state remain ephemeral; session, model, tool,
-credential and mutation admission fail closed. Privileged provisioning credential
-names in its environment reject startup before any child is launched.
+A Worker owns one slot and at most one Topic at a time. `chatId=0` and `threadId=0`
+mean `ready-unbound`: the root Agent is healthy and the slot can accept exactly one
+new Topic. Session/model execution still fails closed until a bound Core reaches
+authenticated `ready`. Railway `GET /health` is Agent liveness only and therefore
+does not wait for Core/model readiness.
 
-To claim a slot, Control must first durably fence its old identity, authenticate
-retirement and confirm its essential Core joined successfully, then redeploy on
-the serialized dedicated volume with the same node ID, exact next generation,
-rotated node key and valid Topic ownership. The durable ledger requires retirement
-proof and no session/execution/Topic files, then atomically activates the identity.
-An already bound volume cannot be rebound through this transition.
+`Delete Chat` moves the current slot to `RETIRING`, joins the Core and owned
+processes/streams, sanitizes Topic/session/workspace state, and rotates identity to
+the exact next generation with new signing material. Only that proven clean state
+may become `ready-unbound`. A clean unbound generation may fence itself and accept
+the next Topic in-place without an extra external retire round-trip; stale traffic
+from every prior generation remains rejected. Any uncertain Core, callback,
+listener, credential proxy, or descendant cleanup prevents reuse and retires the
+container instead.
 
 Generated action discovery resolves exact enabled snapshot records and immutable
 fixed arguments through the materialized `actions` tool. Execution uses the

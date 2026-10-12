@@ -1009,13 +1009,34 @@ class Agent:
         self.boundary.snapshot = None
 
     def rotate_binding(self, payload):
-        # Only a signed Control Plane request may invoke this after clean retirement.
+        # Only a signed Control Plane request may invoke this with a valid one-use
+        # bootstrap capability. A clean unbound slot can fence itself for its next
+        # owner, avoiding a redundant external retire round-trip.
         if (not isinstance(payload, dict) or set(payload) != {'bootstrapToken'}
                 or not isinstance(payload['bootstrapToken'], str)
-                or not re.fullmatch(r'[A-Za-z0-9_-]{48,128}', payload['bootstrapToken'])
-                or not self.retired or self.boundary.get('retired') is not True
+                or not re.fullmatch(r'[A-Za-z0-9_-]{48,128}', payload['bootstrapToken'])):
+            raise ValueError('invalid binding rotation request')
+        if (self.boundary.unbound and not self.retired and self.slot.state is SlotState.UNBOUND):
+            self.slot.begin_retirement()
+            self.retired = True
+            try:
+                self.stop_core()
+                self.boundary.set('retired', True)
+                self.sanitize_for_reuse()
+            except Exception:
+                # Never restore reusable state after an ambiguous retirement.
+                self.fatal_core_exit()
+                raise
+        if (not self.retired or self.boundary.get('retired') is not True
                 or self.process is not None and self.process.poll() is None):
             raise ValueError('clean retired worker required for binding rotation')
+        callback_owner = self.callback_owner
+        if callback_owner is not None:
+            callback_owner.join(timeout=10)
+            if callback_owner.is_alive():
+                self.fatal_core_exit()
+                raise RuntimeError('callback stream did not join before reuse')
+            self.callback_owner = None
         # Retirement joins active requests/children; also relinquish listeners before
         # a replacement Agent starts proxies on the same loopback ports.
         for proxy in (self.proxy, self.mcp_proxy, self.github, self.bridge, self.network):

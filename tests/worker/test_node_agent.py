@@ -886,6 +886,16 @@ class UnboundTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'provisioning credential'):
                 a.main()
 
+    def test_active_run_retirement_enters_retiring_before_core_join(self):
+        seen = []
+        def stop():
+            seen.append((self.agent.slot.state.value, self.agent.slot.active_run_id))
+        self.agent.stop_core = stop
+        result = self.agent.dispatch(self.b.envelope('retire', {'sanitize': False}))
+        self.assertEqual(result, {'retired': True})
+        self.assertEqual(seen, [('RETIRING', None)])
+        self.assertEqual(self.agent.readiness_state(), 'retiring')
+
     def test_retire_persists_handoff_proof_only_after_core_join(self):
         joined = []
         def stop():
