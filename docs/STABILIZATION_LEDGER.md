@@ -102,11 +102,78 @@ $ git log --oneline v1.18.33-bot.13-pre.34..HEAD
 `^[0-9]+\.[0-9]+\.[0-9]+-bot\.[0-9]+-pre\.[0-9]+$` value with a non-existing tag is the
 only trigger that publishes.
 
-### 1.6 Deployment (Railway) — **NOT YET RECORDED**
+### 1.6 Deployment (Railway) — recorded `2026-10-12`
 
-No Railway service/deployment identity has been collected in this pass. `railway status`
-reports `No linked project found`. Until §6 is completed, there is **no evidence** about
-what is actually running.
+Collected with the Railway CLI (`railway 5.65.0`, authenticated as
+`rizcaf@mailviro.com`, workspace `ali475-lab's Projects`).
+
+**Topology as actually deployed** — two projects, which is what keeps the Worker
+secrets out of the control plane:
+
+| Role | Project | Service | Service id |
+|---|---|---|---|
+| Control plane (the Bot) | `opencode-telegram-bot` | `control-plane` | `a64ba999-b5be-4b71-ab73-6523e2a0e6c4` |
+| Per-Topic Workers | `opencode-topic-01` | `topic-node-087af7f1…`, `topic-node-5f5ea0a2…`, `topic-node-d2cbdbb9…`, `topic-node-f0c11c28…` | 4 services |
+
+**Control plane live deployment**
+
+| Field | Value |
+|---|---|
+| deployment id | `8e4efa2f-2273-4285-b08b-42414b9b0ad1` |
+| status | `SUCCESS` |
+| created | `2026-10-12T17:23:36.806Z` |
+| `meta.commitHash` | `4208ee704b6cfe3124c29aee5ce2238d8c581690` — **equals Bot `main` HEAD** |
+| `meta.imageDigest` | `sha256:f277daca9867778ea31a7994b42ebfe1eedcb5d8c712334bd30b1f73b45e94d6` |
+| source | `aminsh35322088-ctrl/opencode-telegram-bot`, branch `main`, `builder: DOCKERFILE` |
+| health check | `GET /health` → HTTP 200 `{"status":"healthy"}` |
+| volume | `control-plane-data @ /data` |
+| replicas / region | 1/1, crashed 0, `europe-west4-drams3a` |
+| restart policy | `ON_FAILURE`, max retries 3 |
+
+**Worker deployments** — all four `status = SUCCESS`, `replicas 1/1`, `crashed 0`,
+each with its own `/data` volume (`serene-volume`, `sunny-volume`, `unique-volume`,
+`supportive-volume`, 500 MB, state `READY`):
+
+| Service | deployment id | created | `/data` volume | `GET /health` |
+|---|---|---|---|---|
+| `topic-node-087af7f1…` | `71b2741b-b00d-4b29-9833-ddeca5e8e46f` | `2026-10-12T11:37:16.551Z` | `serene-volume` 34.7/500 MB | 200 `ready-unbound` |
+| `topic-node-5f5ea0a2…` | `bce32e16-80cb-4fe5-b78f-b3c8e167d312` | `2026-10-12T11:36:32.171Z` | `sunny-volume` 33.6/500 MB | 200 `ready-unbound` |
+| `topic-node-d2cbdbb9…` | `44c5f48e-a8be-4417-8ad7-13f389b8295a` | `2026-10-12T12:12:16.611Z` | `unique-volume` 39.1/500 MB | 200 `ready-unbound` |
+| `topic-node-f0c11c28…` | `41a61e74-052b-4522-adf2-c20198478164` | `2026-10-12T12:11:55.252Z` | `supportive-volume` 48.9/500 MB | 200 `ready-unbound` |
+
+All four run the same immutable image:
+
+```
+ghcr.io/aminsh35322088-ctrl/opencode-telegram-worker@sha256:6c365cc6cf5a8a5297a706410ad089c72b02eeafa7d45f2e82a6586e4710c8f3
+```
+
+**Deleted project tombstones** (no services): `opencode-telegram-01` ×2 and
+`opencode-telegram-02` ×2, `deletedAt` `2026-10-12T22:55:53Z` / `2026-10-13T15:15:02Z`.
+
+### 1.7 Source ↔ artifact ↔ deployment chain — **consistent**
+
+| Link | Evidence |
+|---|---|
+| Core `3b83de3` → GitHub Release `pre.34` | tag target = `3b83de3` (§1.2) |
+| Core `3b83de3` → GHCR Worker image | `prerelease.yml` job `worker-image`, run `38237318544`, `Build and publish immutable governed Worker runtime` = `success` (`2026-10-12T10:35:50Z` → `10:38:29Z`), tag `3b83de3`, build-arg `CORE_SOURCE_COMMIT=3b83de3` |
+| Bot pins the release | `core-release.lock.json`: tag `pre.34`, commit `3b83de3`, three asset digests = §1.2 (§1.3) |
+| Bot pins the image | `src/infrastructure/worker-core-release.ts`: `WORKER_CORE_COMMIT=3b83de3…`, `WORKER_CORE_VERSION=1.18.33-bot.13-pre.34`, `WORKER_RUNTIME_IMAGE=…@sha256:6c365cc6…` |
+| Pin is enforced by test | `tests/core-worker-release-alignment.test.ts` asserts all three equal to the lock values |
+| Production runs the pinned image | All 4 Workers run `@sha256:6c365cc6…` (§1.6) — **matches the Bot source pin** |
+| Production runs Bot `main` | Control plane `meta.commitHash = 4208ee70…` — **matches Bot `main` HEAD** |
+
+Locked inputs in `upstream/lock.json` are unchanged from §1.4 (pre.34).
+
+**Observation, not a defect:** `prerelease.yml` job `worker-image` is *not* gated on
+`publish`, so every green Core CI publishes a fresh image (e.g. run `38252664192`,
+`worker-image = success` at `2026-10-12T13:02:57Z` for `82e47ab`). Production stays on
+the explicitly pinned digest. This is the intended immutable-pin model: newer images exist
+that are deliberately not adopted.
+
+**Observation:** all four Workers currently report `readiness: "ready-unbound"`, i.e. no
+Topic is bound to any Worker right now. Probes were taken with no active session, so this
+is recorded as an observation, not as a pass or a failure. Positive evidence of a bound
+route has not been collected.
 
 ---
 
@@ -298,31 +365,61 @@ actually accrued, the correct status of the stable release is **blocked**.
 
 ### 6.1 Open (not proven fine)
 
-1. **Windows local/development mode cannot initialise the native Core.** Directory-fsync
+1. **Control-plane production deploys are not gated on CI.** Railway creates a production
+   deployment within ~1 s of every push to `main`, while the GitHub Actions run takes
+   2–5 minutes. Five commits whose Bot CI **failed** were nevertheless deployed to
+   production on `2026-10-12`:
+
+   | commit | production deployment created | Railway status | Bot CI |
+   |---|---|---|---|
+   | `a7819678` | `12:55:05.921Z` | `REMOVED` (superseded) | **failure** (run `38252090298`) |
+   | `0872f19d` | `12:26:47.405Z` | `REMOVED` | **failure** (run `38249068393`) |
+   | `5f97c888` | `12:08:47.722Z` | `REMOVED` | **failure** (run `38247188010`) |
+   | `b0dc2c28` | `11:46:19.957Z` | `REMOVED` | **failure** (run `38244803108`) |
+   | `80ac4962` | `11:30:48.707Z` | `REMOVED` | **failure** (run `38243128111`) |
+
+   The current live deployment `4208ee70` is the first one in this series whose commit
+   also has a green CI run (`38283899328`) — and CI finished ~3 minutes *after* the
+   deploy was created. **Consequence:** "the commit running in production" and "the
+   commit verified by CI" are not causally linked; no release claim can rest on the
+   deployment having been verified. Fixing this needs a deployment gate (CI-gated
+   `railway up`, a Railway deploy hook triggered by a passing workflow, or a required
+   status check plus branch protection), which is an infrastructure decision and is
+   recorded here rather than changed unilaterally.
+2. **Windows local/development mode cannot initialise the native Core.** Directory-fsync
    `EPERM` in `atomic-binding-store` (§3.1). The Bot repository declares
    `CONTRIBUTING.md`: *"Changes must be compatible with Linux, macOS, and Windows (our
    supported platforms)."* Tension with the Core's own note in
    `docs/MIGRATION_TO_V1.md`: *"A Windows directory-fsync limitation is not a Linux
    production workaround."* Decision needed: fix for portability, or explicitly narrow the
    supported local-mode platform.
-2. **Cancellation/fence behaviour on Windows is unproven** (18 timing/socket tests,
+3. **Cancellation/fence behaviour on Windows is unproven** (18 timing/socket tests,
    §3.1). Pass on Linux; Windows result is a platform-semantics artifact, but no positive
    evidence exists for Windows.
-3. **Two dead gates**: `scripts/test-native-runtime.sh` and `scripts/run-compatibility.sh`
+4. **Two dead gates**: `scripts/test-native-runtime.sh` and `scripts/run-compatibility.sh`
    are referenced by no workflow (§2.4).
-4. **`node_modules` is tracked as a symlink** in the Bot repository
+5. **`node_modules` is tracked as a symlink** in the Bot repository
    (`node_modules → /app/node_modules`, mode `120000`). It was deliberately untracked by
    `2463ed14` and then re-added by `e02c3dfe`. Consequence: any fresh checkout is dirty
    after `npm ci` (`D node_modules`). Not a CI gate failure, but it defeats clean-tree
    verification.
-5. **Untracked `control-plane/node-bindings.json`** is produced as a side effect of running
+6. **Untracked `control-plane/node-bindings.json`** is produced as a side effect of running
    the Bot test suite in a working checkout and is not covered by `.gitignore`.
+7. **No positive evidence of a bound Topic route in production.** All four Workers report
+   `readiness: "ready-unbound"` (§1.6); probes were taken with no active session. Whether
+   a session is actually routed to exactly one Worker has not been demonstrated end to end
+   against the live deployment.
 
 ### 6.2 Verified / do not reopen
 
 - Upstream lock identity (`v1.18.33`, `51ef4be1…`, Bun `1.3.14`, `telegram-headless`,
   `120000000`) — read from `upstream/lock.json`, unchanged.
 - Published `pre.34` artifact digests match the Bot's `core-release.lock.json` (§1.3).
+- Full source ↔ artifact ↔ deployment chain is consistent (§1.7): Core `3b83de3` →
+  Release `pre.34` + GHCR `sha256:6c365cc6…` → Bot pins both → all four production
+  Workers run exactly that pinned digest.
+- Control-plane deployment is built from Bot `main` HEAD
+  (`meta.commitHash = 4208ee70…`, §1.6) and answers `GET /health` 200.
 - `package-release.sh` + `verify-release.sh` succeeded for the published artifact (§2.2).
 - All three Core CI jobs green at `82e47ab` (§2.1).
 - Bot CI green at `4208ee70` after the fixture repair (§2.3).
@@ -370,4 +467,7 @@ eslint src --max-warnings=0 && tsc --noEmit && npm run build
 | Core `main` | `82e47abda8648e55abb56d90d9ed4623395101ac` |
 | Bot `main` | `4208ee704b6cfe3124c29aee5ce2238d8c581690` |
 | Published Core | `v1.18.33-bot.13-pre.34` → `3b83de32f2259be2f8d6d847804c111698138b8e` |
-| Deployment | **unknown — §1.6** |
+| Railway control plane | project `opencode-telegram-bot` / service `control-plane`, deployment `8e4efa2f-2273-4285-b08b-42414b9b0ad1`, `commitHash 4208ee70…`, `SUCCESS` |
+| Railway Workers | project `opencode-topic-01`, 4 × `topic-node-*`, image `@sha256:6c365cc6…`, all `SUCCESS` |
+| Railway CLI | `railway 5.65.0`, auth `rizcaf@mailviro.com`, workspace `ali475-lab's Projects` |
+| Live probes | control plane `GET /health` 200 `{"status":"healthy"}`; 4 × Workers 200 `{"alive":true,"readiness":"ready-unbound"}` |
