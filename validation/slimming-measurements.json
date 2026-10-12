@@ -1,0 +1,34 @@
+{
+  "before": {
+    "coreCommit": "8ceb4d111746a6eac65bea0658177f07f81cf91e",
+    "capturedAt": "2026-10-12",
+    "workerSuite": {
+      "tests": 246,
+      "elapsedSeconds": 37.02,
+      "peakTestRunnerRssKiB": 65172
+    },
+    "workerImage": {
+      "bytes": 2193160646,
+      "human": "2.19GB",
+      "coldBuildSeconds": 89.33,
+      "compiledCoreBuildStepSeconds": 51.7,
+      "playwrightChromiumLayerSeconds": 25.2
+    },
+    "railwayHealth": {
+      "behavior": "HTTP 503 until Core process is alive and agent.ready is true",
+      "containerToHealth200Ms": null,
+      "note": "No real Railway timing was available before Task 1; behavior is pinned by pre-change code/test evidence. Task 8 captures live before/after-equivalent production timings for the new image."
+    },
+    "coreReadiness": {
+      "pollPolicy": "up to 100 probes with fixed 100ms sleep after failures",
+      "maximumPollingWindowMs": 10000,
+      "coreSpawnToReadyMs": null
+    },
+    "serviceMemory": {
+      "idleRssBytes": null,
+      "boundReadyRssBytes": null,
+      "note": "Not inferred from test-runner RSS; real service RSS is captured during Railway qualification."
+    }
+  },
+  "after": {}
+}

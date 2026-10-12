@@ -626,7 +626,7 @@ class UnboundTests(unittest.TestCase):
         self.agent.bootstrap()
         self.assertEqual(fetches, ['snapshot.get'])
         self.assertEqual(self.b.snapshot, snapshot)
-        self.assertEqual(self.agent.dispatch(self.b.envelope('health', {})), {'ready': True, 'bindingRotation': True})
+        self.assertEqual(self.agent.dispatch(self.b.envelope('health', {})), {'ready': True, 'readiness': 'ready-unbound', 'bindingRotation': True})
         self.assertFalse(self.agent.dispatch(self.b.envelope('status', {}))['bound'])
         self.assertEqual(self.agent.dispatch(self.b.envelope('sync-global', {}))['revision'], 1)
         self.assertIsNone(self.b.get('session'))
@@ -833,6 +833,77 @@ class UnboundTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.agent.dispatch(self.b.envelope('retire', {}))
         self.assertEqual(stops, [True])
+
+class ReadinessProjectionTests(unittest.TestCase):
+    def make_agent(self, *, unbound=False):
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name) / 'agent'
+        identity = dict(nodeId='slot', generation=1, chatId=0 if unbound else -12, threadId=0 if unbound else 4)
+        boundary = a.Boundary(root, 's' * 32, identity)
+        agent = a.Agent(boundary, 'https://control.invalid', exit_on_crash=lambda _: None)
+        return temp, boundary, agent
+
+    def test_public_health_is_agent_liveness_not_core_readiness(self):
+        from types import SimpleNamespace
+        temp, boundary, agent = self.make_agent()
+        try:
+            self.assertFalse(agent.ready)
+            self.assertIsNone(agent.process)
+            handler = a.Handler.__new__(a.Handler)
+            handler.server = SimpleNamespace(agent=agent)
+            handler.path = '/health'
+            replies = []
+            handler.respond = lambda status, body, **_: replies.append((status, body))
+            handler.do_GET()
+            self.assertEqual(replies, [(200, {'alive': True, 'readiness': 'warming'})])
+        finally:
+            boundary.db.close()
+            temp.cleanup()
+
+    def test_readiness_projection_distinguishes_unbound_warming_ready_running_and_retiring(self):
+        temp, boundary, agent = self.make_agent(unbound=True)
+        try:
+            self.assertEqual(agent.readiness_state(), 'ready-unbound')
+            boundary.db.close()
+            identity = dict(nodeId='slot-bound', generation=1, chatId=-12, threadId=4)
+            boundary = a.Boundary(Path(temp.name) / 'bound-agent', 't' * 32, identity)
+            agent = a.Agent(boundary, 'https://control.invalid', exit_on_crash=lambda _: None)
+            self.assertEqual(agent.readiness_state(), 'warming')
+            process = type('Process', (), {'poll': lambda self: None})()
+            agent.process = process
+            agent.ready = True
+            self.assertEqual(agent.readiness_state(), 'ready')
+            boundary.set('runId', 'run-owned')
+            self.assertEqual(agent.readiness_state(), 'running')
+            agent.retired = True
+            self.assertEqual(agent.readiness_state(), 'retiring')
+        finally:
+            boundary.db.close()
+            temp.cleanup()
+
+    def test_authenticated_status_exposes_readiness_without_relaxing_prompt_admission(self):
+        temp, boundary, agent = self.make_agent()
+        try:
+            status = agent.dispatch(boundary.envelope('health', {}))
+            self.assertEqual(status['readiness'], 'warming')
+            self.assertFalse(status['ready'])
+            with self.assertRaisesRegex(ValueError, 'node not ready'):
+                agent.dispatch(boundary.envelope('session.create', {}))
+        finally:
+            boundary.db.close()
+            temp.cleanup()
+
+    def test_retired_or_fatal_agent_never_claims_reusable_readiness(self):
+        temp, boundary, agent = self.make_agent(unbound=True)
+        try:
+            agent.retired = True
+            self.assertEqual(agent.readiness_state(), 'retiring')
+            agent.retired = False
+            agent.fatal_exit_requested = True
+            self.assertEqual(agent.readiness_state(), 'retiring')
+        finally:
+            boundary.db.close()
+            temp.cleanup()
 
 class RuntimeIdentityTests(unittest.TestCase):
     def test_runtime_identity_reads_image_metadata_and_rejects_invalid_commit(self):

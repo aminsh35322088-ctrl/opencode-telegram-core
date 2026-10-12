@@ -479,6 +479,18 @@ class Agent:
         from control_bridge import ControlBridge
         self.bridge = ControlBridge(self)
 
+    def readiness_state(self):
+        if self.retired or self.fatal_exit_requested:
+            return 'retiring'
+        if self.boundary.unbound:
+            return 'ready-unbound'
+        process_alive = self.process is not None and self.process.poll() is None
+        if not self.ready or not process_alive:
+            return 'warming'
+        if self.boundary.get('runId'):
+            return 'running'
+        return 'ready'
+
     def outbound(self, operation, payload, session=None):
         if self.boundary.unbound and (operation != 'snapshot.get' or session is not None):
             raise ValueError('unbound node authority unavailable')
@@ -998,9 +1010,9 @@ class Agent:
             if self.boundary.unbound and value.get('sessionId') is not None:
                 raise ValueError('unbound node has no session')
             if self.boundary.unbound and operation == 'status':
-                return {'ready': self.ready and not self.retired, 'bound': False, 'retired': self.boundary.get('retired') is True}
+                return {'ready': self.ready and not self.retired, 'readiness': self.readiness_state(), 'bound': False, 'retired': self.boundary.get('retired') is True}
             if operation == 'health':
-                return {'ready': self.ready and not self.retired, 'bindingRotation': True, **({'runtime': runtime_identity()} if Path('/usr/local/share/core-build-info.json').exists() else {})}
+                return {'ready': self.ready and not self.retired, 'readiness': self.readiness_state(), 'bindingRotation': True, **({'runtime': runtime_identity()} if Path('/usr/local/share/core-build-info.json').exists() else {})}
             if operation == 'retire':
                 if set(payload) - {'sanitize'} or ('sanitize' in payload and type(payload['sanitize']) is not bool):
                     raise ValueError('invalid retirement payload')
@@ -1485,8 +1497,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         agent = self.server.agent
-        ready = agent.ready and not agent.retired and agent.process is not None and agent.process.poll() is None
-        self.respond(200 if ready else 503, {'ready': ready}) if self.path == '/health' else self.respond(404, {'error': 'not found'})
+        alive = not agent.retired and not agent.fatal_exit_requested
+        self.respond(200 if alive else 503, {'alive': alive, 'readiness': agent.readiness_state()}) if self.path == '/health' else self.respond(404, {'error': 'not found'})
 
     def do_POST(self):
         if self.path != '/rpc':
