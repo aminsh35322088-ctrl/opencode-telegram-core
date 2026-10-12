@@ -10,7 +10,10 @@ RUN --mount=type=secret,id=proxy_ca if [ -f /run/secrets/proxy_ca ]; then \
     fi; \
     npm install --global node-gyp@11
 WORKDIR /core
-COPY scripts ./scripts
+# Dependency preparation depends only on the pinned upstream lock/patches and these scripts.
+# Runtime smoke/release helpers are copied after this cache boundary so they cannot
+# invalidate the expensive upstream dependency install.
+COPY scripts/common.sh scripts/ensure-bun.sh scripts/materialize-upstream.sh scripts/apply-patches.sh scripts/prepare-runtime-deps.sh ./scripts/
 COPY upstream ./upstream
 COPY patches ./patches
 RUN --mount=type=secret,id=proxy_ca \
@@ -19,6 +22,7 @@ RUN --mount=type=secret,id=proxy_ca \
       export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca GIT_SSL_CAINFO=/run/secrets/proxy_ca SSL_CERT_FILE=/run/secrets/proxy_ca; \
     fi; \
     ./scripts/prepare-runtime-deps.sh
+COPY scripts/compile-runtime.sh scripts/install-runtime-overlays.sh scripts/apply-headless-profile.sh scripts/build-headless-runtime.ts scripts/telegram-aws-credential-policy.ts scripts/verify-production-graph.py ./scripts/
 COPY runtime ./runtime
 ARG RAILWAY_GIT_COMMIT_SHA
 ARG CORE_SOURCE_COMMIT
@@ -49,7 +53,7 @@ RUN --mount=type=secret,id=proxy_ca if [ -f /run/secrets/proxy_ca ]; then \
       export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca GIT_SSL_CAINFO=/run/secrets/proxy_ca SSL_CERT_FILE=/run/secrets/proxy_ca; \
     fi; \
     npm install --global @playwright/cli@0.1.18 \
-    && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright-cli install-browser chromium --with-deps \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node "$(npm root -g)/@playwright/cli/node_modules/playwright-core/cli.js" install chromium --with-deps --no-shell \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/* \
     && chmod -R a+rX,go-w /opt/ms-playwright /usr/local/lib/node_modules

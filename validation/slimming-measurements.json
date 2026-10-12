@@ -1,6 +1,7 @@
 {
   "after": {
     "capabilityQualification": {
+      "browserHeadlessShellAbsent": true,
       "compiledCoreBrowser": true,
       "fullWorkerAndParityTests": 277,
       "joinedBrowserRetirement": true,
@@ -10,9 +11,12 @@
     "capturedAt": "2026-10-12",
     "coreBaseCommit": "e6a94fd97f75d08b115865514e8a94b6469e625f",
     "improvement": {
-      "coldBuildPercent": 6.16,
-      "imageBytesDelta": 10051,
-      "runtimeChangeVsOldCompiledStepPercent": 49.81
+      "browserInstallLayerVsBaselinePercent": 18.25,
+      "coldBuildComparableStageNote": "83.83s was measured on the prior runner before final no-shell slimming; the final fresh-runner cold build is recorded separately because network/base-image conditions changed.",
+      "coldBuildComparableStagePercent": 6.16,
+      "imageBytesSaved": 272193144,
+      "imageReductionPercent": 12.41,
+      "runtimeChangeVsOldCompiledStepPercent": 48.16
     },
     "railwayRuntime": {
       "bindToCoreReadyMs": null,
@@ -23,14 +27,26 @@
       "idleRssBytes": null,
       "note": "Filled only from live Railway qualification in Task 8."
     },
+    "task6BaseCommit": "71f3a897480f8f7d44787107ecc217a816ad4af0",
     "workerImage": {
-      "bytes": 2193170697,
-      "coldBuildSeconds": 83.83,
+      "browserHeadlessShellDownloaded": false,
+      "browserInstallLayerSeconds": 20.6,
+      "bytes": 1920967502,
+      "coldBuildMeasurementNote": "Fresh runner pulled base images and repeated apt/network downloads; do not compare this value directly with the earlier 89.33s baseline.",
+      "coldBuildSecondsComparableStage": 83.83,
+      "coldBuildSecondsFreshRunner": 95.11,
       "dependencyInstallSecondsObserved": 3.1,
-      "human": "2.19GB",
+      "human": "1.92GB",
       "localBuildRuntimeSeconds": 32.03,
-      "runtimeSourceChangeBuildSeconds": 25.95,
-      "warmBuildSeconds": 0.44
+      "previousComparableColdBuildSeconds": 83.83,
+      "runtimeSourceChangeBuildSeconds": 26.8,
+      "standaloneRuntimeSmokeSeconds": 6.6,
+      "warmBuildSeconds": 0.84
+    },
+    "workerSuite": {
+      "elapsedSeconds": 35.45,
+      "peakTestRunnerRssKiB": 64848,
+      "tests": 272
     }
   },
   "before": {

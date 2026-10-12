@@ -112,7 +112,12 @@ try {const p=await b.newPage();await p.setContent('<title>worker-smoke</title><h
 if(await p.title()!=='worker-smoke')throw Error('browser title mismatch');
 await p.screenshot({path:process.argv[1]});}finally{await b.close();}})().catch(e=>{console.error(e.message);process.exit(1)});'''
     if not options.tools_only:
-        run('node', '-e', browser, str(root / 'browser.png'))
+        browser_home = root / 'browser-home'
+        browser_home.mkdir()
+        browser_env = os.environ.copy()
+        browser_env.update({'HOME': str(browser_home), 'XDG_CONFIG_HOME': str(browser_home / 'config'),
+                            'XDG_CACHE_HOME': str(browser_home / 'cache'), 'XDG_DATA_HOME': str(browser_home / 'data')})
+        run('node', '-e', browser, str(root / 'browser.png'), env=browser_env)
         assert (root / 'browser.png').stat().st_size > 0
     if options.online:
         home = root / 'network-home'

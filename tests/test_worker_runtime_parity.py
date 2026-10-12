@@ -40,6 +40,11 @@ if(accepted.length!==1)throw Error('unexpected execution');
         self.assertLess(prepare, source_commit)
         self.assertLess(runtime_copy, compile_step)
         self.assertIn('--mount=type=cache,target=/root/.bun/install/cache', source)
+        before_prepare=source[:prepare]
+        self.assertNotIn('COPY scripts ./scripts', before_prepare)
+        self.assertIn('scripts/prepare-runtime-deps.sh', before_prepare)
+        self.assertNotIn('scripts/worker-runtime-smoke.py', before_prepare)
+        self.assertGreater(source.index('scripts/compile-runtime.sh'), prepare)
 
     def test_local_build_wrapper_preserves_prepare_then_compile_contract(self):
         wrapper = (ROOT / 'scripts/build-runtime.sh').read_text()
@@ -52,6 +57,9 @@ if(accepted.length!==1)throw Error('unexpected execution');
         self.assertIn('FROM node:22.14.0-bookworm-slim AS runtime', source)
         self.assertIn('@playwright/cli@0.1.18', source)
         self.assertIn('PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright', source)
+        self.assertIn('@playwright/cli/node_modules/playwright-core/cli.js', source)
+        self.assertIn('install chromium --with-deps --no-shell', source)
+        self.assertNotIn('chromium_headless_shell-*', source)
         self.assertIn('OPENCODE_TELEGRAM_PROCESS_BUDGET=1', source)
         self.assertIn('bash coreutils findutils lsof', source)
         self.assertNotIn('PORT=3000', source)
