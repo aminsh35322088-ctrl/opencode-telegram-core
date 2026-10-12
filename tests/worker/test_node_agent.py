@@ -112,6 +112,35 @@ class LifecycleTests(SecurityTests):
             with self.assertRaises(ValueError):
                 self.agent.dispatch(self.request(op, {'runId': 'old_run'}))
 
+    def test_dispatch_rejects_stale_slot_generation_before_core(self):
+        self.agent.local = lambda *args, **kwargs: self.fail('stale generation reached Core')
+        value = self.request('health')
+        value['generation'] += 1
+        with self.assertRaisesRegex(ValueError, 'stale slot generation'):
+            self.agent.dispatch(value)
+
+    def test_run_prepare_claims_one_slot_and_second_run_is_rejected(self):
+        self.b.set('runId', None)
+        self.agent.local = lambda method, route, payload=None: None
+        self.agent.refresh_snapshot = lambda: None
+        result = self.agent.dispatch(self.request('run.prepare', {'runId': 'run-one'}))
+        self.assertEqual(result, {'prepared': True, 'runId': 'run-one'})
+        self.assertEqual(self.agent.slot.active_run_id, 'run-one')
+        self.assertEqual(self.agent.readiness_state(), 'running')
+        with self.assertRaisesRegex(ValueError, 'another run'):
+            self.agent.dispatch(self.request('run.prepare', {'runId': 'run-two'}))
+        self.assertEqual(self.b.get('runId'), 'run-one')
+
+    def test_stop_without_native_execution_releases_single_slot(self):
+        self.b.set('runId', None)
+        self.agent.local = lambda method, route, payload=None: None
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'run-one'}))
+        result = self.agent.dispatch(self.request('stop', {'runId': 'run-one'}))
+        self.assertIsNone(result)
+        self.assertIsNone(self.agent.slot.active_run_id)
+        self.assertEqual(self.agent.readiness_state(), 'ready')
+
     def test_question_reply_requires_exact_session_owner(self):
         calls = []
         def local(method, route, payload=None):
@@ -312,6 +341,7 @@ class CompactionTests(LifecycleTests):
         self.agent.ensure_sync_watcher = lambda **kwargs: None
 
     def test_compaction_uses_owned_async_native_summary(self):
+        self.b.set('runId', None)
         result = self.agent.dispatch(self.request('session.compact', {'runId': 'compact_1', 'model': {'providerID': 'opencode', 'modelID': 'big-pickle'}}))
         self.assertEqual(result, {'accepted': True, 'runId': 'compact_1'})
         self.assertEqual(self.calls[-1], ('POST', '/session/ses_owned/summarize', {'providerID': 'opencode', 'modelID': 'big-pickle', 'async': True}))
@@ -331,6 +361,7 @@ class CompactionTests(LifecycleTests):
         self.assertFalse(any(method == 'POST' for method, _, _ in self.calls))
 
     def test_compaction_callback_admission_is_idempotent_and_native_stop_is_fenced(self):
+        self.b.set('runId', None)
         import io
         from unittest.mock import patch
         payload = {'runId': 'compact_1', 'model': {'providerID': 'opencode', 'modelID': 'big-pickle'}, 'events': True}
@@ -357,6 +388,7 @@ class CompactionTests(LifecycleTests):
 
 class DeferredSyncTests(LifecycleTests):
     def test_prepared_run_does_not_refresh_during_control_outage(self):
+        self.b.set('runId', None)
         calls = []
         self.agent.local = lambda method, route, payload=None: calls.append((method, route)) or None
         refreshes = []
@@ -371,6 +403,7 @@ class DeferredSyncTests(LifecycleTests):
         self.assertIn(('POST', '/session/ses_owned/prompt_async'), calls)
 
     def test_wrong_or_expired_prepared_run_cannot_dispatch_prompt(self):
+        self.b.set('runId', None)
         from unittest.mock import patch
         self.agent.local = lambda *args: None
         self.agent.refresh_snapshot = lambda: None
@@ -487,6 +520,7 @@ class ProcessSupervisorTests(SecurityTests):
         self.assertAlmostEqual(latency, sum(delays), places=6)
         self.assertEqual(agent.core_ready_latency_ms, round(latency * 1000, 3))
         self.assertTrue(agent.ready)
+        self.assertEqual(agent.slot.state.value, 'READY')
         self.assertEqual(agent.readiness_state(), 'ready')
 
     def test_core_readiness_deadline_never_sleeps_past_deadline(self):
@@ -936,6 +970,7 @@ class ReadinessProjectionTests(unittest.TestCase):
             agent.process = process
             agent.ready = True
             self.assertEqual(agent.readiness_state(), 'ready')
+            agent.slot.begin_run('run-owned')
             boundary.set('runId', 'run-owned')
             self.assertEqual(agent.readiness_state(), 'running')
             agent.retired = True

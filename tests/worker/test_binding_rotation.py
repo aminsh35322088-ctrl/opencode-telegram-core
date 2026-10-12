@@ -20,7 +20,7 @@ class BindingRotationTests(unittest.TestCase):
             boundary = a.Boundary(root, 's'*64, old)
             os.chmod(root, 0o700)
             agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
-            agent.dispatch({'operation':'retire','payload':{'sanitize':True}})
+            agent.dispatch(boundary.envelope('retire', {'sanitize': True}))
             listeners = [Mock(), Mock(), Mock(), Mock()]
             for proxy, listener in zip((agent.proxy, agent.mcp_proxy, agent.github, agent.bridge), listeners):
                 proxy.server = listener
@@ -50,7 +50,7 @@ class BindingRotationTests(unittest.TestCase):
             boundary = a.Boundary(Path(tmp)/'agent', 's'*64, old)
             os.chmod(boundary.root, 0o700)
             agent = a.Agent(boundary, 'https://control.example', exit_on_crash=lambda _:None)
-            agent.dispatch({'operation':'retire','payload':{'sanitize':True}})
+            agent.dispatch(boundary.envelope('retire', {'sanitize': True}))
             owners = (agent.proxy, agent.mcp_proxy, agent.github, agent.bridge)
             servers, threads, ports = [], [], []
             replacement = None

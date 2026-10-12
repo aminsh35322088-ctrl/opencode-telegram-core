@@ -16,6 +16,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlsplit, unquote
 from urllib.request import Request, urlopen
+from single_slot import SingleSlotRuntime, SlotState
 
 MAX_BODY = 10 * 1024 * 1024
 MAX_SNAPSHOT_DISK = 32 * 1024 * 1024
@@ -444,6 +445,7 @@ class Agent:
         if endpoint.scheme != 'https' or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
             raise ValueError('control plane requires HTTPS')
         self.boundary = boundary
+        self.slot = SingleSlotRuntime(boundary.identity)
         self.endpoint = control_plane.rstrip('/') + '/node-control'
         self.binary = binary
         self.core_port = core_port
@@ -482,15 +484,28 @@ class Agent:
         from control_bridge import ControlBridge
         self.bridge = ControlBridge(self)
 
+    def _sync_slot_core_readiness(self):
+        if self.boundary.unbound or self.slot.state is not SlotState.WARMING:
+            return
+        process_alive = self.process is not None and self.process.poll() is None
+        if self.ready and process_alive:
+            self.slot.mark_ready()
+            run_id = self.boundary.get('runId')
+            if isinstance(run_id, str) and run_id:
+                self.slot.begin_run(run_id)
+
     def readiness_state(self):
         if self.retired or self.fatal_exit_requested:
             return 'retiring'
         if self.boundary.unbound:
             return 'ready-unbound'
+        self._sync_slot_core_readiness()
+        if self.slot.state is SlotState.RETIRING:
+            return 'retiring'
         process_alive = self.process is not None and self.process.poll() is None
-        if not self.ready or not process_alive:
+        if not self.ready or not process_alive or self.slot.state in (SlotState.BINDING, SlotState.WARMING):
             return 'warming'
-        if self.boundary.get('runId'):
+        if self.slot.state is SlotState.RUNNING:
             return 'running'
         return 'ready'
 
@@ -602,6 +617,7 @@ class Agent:
                     raise RuntimeError('Core startup lease ended')
                 self.ready = True
                 self.runtime_selftest_stopping = False
+            self._sync_slot_core_readiness()
             latency = max(0.0, time.monotonic() - started)
             self.core_ready_latency_ms = round(latency * 1000, 3)
             return latency
@@ -1021,6 +1037,8 @@ class Agent:
         return replacement
 
     def dispatch(self, value):
+        self.slot.assert_generation(value.get('generation'))
+        self._sync_slot_core_readiness()
         operation, payload = value['operation'], value['payload']
         if operation == 'runtime.selftest':
             return self.runtime_selftest(value)
@@ -1050,6 +1068,7 @@ class Agent:
                     raise ValueError('invalid retirement payload')
                 # Gate admission immediately, but persist handoff proof only after
                 # the essential Core lease has been intentionally stopped/joined.
+                self.slot.begin_retirement()
                 self.retired = True
                 with self.process_lock:
                     lease = self.process_lease
@@ -1222,9 +1241,12 @@ class Agent:
                 if execution:
                     raise ValueError('stop execution before deleting session')
                 result = self.local('DELETE', '/session/' + encoded)
+                owned_run = self.slot.active_run_id
                 self.boundary.set('session', None)
                 self.boundary.set('runId', None)
                 self.boundary.set('nativeRunId', None)
+                if owned_run is not None and self.slot.state is SlotState.RUNNING:
+                    self.slot.finish_run(owned_run)
                 return result
             if operation == 'run.prepare':
                 run_id = payload.get('runId')
@@ -1232,7 +1254,13 @@ class Agent:
                     raise ValueError('invalid prepared run')
                 if self.local('GET', '/session/' + encoded + '/execution'):
                     raise ValueError('execution already active')
-                self.refresh_snapshot()
+                self.slot.begin_run(run_id)
+                try:
+                    self.refresh_snapshot()
+                except Exception:
+                    if self.slot.active_run_id == run_id and self.slot.state is SlotState.RUNNING:
+                        self.slot.finish_run(run_id)
+                    raise
                 self.boundary.set('runId', run_id)
                 self.boundary.set('runMode', 'native')
                 self.boundary.set('nativeRunId', None)
@@ -1300,6 +1328,7 @@ class Agent:
                 expected_revision = payload.get('expectedRevision')
                 if expected_revision is not None and (type(expected_revision) is not int or not self.boundary.snapshot or self.boundary.snapshot['revision'] != expected_revision):
                     raise ValueError('snapshot revision mismatch')
+                self.slot.begin_run(run_id)
                 self.boundary.set('runPrepared', None)
                 self.boundary.set('runId', run_id)
                 self.boundary.set('nativeRunId', None)
@@ -1355,6 +1384,8 @@ class Agent:
                 if not execution:
                     self.boundary.set('runPrepared', None)
                     self.boundary.set('runId', None)
+                    if self.slot.active_run_id == run_id and self.slot.state is SlotState.RUNNING:
+                        self.slot.finish_run(run_id)
                     return None
                 native_id = self.boundary.get('nativeRunId')
                 if native_id is not None and execution['runId'] != native_id:
@@ -1413,6 +1444,8 @@ class Agent:
                     self.boundary.set('callbackPending', payload)
                     if terminal:
                         self.boundary.set('callbackRunReceipt', {'runId': run_id, 'state': 'COMPLETED'})
+                        if self.slot.active_run_id == run_id and self.slot.state is SlotState.RUNNING:
+                            self.slot.finish_run(run_id)
                     for attempt in range(3):
                         if self.retired or self.boundary.get('session') != session or self.boundary.get('runId') != run_id:
                             return
