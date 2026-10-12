@@ -1,34 +1,67 @@
 {
-  "before": {
-    "coreCommit": "8ceb4d111746a6eac65bea0658177f07f81cf91e",
+  "after": {
+    "capabilityQualification": {
+      "compiledCoreBrowser": true,
+      "fullWorkerAndParityTests": 277,
+      "joinedBrowserRetirement": true,
+      "physicalBrowserPauseResume": true,
+      "standaloneRuntimeSmoke": true
+    },
     "capturedAt": "2026-10-12",
-    "workerSuite": {
-      "tests": 246,
-      "elapsedSeconds": 37.02,
-      "peakTestRunnerRssKiB": 65172
+    "coreBaseCommit": "e6a94fd97f75d08b115865514e8a94b6469e625f",
+    "improvement": {
+      "coldBuildPercent": 6.16,
+      "imageBytesDelta": 10051,
+      "runtimeChangeVsOldCompiledStepPercent": 49.81
+    },
+    "railwayRuntime": {
+      "bindToCoreReadyMs": null,
+      "boundReadyRssBytes": null,
+      "containerToHealth200Ms": null,
+      "containerToReadyUnboundMs": null,
+      "deleteToReadyUnboundMs": null,
+      "idleRssBytes": null,
+      "note": "Filled only from live Railway qualification in Task 8."
     },
     "workerImage": {
-      "bytes": 2193160646,
+      "bytes": 2193170697,
+      "coldBuildSeconds": 83.83,
+      "dependencyInstallSecondsObserved": 3.1,
       "human": "2.19GB",
-      "coldBuildSeconds": 89.33,
-      "compiledCoreBuildStepSeconds": 51.7,
-      "playwrightChromiumLayerSeconds": 25.2
+      "localBuildRuntimeSeconds": 32.03,
+      "runtimeSourceChangeBuildSeconds": 25.95,
+      "warmBuildSeconds": 0.44
+    }
+  },
+  "before": {
+    "capturedAt": "2026-10-12",
+    "coreCommit": "8ceb4d111746a6eac65bea0658177f07f81cf91e",
+    "coreReadiness": {
+      "coreSpawnToReadyMs": null,
+      "maximumPollingWindowMs": 10000,
+      "pollPolicy": "up to 100 probes with fixed 100ms sleep after failures"
     },
     "railwayHealth": {
       "behavior": "HTTP 503 until Core process is alive and agent.ready is true",
       "containerToHealth200Ms": null,
       "note": "No real Railway timing was available before Task 1; behavior is pinned by pre-change code/test evidence. Task 8 captures live before/after-equivalent production timings for the new image."
     },
-    "coreReadiness": {
-      "pollPolicy": "up to 100 probes with fixed 100ms sleep after failures",
-      "maximumPollingWindowMs": 10000,
-      "coreSpawnToReadyMs": null
-    },
     "serviceMemory": {
-      "idleRssBytes": null,
       "boundReadyRssBytes": null,
+      "idleRssBytes": null,
       "note": "Not inferred from test-runner RSS; real service RSS is captured during Railway qualification."
+    },
+    "workerImage": {
+      "bytes": 2193160646,
+      "coldBuildSeconds": 89.33,
+      "compiledCoreBuildStepSeconds": 51.7,
+      "human": "2.19GB",
+      "playwrightChromiumLayerSeconds": 25.2
+    },
+    "workerSuite": {
+      "elapsedSeconds": 37.02,
+      "peakTestRunnerRssKiB": 65172,
+      "tests": 246
     }
-  },
-  "after": {}
+  }
 }

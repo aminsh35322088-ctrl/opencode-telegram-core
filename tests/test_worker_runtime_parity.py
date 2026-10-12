@@ -30,6 +30,23 @@ if(accepted.length!==1)throw Error('unexpected execution');
         subprocess.run(['node', '-e', script, str(ROOT / 'worker/runtime_tools/browser.ts')], check=True,
                        capture_output=True, text=True, timeout=10)
 
+    def test_core_dependency_layer_is_stable_across_runtime_source_and_commit_changes(self):
+        source = (ROOT / 'Dockerfile.worker').read_text()
+        prepare = source.index('./scripts/prepare-runtime-deps.sh')
+        runtime_copy = source.index('COPY runtime ./runtime')
+        source_commit = source.index('ARG CORE_SOURCE_COMMIT')
+        compile_step = source.index('./scripts/compile-runtime.sh')
+        self.assertLess(prepare, runtime_copy)
+        self.assertLess(prepare, source_commit)
+        self.assertLess(runtime_copy, compile_step)
+        self.assertIn('--mount=type=cache,target=/root/.bun/install/cache', source)
+
+    def test_local_build_wrapper_preserves_prepare_then_compile_contract(self):
+        wrapper = (ROOT / 'scripts/build-runtime.sh').read_text()
+        self.assertIn('prepare-runtime-deps.sh', wrapper)
+        self.assertIn('compile-runtime.sh', wrapper)
+        self.assertLess(wrapper.index('prepare-runtime-deps.sh'), wrapper.index('compile-runtime.sh'))
+
     def test_image_pins_browser_runtime_and_keeps_runtime_artifacts_off_volume(self):
         source = (ROOT / 'Dockerfile.worker').read_text()
         self.assertIn('FROM node:22.14.0-bookworm-slim AS runtime', source)

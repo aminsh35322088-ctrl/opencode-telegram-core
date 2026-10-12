@@ -13,14 +13,22 @@ WORKDIR /core
 COPY scripts ./scripts
 COPY upstream ./upstream
 COPY patches ./patches
+RUN --mount=type=secret,id=proxy_ca \
+    --mount=type=cache,target=/root/.bun/install/cache \
+    if [ -f /run/secrets/proxy_ca ]; then \
+      export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca GIT_SSL_CAINFO=/run/secrets/proxy_ca SSL_CERT_FILE=/run/secrets/proxy_ca; \
+    fi; \
+    ./scripts/prepare-runtime-deps.sh
 COPY runtime ./runtime
 ARG RAILWAY_GIT_COMMIT_SHA
 ARG CORE_SOURCE_COMMIT
 ENV CORE_SOURCE_COMMIT=${CORE_SOURCE_COMMIT:-${RAILWAY_GIT_COMMIT_SHA}}
-RUN --mount=type=secret,id=proxy_ca if [ -f /run/secrets/proxy_ca ]; then \
+RUN --mount=type=secret,id=proxy_ca \
+    --mount=type=cache,target=/root/.bun/install/cache \
+    if [ -f /run/secrets/proxy_ca ]; then \
       export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca GIT_SSL_CAINFO=/run/secrets/proxy_ca SSL_CERT_FILE=/run/secrets/proxy_ca; \
     fi; \
-    test -n "$CORE_SOURCE_COMMIT" && ./scripts/build-runtime.sh
+    test -n "$CORE_SOURCE_COMMIT" && ./scripts/compile-runtime.sh
 
 FROM node:22.14.0-bookworm-slim AS runtime
 # Toolchain for Topic-owned development and governed native/custom tool children.
