@@ -458,6 +458,67 @@ class ProcessSupervisorTests(SecurityTests):
             self.exit_called.set()
         return a.Agent(self.b, 'https://control.invalid', exit_on_crash=exit_callback)
 
+    def test_core_readiness_probes_immediately_with_short_bounded_backoff(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        process = self.fake_process()
+        agent.process = process
+        clock = [100.0]
+        events = []
+        attempts = [OSError('warming'), OSError('warming'), {'ok': True}]
+        def local(*args, **kwargs):
+            events.append('probe')
+            outcome = attempts.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        def sleep(delay):
+            events.append(('sleep', delay))
+            clock[0] += delay
+        agent.local = local
+        with patch.object(a.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(a.time, 'sleep', side_effect=sleep):
+            latency = agent.wait_for_core_ready(process, deadline_s=1.0)
+        self.assertEqual(events[0], 'probe')
+        delays = [event[1] for event in events if isinstance(event, tuple)]
+        self.assertEqual(len(delays), 2)
+        self.assertGreater(delays[0], 0)
+        self.assertLess(delays[0], 0.1)
+        self.assertLessEqual(max(delays), 0.1)
+        self.assertAlmostEqual(latency, sum(delays), places=6)
+        self.assertEqual(agent.core_ready_latency_ms, round(latency * 1000, 3))
+        self.assertTrue(agent.ready)
+        self.assertEqual(agent.readiness_state(), 'ready')
+
+    def test_core_readiness_deadline_never_sleeps_past_deadline(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        process = self.fake_process()
+        agent.process = process
+        clock = [50.0]
+        sleeps = []
+        agent.local = lambda *args, **kwargs: (_ for _ in ()).throw(OSError('warming'))
+        def sleep(delay):
+            sleeps.append(delay)
+            clock[0] += delay
+        with patch.object(a.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(a.time, 'sleep', side_effect=sleep):
+            with self.assertRaisesRegex(RuntimeError, 'Core startup timeout'):
+                agent.wait_for_core_ready(process, deadline_s=0.025)
+        self.assertLessEqual(sum(sleeps), 0.0250001)
+        self.assertTrue(all(0 < delay <= 0.1 for delay in sleeps))
+        self.assertFalse(agent.ready)
+
+    def test_core_readiness_child_exit_aborts_without_probe_or_sleep(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        process = self.fake_process()
+        process.exited.set()
+        agent.process = process
+        agent.local = lambda *args, **kwargs: self.fail('dead Core must not be probed')
+        with patch.object(a.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'Core exited during startup'):
+                agent.wait_for_core_ready(process, deadline_s=1.0)
+        sleep.assert_not_called()
+
     def test_unexpected_exit_marks_unready_and_requests_nonzero_agent_exit(self):
         agent = self.agent()
         process = self.fake_process()
@@ -856,6 +917,8 @@ class ReadinessProjectionTests(unittest.TestCase):
             handler.respond = lambda status, body, **_: replies.append((status, body))
             handler.do_GET()
             self.assertEqual(replies, [(200, {'alive': True, 'readiness': 'warming'})])
+            self.assertIsNotNone(agent.first_health_latency_ms)
+            self.assertGreaterEqual(agent.first_health_latency_ms, 0)
         finally:
             boundary.db.close()
             temp.cleanup()

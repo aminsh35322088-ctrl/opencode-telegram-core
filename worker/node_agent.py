@@ -455,6 +455,9 @@ class Agent:
         self.process_lock = threading.RLock()
         self.lifecycle_lock = threading.RLock()
         self.exit_on_crash = os._exit if exit_on_crash is None else exit_on_crash
+        self.agent_started_at_monotonic = time.monotonic()
+        self.first_health_latency_ms = None
+        self.core_ready_latency_ms = None
         self.ready = False
         self.lock = threading.RLock()
         self.sync_watcher = None
@@ -564,6 +567,44 @@ class Agent:
     def start_core(self):
         with self.lifecycle_lock:
             return self._start_core()
+
+    def wait_for_core_ready(self, process, *, deadline_s=10.0):
+        if deadline_s <= 0:
+            raise ValueError('Core readiness deadline must be positive')
+        started = time.monotonic()
+        deadline = started + deadline_s
+        delay = 0.01
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError('Core exited during startup')
+            with self.process_lock:
+                if self.process is not process or self.process_stopping:
+                    raise RuntimeError('Core startup lease ended')
+            try:
+                self.local('GET', '/global/health')
+            except Exception:
+                if process.poll() is not None:
+                    raise RuntimeError('Core exited during startup')
+                with self.process_lock:
+                    if self.process is not process or self.process_stopping:
+                        raise RuntimeError('Core startup lease ended')
+                now = time.monotonic()
+                if now >= deadline:
+                    raise RuntimeError('Core startup timeout')
+                sleep_for = min(delay, 0.1, deadline - now)
+                if sleep_for <= 0:
+                    raise RuntimeError('Core startup timeout')
+                time.sleep(sleep_for)
+                delay = min(delay * 2, 0.1)
+                continue
+            with self.process_lock:
+                if self.process is not process or self.process_stopping or process.poll() is not None:
+                    raise RuntimeError('Core startup lease ended')
+                self.ready = True
+                self.runtime_selftest_stopping = False
+            latency = max(0.0, time.monotonic() - started)
+            self.core_ready_latency_ms = round(latency * 1000, 3)
+            return latency
 
     def _start_core(self):
         with self.process_lock:
@@ -675,22 +716,13 @@ class Agent:
         finally:
             if delegated_fd is not None:os.close(delegated_fd)
         self.supervise_core(process)
-        # Bounded startup checks only; no background polling or idle traffic.
-        for _ in range(100):
-            if process.poll() is not None:
-                raise RuntimeError('Core exited during startup')
-            try:
-                self.local('GET', '/global/health')
-                with self.process_lock:
-                    if self.process is not process or self.process_stopping or process.poll() is not None:
-                        raise RuntimeError('Core startup lease ended')
-                    self.ready = True
-                    self.runtime_selftest_stopping = False
-                return
-            except Exception:
-                time.sleep(.1)
-        self.stop_core()
-        raise RuntimeError('Core startup timeout')
+        # Immediate first probe, then short capped backoff under a strict deadline.
+        try:
+            self.wait_for_core_ready(process)
+        except Exception:
+            if process.poll() is None:
+                self.stop_core()
+            raise
 
     def core_environment(self):
         result = child_environment(os.environ)
@@ -1497,8 +1529,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         agent = self.server.agent
+        if self.path != '/health':
+            return self.respond(404, {'error': 'not found'})
+        if agent.first_health_latency_ms is None:
+            agent.first_health_latency_ms = round(max(0.0, time.monotonic() - agent.agent_started_at_monotonic) * 1000, 3)
         alive = not agent.retired and not agent.fatal_exit_requested
-        self.respond(200 if alive else 503, {'alive': alive, 'readiness': agent.readiness_state()}) if self.path == '/health' else self.respond(404, {'error': 'not found'})
+        self.respond(200 if alive else 503, {'alive': alive, 'readiness': agent.readiness_state()})
 
     def do_POST(self):
         if self.path != '/rpc':
