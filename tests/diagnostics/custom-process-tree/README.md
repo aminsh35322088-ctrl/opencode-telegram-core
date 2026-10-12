@@ -1,39 +1,16 @@
 # Escaped custom-process ownership diagnostic
 
-`detached-descendant.probe.ts` is a causal Linux probe, not a green cumulative
-regression or a shipped implementation. Run with the patched production package
-as `OPENCODE_PACKAGE_DIR`, beneath a test-only subreaper that joins all adopted
-children. It deliberately fails while the demonstrated ownership boundary is open.
+This directory preserves a causal Linux diagnostic for a custom process that survives its launcher. It is not a shipped implementation or a passing cumulative regression. For the production process contract and current release status, see the Core root README and docs/MINIMUM_TELEGRAM_RELEASE.md.
 
-On source `58ce9b2`, a successful `context.process.execFile` launcher exits and
-invocation cleanup returns. Admission returns from zero to zero, yet the captured
-`sleep` PID/start-time identity remains alive in its own process group. The fixture
-then kills only that captured identity; the outer subreaper performs reaping.
-This demonstrates successful-release escape, separately from Bun crash containment.
+## Probes
 
-`compiled-detached-descendant.probe.py` reproduces the same boundary through the
-actual compiled model/custom-tool API. A FIFO handshake proves the descendant
-has entered its new session before its launcher can finish. Source `58ce9b2`
-returns a successful custom-tool result and acknowledges `/global/dispose`, yet
-the same captured live descendant identity survives. It then cleans its fixture
-before the subreaper exits. This is a compiled-runtime regression, not native smoke.
+- detached-descendant.probe.ts exercises the source-level custom process API.
+- compiled-detached-descendant.probe.py reproduces the case through the compiled runtime and actual model/custom-tool API.
 
-The frozen Bot's Playwright CLI dependency is `@playwright/cli@0.1.18`, which pins
-`playwright-core@1.63.0-alpha-2026-08-05`. Read-only package inspection confirms:
+Run the probes only with the matching patched production package as OPENCODE_PACKAGE_DIR and under a test-only subreaper that joins adopted children. The fixture deliberately fails while the demonstrated ownership boundary is open and then cleans up its captured process identity.
 
-- `lib/tools/cli-client/session.js` starts its persistent daemon with
-  `detached: true`.
-- `lib/coreBundle.js`, `launchProcess`, launches browsers with
-  `detached: process.platform !== "win32"`.
+On source 58ce9b2, a successful context.process.execFile launcher exits and invocation cleanup returns. Admission returns from zero to zero, but the captured sleep PID/start-time identity remains alive in its own process group. The compiled probe uses a FIFO handshake to prove the descendant entered its new session before the launcher finished; the custom tool reports success and acknowledges /global/dispose while the captured descendant remains alive. This distinguishes a successful-release escape from Bun crash containment.
 
-Tarball: https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz
+The frozen Bot browser dependency was inspected read-only: @playwright/cli@0.1.18 pins playwright-core@1.63.0-alpha-2026-08-05. Its persistent session daemon and browser launchers use detached processes. This shows why launcher-group cleanup alone cannot establish ownership of a persistent browser daemon; it is evidence about package behavior, not an execution test of Chromium.
 
-Published integrity: `sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==`.
-
-This is implementation evidence that launcher-group cleanup is insufficient for
-the required persistent-browser target. It is not an execution test of Chromium
-and does not authorize changing Bot or removing the required browser capability.
-
-Do not move this probe into the passing cumulative gate until the shared process
-ownership primitive actually retires the escaped descendant and retains admission
-through confirmed retirement. Do not relabel a launcher lease as daemon ownership.
+Do not move this probe into the passing cumulative gate until the shared process-ownership primitive retires the escaped descendant and retains admission until confirmed retirement. Do not relabel a launcher lease as daemon ownership, and do not remove the Bot browser capability on the basis of this diagnostic.

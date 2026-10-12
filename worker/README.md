@@ -1,90 +1,62 @@
 # Topic Worker agent
 
-`Dockerfile.worker` builds the pinned compiled Core and runs a root-owned Python
-agent. Core runs as UID 1000 on loopback. Public access is limited to `/health`
-and authenticated `/rpc`; the raw Core API is never public.
+The Topic Worker is the per-Topic runtime boundary used by the Bot Control Plane. Its purpose is to run one Telegram Topic's OpenCode server and workspace behind a narrow authenticated RPC surface. It does not poll Telegram or provision Railway resources.
 
-The Bot control plane provisions the dedicated `/data` volume, identity,
-generation and per-node signing key. `NODE_SHARED_SECRET` is captured before
-Core starts and is excluded from its environment. No Railway provisioning
-credential belongs in this service.
+## Responsibilities
 
-RPC signs exact UTF-8 envelope bytes with HMAC-SHA256. Envelopes bind node,
-generation, Telegram chat/thread, session, operation, timestamp and nonce.
-Replay admission persists in root-owned SQLite. Streaming exists only for an
-active prepared run and includes signed, session-filtered event frames. Stream
-readiness uses a separate signed acknowledgment before prompt dispatch.
+| Component | Responsibility |
+|---|---|
+| Dockerfile.worker | Builds the pinned OpenCode Telegram Core runtime and Python Worker agent |
+| node_agent.py | Starts the root-owned agent, exposes health/RPC, validates requests, and coordinates Core lifecycle |
+| bootstrap_identity.py and cloud_bootstrap.py | Install the identity, generation, signing material, and initial configuration provided by the Control Plane |
+| control_bridge.py | Calls the Bot Control Plane for narrowly scoped operations and credentials |
+| credential_broker.py and credential_transport.py | Acquire purpose- and capability-bound credential leases when a supported request needs them |
+| provider_proxy.py, github_proxy.py, mcp_proxy.py | Forward supported provider/GitHub/MCP traffic without persisting plaintext credentials in Core config |
+| action_runtime.py and runtime_tools/ | Resolve enabled generated actions and provide explicit browser/network helper capabilities |
+| single_slot.py | Enforce one-Topic-at-a-time state and safe retirement/reuse |
+| git_shim.py, tailscale_remote.py, tailscale_runtime.py | Provide constrained Git and optional network/runtime integration bridges |
 
-Global snapshots use canonical JSON hashes, verified Skill hashes, immutable
-staging and atomic activation. Only current and rollback artifact versions are
-retained. Each materialization admits at most 32 MiB including filesystem block
-overhead and reserves 16 MiB free disk; interrupted staging is reclaimed before
-a retry. Verified revision fencing is separate from known-good activation proof:
-a failed Core activation may restore only the exact prior known-good hash, while
-corrupt active caches cannot restore an older successfully activated revision.
-Public request admission is capped at eight threads before header/body reads,
-with a 15-second header timeout. Core configuration and tools are root-owned; session data and the
-Topic workspace remain UID 1000-owned. Package and build caches use `/tmp`.
-Snapshots contain credential references, never plaintext credentials.
+## Trust boundaries
 
-The provider proxy leases credentials on demand and inserts them into fixed
-authorized HTTPS provider requests in memory. The local model tool bridge can
-prepare or commit an exact global mutation through the control plane; it cannot
-issue a Telegram approval receipt. No idle outbound heartbeat or polling loop
-is installed.
+- The Bot Control Plane provisions the dedicated /data volume, Worker identity, generation, and per-node signing key. Railway provisioning credentials remain in the Control Plane.
+- The Worker does not receive TELEGRAM_BOT_TOKEN or RAILWAY_API_TOKEN.
+- The agent runs as root to own configuration, identity, and lifecycle supervision. OpenCode Core runs as UID 1000 on loopback; Topic session/workspace data remains owned by that runtime user.
+- Public HTTP exposes readiness and authenticated RPC only. The raw OpenCode API is not public.
+- NODE_SHARED_SECRET is captured before Core starts and removed from Core's environment.
+- Package/build caches live in /tmp; durable Topic data lives on the dedicated volume.
 
-The compiled integration probe is `tests/worker/compiled_agent.py`. It verifies
-real model/shell execution, signed events, Question replies, pause/resume,
-joining stopped shell processes and persistent restart recovery. Unit tests are
-included in the existing root unittest discovery through `tests/test_worker.py`.
+## RPC and event flow
 
-This prerelease supplies the Worker boundary. Production readiness also requires
-the Bot's authenticated control endpoint, allocator, catalog, credential leases,
-Telegram routing and end-to-end Railway tests. Secure remote MCP credential
-materialization and the complete generated Action execution path require that
-control-plane integration; stored metadata alone is not proof of execution.
-# Remote MCP credential boundary
+RPC signs the exact UTF-8 request envelope with HMAC-SHA256. The signed fields bind node, generation, Telegram chat/thread, session, operation, timestamp, and nonce. Replay admission is stored in root-owned SQLite. Public request concurrency is bounded before request body reads; header parsing has a finite timeout.
 
-Remote MCP URLs are rewritten to a root Agent loopback proxy. During an admitted
-owned run, the proxy requests `credential.get` with purpose `mcp.request`, exact
-`mcp:<name>` capability, snapshot credential reference ID, original HTTPS endpoint,
-and bound session. Leased headers remain in Agent memory for at most 60 seconds;
-Core configuration, process environment and logs receive no credential values.
-Uncredentialed remote servers use the same endpoint boundary without a lease.
+Streaming is available only for a prepared, active run. Signed event frames are filtered to the bound session and run provenance. The Worker returns a separate signed stream-ready acknowledgment before the Control Plane dispatches the prompt, so a successfully created session is not confused with an active delivery path.
 
-The proxy supports Streamable HTTP POST/GET/DELETE and preserves MCP session and
-protocol headers. Public DNS addresses are pinned with verified TLS, redirects
-are refused, requests are bounded to 10 MiB and responses to 32 MiB. Active
-streams are closed on execution completion, stop, reload or retirement; there is
-no idle reconnect or credential refresh. A stream exceeding ten minutes closes
-that capability connection, without stopping the Core execution.
+## Snapshot, credentials, and generated actions
 
-Legacy SSE endpoint negotiation and OAuth client acquisition are unsupported and
-fail closed. An existing safely leased access token may authenticate a Streamable
-HTTP server; Core is configured with OAuth disabled for its local proxy route.
-The compiled MCP probe uses an offline synthetic upstream transport; it verifies
-real Core discovery and tool execution, while DNS/TLS rejection is unit-tested.
+Global snapshots use canonical JSON hashes and verified Skill hashes. They are staged immutably, checked against per-materialization disk limits, and activated atomically. Only active and rollback artifacts are retained. Interrupted staging is reclaimed before retry. A failed activation may restore only the exact previously known-good hash; a corrupt active cache is not evidence that an older revision is safe.
 
-Pending credential and TCP/TLS requests are cancellable without holding the runtime retirement lock. Unsupported remote transport configuration marks only that runtime capability unavailable; it does not block ordinary Topic AI or alter canonical Global enabled settings.
+Snapshots contain credential references rather than plaintext credentials. Provider and remote MCP proxies lease secrets only for an admitted, bound operation and keep them in memory for a bounded time. Core configuration, process environment, logs, and model prompts must not receive lease values. Remote MCP uses the fixed Streamable HTTP boundary described below; unsupported OAuth/SSE negotiation fails closed.
 
-## Single-slot reuse and unbound capacity
+Generated action discovery resolves exact enabled snapshot records and immutable arguments. Execution uses the resolved native, action, or MCP tool inside the current Core permission/process context. The bridge does not expose a generic remote tool-execution endpoint, and a model cannot mint a Telegram approval.
 
-A Worker owns one slot and at most one Topic at a time. `chatId=0` and `threadId=0`
-mean `ready-unbound`: the root Agent is healthy and the slot can accept exactly one
-new Topic. Session/model execution still fails closed until a bound Core reaches
-authenticated `ready`. Railway `GET /health` is Agent liveness only and therefore
-does not wait for Core/model readiness.
+## One Topic per Worker and lifecycle
 
-`Delete Chat` moves the current slot to `RETIRING`, joins the Core and owned
-processes/streams, sanitizes Topic/session/workspace state, and rotates identity to
-the exact next generation with new signing material. Only that proven clean state
-may become `ready-unbound`. A clean unbound generation may fence itself and accept
-the next Topic in-place without an extra external retire round-trip; stale traffic
-from every prior generation remains rejected. Any uncertain Core, callback,
-listener, credential proxy, or descendant cleanup prevents reuse and retires the
-container instead.
+A Worker owns one slot. chatId=0 and threadId=0 mean ready-unbound: the root agent is alive and the slot may accept one new Topic. Session/model execution remains unavailable until a bound Core reports authenticated ready. Railway GET /health reports agent liveness and deliberately does not claim Core/model readiness.
 
-Generated action discovery resolves exact enabled snapshot records and immutable
-fixed arguments through the materialized `actions` tool. Execution uses the
-resolved native/action/MCP tool in the active Core permission/process context;
-the bridge does not expose a generic tool-execution endpoint.
+Delete Chat moves the slot to RETIRING, joins Core and owned processes/streams, sanitizes Topic/session/workspace state, and rotates to the exact next generation with new signing material. Only proven clean state becomes ready-unbound. A clean unbound generation can fence itself before accepting the next Topic; traffic from every prior generation remains rejected. Uncertain Core, callback, listener, credential-proxy, or descendant cleanup prevents reuse and retires the container.
+
+The Bot allocator may select another Worker when a slot is unavailable. The Worker never makes a capacity claim based on its liveness check alone.
+
+## Remote MCP credential boundary
+
+Remote MCP URLs are rewritten to a root-agent loopback proxy. During an admitted owned run, the proxy requests credential.get with purpose mcp.request, the exact mcp:<name> capability, a snapshot credential reference, original HTTPS endpoint, and bound session. Leased headers stay in Agent memory for at most 60 seconds. Uncredentialed servers use the same endpoint boundary without a lease.
+
+The proxy supports Streamable HTTP POST/GET/DELETE and preserves MCP session/protocol headers. Public DNS addresses are pinned with verified TLS, redirects are refused, requests are bounded to 10 MiB, and responses to 32 MiB. Active streams close on completion, stop, reload, or retirement. There is no idle reconnect or credential refresh; a stream exceeding ten minutes closes its capability connection without stopping the Core execution.
+
+Legacy SSE negotiation and OAuth client acquisition are unsupported and fail closed. A safely leased access token may authenticate a Streamable HTTP server while Core OAuth remains disabled for the local proxy route.
+
+## Tests and operational references
+
+The compiled integration probe is tests/worker/compiled_agent.py. It exercises real model/shell execution, signed events, Question replies, execution control, process joining, and persistent restart recovery. Python unit tests are included in root unittest discovery through tests/test_worker.py. Run the root verification commands in ../README.md; a Worker /health response alone is not an end-to-end readiness check.
+
+The Bot owns Railway project/service/volume provisioning and capacity policy. The Worker owns one provisioned slot's runtime boundary. See the root Core README, docs/RAILWAY_CONTAINMENT_BOUNDARY.md, and docs/WORKER_RUNTIME_PARITY.md for the related contracts and current release status.
