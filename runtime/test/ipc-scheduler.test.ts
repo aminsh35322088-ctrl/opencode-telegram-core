@@ -1,18 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
-  BindingRegistry,
-  InMemoryExecutionLedger,
   OutboundGateway,
   RunRegistry,
-  ScheduledTaskDispatcher,
   WorkerOutboundGate,
   WorkerProtocolError,
-  WorkerSupervisor,
   type BindingIdentity,
   type OutboundEnvelope,
-  type ScheduledTaskRecord,
   type TopicWorker,
 } from "../src/index.js";
+import { BindingRegistry, InMemoryExecutionLedger, ScheduledTaskDispatcher, WorkerSupervisor, type ScheduledTaskRecord } from "../src/legacy.js";
 
 function binding(id = "a", threadId = 11): BindingIdentity {
   return {

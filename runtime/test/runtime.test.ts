@@ -3,19 +3,18 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  BindingRegistry,
   OutboundGateway,
   QueuePoisonedError,
   RunRegistry,
   SerialTaskQueue,
   TelegramApiBudgetClient,
-  WorkerSupervisor,
   assertWorkspacePath,
   completed,
   type BindingIdentity,
   type OutboundEnvelope,
   type TopicWorker,
 } from "../src/index.js";
+import { BindingRegistry, WorkerSupervisor } from "../src/legacy.js";
 
 function binding(overrides: Partial<BindingIdentity> = {}): BindingIdentity {
   return {

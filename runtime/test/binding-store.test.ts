@@ -3,10 +3,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  AtomicBindingStore,
-  BindingIntegrityError,
   type BindingIdentity,
 } from "../src/index.js";
+import { AtomicBindingStore, BindingIntegrityError } from "../src/legacy.js";
 
 function binding(id = "a", threadId = 11): BindingIdentity {
   return {

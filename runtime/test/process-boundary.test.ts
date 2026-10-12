@@ -3,7 +3,6 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  BindingRegistry,
   OutboundGateway,
   RunRegistry,
   WorkerOutboundGate,
@@ -11,6 +10,7 @@ import {
   type BindingIdentity,
   type OutboundEnvelope,
 } from "../src/index.js";
+import { BindingRegistry } from "../src/legacy.js";
 
 function binding(id: string, threadId: number): BindingIdentity {
   return {

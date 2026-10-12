@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  BindingRegistry,
-  RichStreamFencedError,
   RunRegistry,
-  TelegramRichStreamController,
   renderTelegramRichDocument,
   type AgentDocument,
   type BindingIdentity,
@@ -11,6 +8,7 @@ import {
   type RichDraftRoute,
   type RichMessagePort,
 } from "../src/index.js";
+import { BindingRegistry, RichStreamFencedError, TelegramRichStreamController } from "../src/legacy.js";
 import type { InputRichMessageWithoutUpload } from "grammy/types";
 
 function binding(): BindingIdentity {
