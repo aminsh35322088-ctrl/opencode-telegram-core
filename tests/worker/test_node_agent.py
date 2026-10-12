@@ -12,6 +12,37 @@ a = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(a)
 
 
+class WorkspaceOwnershipTests(unittest.TestCase):
+    def test_startup_ownership_is_constant_time_and_never_walks_project_files(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / 'topic'
+            home = workspace / 'home'
+            nested = workspace / 'src' / 'deep'
+            nested.mkdir(parents=True)
+            home.mkdir()
+            sentinel = nested / 'many-files-stay-model-owned.txt'
+            sentinel.write_text('owned-by-core')
+            calls = []
+            with patch.object(a.os, 'walk', side_effect=AssertionError('workspace tree walk is forbidden on Core startup')):
+                with patch.object(a.os, 'chown', side_effect=lambda target, uid, gid, **kwargs: calls.append((Path(target), uid, gid, kwargs))):
+                    a.prepare_workspace_ownership(workspace, home)
+            self.assertEqual([item[0] for item in calls], [workspace, home])
+            self.assertTrue(all(item[1:3] == (1000, 1000) for item in calls))
+            self.assertNotIn(sentinel, [item[0] for item in calls])
+
+    def test_startup_ownership_rejects_workspace_or_home_symlink(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / 'real'
+            real.mkdir()
+            workspace = root / 'topic'
+            workspace.symlink_to(real, target_is_directory=True)
+            with patch.object(a.os, 'chown'):
+                with self.assertRaisesRegex(ValueError, 'workspace'):
+                    a.prepare_workspace_ownership(workspace, workspace / 'home')
+
 class SecurityTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

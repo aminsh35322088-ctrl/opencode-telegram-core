@@ -156,6 +156,20 @@ def materialize_image_tool(tools, source_path, filename):
     atomic(tools / filename, data)
 
 
+def prepare_workspace_ownership(workspace, home):
+    workspace, home = Path(workspace), Path(home)
+    if workspace.is_symlink() or not workspace.is_dir():
+        raise ValueError('Core workspace must be a real directory')
+    if home.is_symlink() or not home.is_dir() or home.parent != workspace:
+        raise ValueError('Core workspace home must be a real direct child')
+    # Topic contents are created by the demoted Core (uid/gid 1000). Rewalking
+    # an arbitrarily large project on every restart adds O(files) cold-start
+    # latency and can block on Railway volume metadata. Only the two directories
+    # created by the root Agent require ownership handoff.
+    os.chown(workspace, 1000, 1000, follow_symlinks=False)
+    os.chown(home, 1000, 1000, follow_symlinks=False)
+
+
 def child_environment(source):
     # Allowlist rather than guessing every credential variable's name.
     allowed = {'PATH', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'SSL_CERT_DIR'}
@@ -707,10 +721,7 @@ class Agent:
                         raise ValueError('canonical runtime file cannot be symlink')
                     os.chown(location, 0, 0, follow_symlinks=False)
                     os.chmod(location, 0o644)
-            for base, dirs, files in os.walk(self.workspace):
-                os.chown(base, 1000, 1000, follow_symlinks=False)
-                for name in files:
-                    os.chown(Path(base) / name, 1000, 1000, follow_symlinks=False)
+            prepare_workspace_ownership(self.workspace, home)
             def demote():
                 os.setgroups([])
                 os.setgid(1000)
