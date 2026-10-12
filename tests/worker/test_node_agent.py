@@ -554,6 +554,25 @@ class ProcessSupervisorTests(SecurityTests):
         self.assertEqual(agent.slot.state.value, 'READY')
         self.assertEqual(agent.readiness_state(), 'ready')
 
+    def test_core_readiness_probe_timeout_never_exceeds_remaining_deadline(self):
+        from unittest.mock import patch
+        agent = self.agent()
+        process = self.fake_process()
+        agent.process = process
+        clock = [70.0]
+        observed = []
+        def local(method, route, payload=None, timeout=30):
+            observed.append(timeout)
+            raise OSError('warming')
+        def sleep(delay):
+            clock[0] += delay
+        agent.local = local
+        with patch.object(a.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(a.time, 'sleep', side_effect=sleep):
+            with self.assertRaisesRegex(RuntimeError, 'Core startup timeout'):
+                agent.wait_for_core_ready(process, deadline_s=0.025)
+        self.assertTrue(observed)
+        self.assertTrue(all(0 < timeout <= 0.0250001 for timeout in observed), observed)
+
     def test_core_readiness_deadline_never_sleeps_past_deadline(self):
         from unittest.mock import patch
         agent = self.agent()
@@ -742,6 +761,24 @@ class UnboundTests(unittest.TestCase):
     def tearDown(self):
         self.b.db.close()
         self.temp.cleanup()
+
+    def test_bootstrap_retries_transient_core_startup_before_activation(self):
+        from unittest.mock import patch
+        snapshot = dict(version=1, revision=1, configuration={'runtime': {}}, skills=[], actions=[], catalog={}, defaults={}, credentialReferences=[])
+        snapshot['hash'] = a.digest(snapshot)
+        self.agent.outbound = lambda op, payload: snapshot
+        attempts = []
+        def start_core():
+            attempts.append(len(attempts) + 1)
+            if len(attempts) == 1:
+                raise RuntimeError('transient Core startup timeout')
+            self.agent.ready = True
+        self.agent.start_core = start_core
+        with patch.object(a.time, 'sleep') as sleep:
+            self.agent.bootstrap()
+        self.assertEqual(attempts, [1, 2])
+        sleep.assert_called_once()
+        self.assertEqual(self.b.get('activatedSnapshotHighwater'), {'revision': 1, 'hash': snapshot['hash']})
 
     def test_bootstrap_health_and_global_sync_without_session(self):
         snapshot = dict(version=1, revision=1, configuration={'runtime': {}}, skills=[], actions=[], catalog={}, defaults={}, credentialReferences=[])

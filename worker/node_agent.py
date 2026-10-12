@@ -22,6 +22,10 @@ MAX_BODY = 10 * 1024 * 1024
 MAX_SNAPSHOT_DISK = 32 * 1024 * 1024
 SNAPSHOT_DISK_RESERVE = 16 * 1024 * 1024
 MAX_SAFE_INTEGER = 9007199254740991
+CORE_STARTUP_DEADLINE_S = 90.0
+CORE_READINESS_PROBE_TIMEOUT_S = 2.0
+CORE_BOOTSTRAP_ATTEMPTS = 3
+CORE_BOOTSTRAP_RETRY_DELAY_S = 1.0
 BROWSER_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "browser.ts"
 
 
@@ -548,8 +552,18 @@ class Agent:
         except (OSError, TimeoutError):
             if self.boundary.snapshot is None:
                 return
-        self.start_core()
-        self.boundary.confirm_activation()
+        for attempt in range(1, CORE_BOOTSTRAP_ATTEMPTS + 1):
+            try:
+                self.start_core()
+                self.boundary.confirm_activation()
+                return
+            except Exception:
+                if self.retired or self.fatal_exit_requested:
+                    raise
+                if attempt >= CORE_BOOTSTRAP_ATTEMPTS:
+                    self.fatal_core_exit()
+                    raise
+                time.sleep(CORE_BOOTSTRAP_RETRY_DELAY_S * attempt)
 
     def fatal_core_exit(self):
         with self.process_lock:
@@ -597,7 +611,7 @@ class Agent:
         with self.lifecycle_lock:
             return self._start_core()
 
-    def wait_for_core_ready(self, process, *, deadline_s=10.0):
+    def wait_for_core_ready(self, process, *, deadline_s=CORE_STARTUP_DEADLINE_S):
         if deadline_s <= 0:
             raise ValueError('Core readiness deadline must be positive')
         started = time.monotonic()
@@ -609,8 +623,12 @@ class Agent:
             with self.process_lock:
                 if self.process is not process or self.process_stopping:
                     raise RuntimeError('Core startup lease ended')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError('Core startup timeout')
+            probe_timeout = min(CORE_READINESS_PROBE_TIMEOUT_S, remaining)
             try:
-                self.local('GET', '/global/health')
+                self.local('GET', '/global/health', timeout=probe_timeout)
             except Exception:
                 if process.poll() is not None:
                     raise RuntimeError('Core exited during startup')
