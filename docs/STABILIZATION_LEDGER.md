@@ -475,6 +475,29 @@ a licence to re-expose a control.
 
 ---
 
+### 4.6 Soak harness reported passes it had not earned — found by the first executed stress run
+
+The first `stage=stress` run (`38370753677`) executed the registered workload and, in doing
+so, showed that several harness "passes" were not earned. Each defect below made the harness
+assert something the evidence did not support; each was fixed red → green in the Bot
+repository.
+
+| | |
+|---|---|
+| Symptom 1 — a refused Stop reported as confirmed | Run `38368783928` recorded `W5/stop pass` with `confirmedBy: "message"`, while its own Bot log shows `Refused unattributable native Stop: … draft=4, reason=unknown-draft` and `result=stale-draft`. A message published after the press is equally consistent with the run having finished on its own — which is exactly what had happened |
+| Symptom 2 — W6 exercised the wrong workload | The registry requires "Delete a Chat **while its run is active**". The harness deleted an *idle* Topic and counted `deleteForumTopic` attempts, so it could not see the cancel-then-cleanup path at all |
+| Symptom 3 — the live-run precondition was a race | The stub model ended a run in ~0.4 s (120 tokens / 8 per piece / 25 ms), so "the run was still active when the control arrived" was a coin flip — the same ambiguity that produced symptom 1 |
+| Symptom 4 — a cycle bound itself to a deleted Topic | In run `38370753677`, **2 of 167 cycles** recorded W1 with the thread id the *previous* cycle had just deleted (`10152`, `10159`). The Bot logged `Rejected stale Topic metadata` 100 ms later — it was right to refuse; W2 timed out after 90 s, W5 found no draft, W6's confirmation never arrived. Cause: `flowNewChat` waited for "threads grew **or any** message growth" and then took `at(-1)`, which during New Chat's multi-second workspace/session/binding setup was still the deleted Topic |
+| Fix | `d95ed0ca` — Stop is confirmed only by the Bot's own `result=confirmed` for that exact draft, and only once a registered draft exists; a refusal surfaces as `Stop refused by the Bot: <reason>` instead of timing out. `82a1fb58` — W6 deletes during a live run, reads per-Topic evidence from the Bot's log (`deleteOutcome`), observes the topic disappearing (`topicGone`, stub now implements `deleteForumTopic`), and asserts the recreated Topic is genuinely new. `f64ae490` — the long prompt streams ~13 s (measured 12.8 s locally, vs 0.5 s), so the live-run precondition and D2 are real. `b5fb27c1` — a Topic counts as created only when an id absent from the baseline appears (`newThreadId`). `3c62a2d4` — adds the controlled restart the gates needed (`bot-restart.sh`, one materialised environment shared by first boot and every restart) |
+| Guard | `tests/soak-harness.test.ts` — 13 cases over the harness's judgement rules: message-only Stop growth must not confirm; a refusal must return its reason; another Topic's delete must not satisfy this Topic's evidence; a deleted Topic's id being the newest is not a Topic being created; an unchanged pid means nothing was restarted |
+| Proof | Each new signal was written as a failing test first (`TypeError: … is not a function`), then implemented → **13/13**. Full suite 252 pass / 14 fail with a failing set byte-identical to the documented Windows-only remainder (§3.3); `tsc --noEmit` and `eslint src --max-warnings=0` clean. The Stop and W6 defects were then re-measured in CI: run `38370201462` shows `draftId:1, source:"stub-draft", confirmedBy:"bot-log", confirmMs:302, lateDelta:0` with the Bot logging `result=confirmed` for `draft=1` |
+
+**The rule this produced:** the harness may only report what it observed, and every judgement
+rule must be a testable pure function. "A green workflow exit is not evidence" now has three
+concrete ways it was violated, each with a regression case.
+
+---
+
 ## 5. Soak / elapsed-time gates — **PENDING**
 
 The workload, acceptance criteria, failure criteria, resource bounds and deadlines are now
@@ -555,6 +578,28 @@ Until the elapsed time has actually accrued, the correct status of the stable re
    `readiness: "ready-unbound"` (§1.6); probes were taken with no active session. Whether
    a session is actually routed to exactly one Worker has not been demonstrated end to end
    against the live deployment.
+8. **The shared OpenCode server's RSS grows with session churn, and cannot be attributed
+   from outside the process.** Stress run `38370753677` (§5) sampled it every cycle: 538 MB
+   at cycle 1 → 3 755 MB at cycle 111 (peak 4 033 MB), roughly 30 MB per cycle, with partial
+   reclaim — 64 rising and 46 falling samples, so F6 as written ("grows **monotonically**
+   … without reclaim") does not fire, though the trend clearly does. The Bot daemon itself
+   was stable throughout (RSS 172–178 MB, heap 38–57 MB, cgroup process count 114–126), and
+   this is *not* a leaked-session path: topic deletion deletes the OpenCode session
+   (`deleteTelegramTopicSession` → `core.revokeBinding` → `cleanupBinding` →
+   `cleanupTelegramTopicSessionMetadata` → `session.delete`, `telegram-topic-delete-service.ts:100`).
+   What cannot be determined from outside is whether the retained memory is a V8 high-water
+   mark or a genuine leak: the harness observes RSS but not the child's heap. Against the
+   Bot's own registered envelope (`docs/PROCESS_BUDGET.md`: OpenCode server 256 MiB reserved,
+   98 % pressure ceiling) the child ran 2–15× over its reservation for the whole run. Settling
+   this needs an OpenCode-side heap metric or a controlled restart of the *child* (the added
+   W7 flow restarts the Bot only); until then no resource claim is made either way.
+9. **`SOAK_GATES.md` §5's 120 000 000-byte per-process ceiling, read literally, fails the
+   current runtime on its own.** F7 fires for the Bot daemon (172 MB RSS) before it ever
+   reaches the OpenCode server, and the bound is stricter than the product's own envelope
+   (192 MiB reserved for the Bot daemon, 256 MiB for the OpenCode server). It is not
+   interpretable as written, so it is recorded here for the registry owner rather than
+   silently re-interpreted to make a gate pass — the registration rule is that a result may
+   not be retro-fitted to an outcome, and the same applies to a *bound*.
 
 ### 6.2 Verified / do not reopen
 
