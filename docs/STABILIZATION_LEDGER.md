@@ -237,6 +237,20 @@ pushes to `main`.
 but are referenced by no workflow file. They are currently dead gates. Either wire them
 into CI or document them as unsupported.
 
+### 2.5 Bot CI @ `ce227128` — run `38340757408` — **success** (2m50s, `2026-10-13T03:17:19Z`)
+
+Job `validate` = `success` for the Telegram-Stop attribution fix and the docs-alignment
+change (§4.2, §4.3). The run executes, in order: `verify-core-install.mjs`, root
+`node --import tsx --test tests/*.test.ts` (this is the step that carries
+`tests/native-stop-attribution.test.ts` and `tests/legacy-run-controls-audit.test.ts`),
+then `rm -rf tests` and materialization of `.github/ci-tests/tests`, then
+`npm run lint`, `npm run typecheck`, `npm run build`, and the full vitest suite.
+Workflow `Publish` = `skipped` (same `github.repository` guard as §2.3).
+
+Local equivalent on Windows, recorded for comparison only (§3): `tsc --noEmit` exit 0,
+`eslint src --max-warnings=0` exit 0, root suite 243 tests / 138 pass / 105 fail — the 105
+are the pre-existing Windows-only set, **byte-identical** before and after the change.
+
 ---
 
 ## 3. Verification evidence — local Windows (non-authoritative, environment-limited)
@@ -343,21 +357,72 @@ committed.
 
 ---
 
+### 4.2 Bot: Telegram native Stop was not attributed to the stopped generation draft
+
+Product decision in force: the Bot exposes **exactly one** execution control — Telegram's
+own Stop. Pause / Resume / Abort commands, buttons and keyboard entries were removed by the
+owner and must not return. Internal cancellation primitives are implementation detail, not
+a licence to re-expose a control.
+
+| | |
+|---|---|
+| Reported symptom | Pressing Telegram Stop on an **old** generation draft could cancel a **newer** run of the same Topic, and cleared that newer run's interaction state |
+| Claimed status before | `cancelStoppedGeneration` logged `draft=` but never used it; it called `cancelCurrentRun({ reason })` with no attribution |
+| Root cause | `stopped_message_generation.draft_id` was ignored (`src/bot/middleware/auth.ts`, `cancelStoppedGeneration`). Abort scope was "the session that is live", so any live run was cancelled — violating "Stop cancels exactly that run" and "Stop must not stop a newer run". Core ships a draft-correlated stop, but the reachable Bot path never wired it |
+| Second-order effect | `cancelCurrentRun` cleared interaction state **before** aborting, so an unattributable Stop also wiped a newer run's state |
+| Fix | (a) `src/bot/messages/telegram-text.ts` — registry of Bot-issued generation drafts keyed by `chatId:draftId` now records the creation instant, keeps the earliest timestamp when a draft is re-sent, and registers **every** `can_stop` draft including `sendDraftBotPart`; (b) `src/app/services/current-run-cancellation-service.ts` — new `stopAttribution` option and new result `stale-draft`, checked immediately after target resolution and **before** any local state is cleared; (c) `src/bot/middleware/auth.ts` — passes `{ chatId, draftId }` |
+| Attribution rule | refuse when the draft is unknown or expired, when no run is active, or when the active run started **after** the draft was issued |
+| Product code changed? | Yes |
+| Red → green proof | New `tests/native-stop-attribution.test.ts` (5 cases). RED: missing export → suite failed. GREEN: 7/7 together with `tests/current-run-cancellation-service.test.ts`. Mutation: guard forced to `false` → `not ok 1 - native Stop on a draft that predates the active run must not abort the newer run`; guard restored |
+| Regression proof | Full local root suite run twice, with and without the change: **identical** failure name sets (105/243 pre-existing Windows-only failures; 0 new). `tsc --noEmit` exit 0, `eslint src --max-warnings=0` exit 0 |
+| Landed | Bot commit `ce22712849d723008fc6f271da2065624bba960f` (pushed `4208ee70..ce227128`) |
+| Linux evidence | Bot CI run `38340757408` on `ce227128` → `validate = success` (`2026-10-13T03:17:19Z`, 2m50s); Publish job `skipped` (repo-name guard) |
+| Covers of `SOAK_GATES.md` §3 | Contract-level coverage of **S1** and **S5**; **S2, S3, S4, S6–S10 require the real run** and stay `PENDING` (gate G2) |
+
+---
+
+### 4.3 Documentation presented removed controls as current behavior
+
+| | |
+|---|---|
+| Symptom | `README.md`, `PRODUCT.md`, `docs/RAILWAY.md` and the **current** release notes still documented `/abort`, `/sessions`, `/new` and pause/resume behavior — commands that are not registered anywhere in `src` |
+| Verification | `bot.command(...)` registration scan over all of `src`: 33 commands, **no** `new`, `sessions`, `projects`, `abort` |
+| Fix | README: command table corrected, `/abort` row replaced by the Telegram Stop contract section, verification-table row reworded; `PRODUCT.md`: command list, interaction rules, capability checklist; `docs/RAILWAY.md`: command list; `docs/release-notes/v0.26.2.md` (the notes actually served to users) no longer claims paused-Topic behavior |
+| Guard | `tests/legacy-run-controls-audit.test.ts` extended with two cases: user-facing docs must not document `/pause`, `/resume`, `/abort`, and README must document Telegram Stop as the only execution control |
+| Red → green proof | Both new cases failed first (`README.md still documents /abort`, `README must document the Telegram native Stop control`), then passed; file now 5/5 |
+| Landed | Same commit `ce22712849d723008fc6f271da2065624bba960f` |
+
+---
+
 ## 5. Soak / elapsed-time gates — **PENDING**
 
-No gate below has been started. Per the release requirements, a stable artifact must not
+The workload, acceptance criteria, failure criteria, resource bounds and deadlines are now
+**registered in `docs/SOAK_GATES.md`** before execution, as required. Registering them is
+not running them.
+
+No gate below has been completed. Per the release requirements, a stable artifact must not
 be published while any of these is pending.
 
 | Gate | Required | State |
 |---|---|---|
-| Representative stress run | ≥ 2 h under active + idle phases | **pending — not started** |
-| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — no RC soak candidate selected yet** |
+| Representative stress run | ≥ 2 h under active + idle phases | **pending — registered in `SOAK_GATES.md` §7 (G1), not started** |
+| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8, no RC soak candidate selected yet** |
+| Telegram Stop contract S1–S10 | every row demonstrated with captured evidence | **pending — S1/S5 covered by committed tests only** |
+| Two-Worker isolation (W3) | interleaved message/file/state traces | **pending** |
+| Delete Chat cleanup + Worker reuse (W6) | resource inventory before/after | **pending** |
+| Recovery: retry / disconnect / restart | no duplicate execution, no stale output accepted | **pending** |
 | Restart evidence | repeated restarts observed during soak | **pending** |
 | Rollback proof | demonstrated revert to a known-good artifact | **pending** |
 | Railway physical evidence | service/deployment identity, env, resource profile | **pending — §1.6** |
+| Deployment gate (CI before deploy) | operator decision on `SOAK_GATES.md` §6 | **pending — operator decision** |
 
-The harness for these gates is not yet committed. Until it exists and the elapsed time has
-actually accrued, the correct status of the stable release is **blocked**.
+Environment constraint on the soak: destructive phases require a **separate test
+environment** (`SOAK_GATES.md` E1–E3) that does not exist yet and may not be created by
+adding paid resources. Until such an environment exists, or the harness runs headlessly in
+CI, the affected rows stay `pending — no admissible environment`.
+
+Until the elapsed time has actually accrued, the correct status of the stable release is
+**blocked**.
 
 ---
 
