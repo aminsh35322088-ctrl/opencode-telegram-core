@@ -43,7 +43,7 @@ Tailscale, inventoried read-only before any test:
 
 | Property | Value |
 |---|---|
-| Address | `100.93.106.19` (Tailscale peer `github-lab`, `tagged-devices`) |
+| Address | `100.93.106.19` (Tailscale peer `github-lab`, `tagged-devices`) — **stale**: on 2026-10-13 07:17Z `ssh runner@100.93.106.19` → `ssh: connect to host 100.93.106.19 port 22: Connection timed out` (exit 255). The peer re-registered as **`100.65.33.41`** (`tailscale status` → `github-lab … tagged-devices`; `tailscale ping github-lab` → pong via DERP sfo). Resolve the address from `tailscale status` before every session; never trust a recorded literal. |
 | Host / user | `runnervmmprz5` / `runner` (uid 1001, in `docker`, passwordless `sudo`) |
 | Platform | Azure `Standard_D4ads_v7`, `centralus`, kernel `6.17.0-1022-azure` |
 | Resources | 4 CPU, 15 989 MB RAM (~14.7 GB available), 145 GB disk (82 GB free) |
