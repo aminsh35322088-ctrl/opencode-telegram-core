@@ -30,9 +30,56 @@ durable copy of its acceptance conditions.
 | E3 | No paid resource may be added for testing. Test infrastructure must fit in free/included capacity. | Explicit operator constraint. |
 | E4 | No production deployment may be created or rolled by a test. | The deployment gate (§6) is a separate, operator-decided change. |
 | E5 | Locked inputs stay locked: upstream OpenCode `1.18.33`, Bun `1.3.14`, pinned Core runtime image digest. | Changing an input to make a gate pass invalidates the gate. |
+| E6 | The harness and every result are committed/pushed **before and during** execution. | A conversation restart, VM handoff or job termination must not be able to erase in-flight work. |
+| E7 | The host's remaining lifetime is measured **before** a long stage starts, and a host that ends mid-run is recorded as an interruption. | Termination of the test host is not test completion. |
 
 If E1–E3 cannot be met, the affected gate is reported `PENDING (no admissible
 environment)` and **stable is not published**.
+
+### 1.1 Selected test host and its lifetime envelope (measured 2026-10-13)
+
+The separate test environment is the GitHub Actions Lab VM reachable over
+Tailscale, inventoried read-only before any test:
+
+| Property | Value |
+|---|---|
+| Address | `100.93.106.19` (Tailscale peer `github-lab`, `tagged-devices`) |
+| Host / user | `runnervmmprz5` / `runner` (uid 1001, in `docker`, passwordless `sudo`) |
+| Platform | Azure `Standard_D4ads_v7`, `centralus`, kernel `6.17.0-1022-azure` |
+| Resources | 4 CPU, 15 989 MB RAM (~14.7 GB available), 145 GB disk (82 GB free) |
+| Tools | node 22.23.3, npm 10.9.9, git 2.55.0, docker 28.0.4, python 3.12.3, jq 1.7, gh 2.102.0, curl 8.5.0, tailscale 1.104.1 — **Bun absent** |
+| Egress | `github.com` → HTTP 200 |
+| Auth | `gh` authenticated as `aminsh35322088-ctrl` with `repo`/`workflow` scope |
+
+**Lifetime (E7 evidence).** The VM is not idle infrastructure: it is the executor
+of an unrelated workflow job (`GitHub-Runner-Lab`, `rdc-lab.yml`), which owns
+`~/work/**` and must not be touched. Observed at `2026-10-13T04:00:07Z`:
+
+- VM boot `00:53:34Z`, `Runner.Listener`/`Runner.Worker` started `≈00:53:58Z`.
+- That job declares `timeout-minutes: 350` → hard end `≈06:43:58Z`.
+- The workflow queues a **successor run**, disconnects Tailscale, saves an agent
+  checkpoint and removes the optional agent token before handoff — i.e. the SSH
+  endpoint and local files are **not** expected to survive.
+
+Consequences, adopted as registered constraints:
+
+1. A single Lab lifetime is at most ~5 h 50 min and cannot by itself contain a
+   24 h soak; a 24 h RC soak must be built from resumable, evidence-preserving
+   segments, and any gap is reported as a gap.
+2. Test work lives in `~/soak-lab/` (a dedicated directory outside `~/work`).
+3. Everything durable — harness, results, logs — is pushed to GitHub
+   (`soak-evidence` branch + workflow artifacts), so host loss loses nothing.
+
+**Stage placement decision.** The ≥2 h stress is run from a `workflow_dispatch`
+Soak workflow on GitHub-hosted `ubuntu-24.04` (6 h job ceiling), which gives a
+full, measured window independent of the Lab's remaining lifetime. The Lab is
+used for harness bring-up and debugging. Both are free-tier capacity (E3) and
+neither can reach Railway or any production Worker (E1/E2).
+
+No dedicated `ssh` tool exists in this harness's tool catalog, so the Tailnet
+connection uses plain OpenSSH per the AGENTS.md fallback ("when the dedicated
+action can perform the operation"); targets remain Tailscale-only, never a
+public-Internet SSH path.
 
 ---
 
