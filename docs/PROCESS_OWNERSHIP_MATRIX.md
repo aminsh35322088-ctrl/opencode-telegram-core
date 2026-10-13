@@ -129,9 +129,11 @@ self-upgrade, mDNS and frontend/interactive services are excluded from the produ
 bundle and fail closed. Their lifecycle work is removed from production release
 requirements. No shared-service SIGSTOP behavior was introduced.
 
-The current Bot's pause workflow aborts and resumes via a continuation prompt.
-Live execution/pause/resume HTTP endpoints remain production-supported for the
-target native-control migration across the Node/Bun boundary; their previously
+The Bot's former user-facing pause workflow (abort plus continuation prompt) has
+been removed along with its Pause/Resume/Abort commands; the only user-facing
+execution control is Telegram's native Stop. Live execution/pause/resume HTTP
+endpoints remain production-supported as internal runtime capability for the
+native-control migration across the Node/Bun boundary; their previously
 closed invariants run in both production and compatibility gates. See
 [the architectural decision](TELEGRAM_EXECUTION_CONTROL.md).
 Shell/custom-process authority, MCP stdio and LSP service retirement remain required.

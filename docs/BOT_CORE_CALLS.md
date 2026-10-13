@@ -1,6 +1,6 @@
 # Bot SDK call-site inventory
 
-Read-only Bot commit `471f644aefe44950f07c2e11effced4ffca7d525`. This complements the subsystem/reachability audit. Only actual member expressions are listed; upstream imports are not consumer evidence.
+Read-only Bot commit `471f644aefe44950f07c2e11effced4ffca7d525`. Path existence re-verified against Bot commit `4208ee704b6cfe3124c29aee5ce2238d8c581690`: `src/bot/commands/pause-command.ts` and `src/bot/commands/abort-command.ts` no longer exist (deleted in Bot commit `71d9d8ea` "refactor: retire legacy run controls"); their references below are corrected. This complements the subsystem/reachability audit. Only actual member expressions are listed; upstream imports are not consumer evidence.
 
 | SDK member | Bot evidence |
 | --- | --- |
@@ -26,7 +26,7 @@ Read-only Bot commit `471f644aefe44950f07c2e11effced4ffca7d525`. This complement
 | `question.list` | `src/app/services/attach-service.ts:187`, `src/app/services/scheduled-task-executor-service.ts:260`, `src/app/services/pending-interaction-restore-service.ts:33` |
 | `question.reject` | `src/bot/services/event-subscription-service.ts:563`, `src/bot/callbacks/question-callback-handler.ts:138`, `src/app/services/scheduled-task-executor-service.ts:298` |
 | `question.reply` | `src/bot/menus/question-menu.ts:302` |
-| `session.abort` | `src/opencode/topic-event-bus.ts:39`, `src/core/opencode-session-port.ts:36`, `src/core/native-core-service.ts:240`, `src/bot/commands/abort-command.ts:41`, `src/app/services/session-error-recovery-service.ts:57` |
+| `session.abort` | `src/bot/middleware/auth.ts:170` (`cancelStoppedGeneration`, native Stop), `src/app/services/current-run-cancellation-service.ts:134` (`cancelCurrentRun` → `session.abort`), `src/opencode/topic-event-bus.ts:42`, `src/core/opencode-session-port.ts:36`, `src/core/native-core-service.ts:245`, `src/app/services/session-error-recovery-service.ts:57`, `src/app/services/session-stall-watchdog.ts:119`, `src/app/services/session-autonomy-service.ts:69` |
 | `session.children` | `src/bot/commands/session-command.ts:144`, `src/app/services/session-autonomy-service.ts:47` |
 | `session.command` | `src/bot/callbacks/command-catalog-callback-handler.ts:198` |
 | `session.create` | `src/core/opencode-session-port.ts:19`, `src/bot/commands/new-command.ts:44`, `src/app/services/topic-session-rotation-service.ts:44`, `.opencode/tools/session-extended.ts:77` |
@@ -36,22 +36,22 @@ Read-only Bot commit `471f644aefe44950f07c2e11effced4ffca7d525`. This complement
 | `session.fork` | `src/bot/callbacks/message-history-callback-handler.ts:307`, `src/app/services/session-autonomy-service.ts:51` |
 | `session.get` | `src/core/opencode-session-port.ts:11`, `src/core/native-core-service.ts:247`, `src/bot/middleware/auth.ts:112`, `src/bot/callbacks/session-callback-handler.ts:85`, `src/app/services/message-history-service.ts:47` |
 | `session.list` | `src/bot/menus/session-selection-menu.ts:88`, `src/app/services/session-cache-service.ts:195`, `.opencode/tools/session-extended.ts:85` |
-| `session.messages` | `src/bot/menus/session-selection-menu.ts:122`, `src/bot/pinned/pinned-message-manager.ts:112`, `src/bot/callbacks/session-callback-handler.ts:347`, `src/bot/callbacks/session-callback-handler.ts:444`, `src/bot/commands/pause-command.ts:17` |
+| `session.messages` | `src/bot/menus/session-selection-menu.ts:122`, `src/bot/pinned/pinned-message-manager.ts:112`, `src/bot/callbacks/session-callback-handler.ts:347`, `src/bot/callbacks/session-callback-handler.ts:444` |
 | `session.prompt` | `src/app/services/opencode-image-execution-service.ts:96`, `src/app/services/scheduled-task-schedule-parser-service.ts:207` |
 | `session.promptAsync` | `src/core/native-core-service.ts:107`, `src/core/native-core-service.ts:125`, `src/core/native-core-service.ts:138`, `src/app/services/scheduled-task-executor-service.ts:546` |
 | `session.revert` | `src/bot/callbacks/message-history-callback-handler.ts:231`, `src/app/services/session-autonomy-service.ts:55` |
-| `session.status` | `src/opencode/client.ts:187`, `src/bot/callbacks/command-catalog-callback-handler.ts:136`, `src/bot/commands/pause-command.ts:27`, `src/bot/commands/session-command.ts:132`, `src/bot/commands/abort-command.ts:26` |
+| `session.status` | `src/opencode/client.ts:188`, `src/bot/callbacks/command-catalog-callback-handler.ts:136`, `src/bot/commands/session-command.ts:132`, `src/app/services/current-run-cancellation-service.ts:76` |
 | `session.summarize` | `src/bot/callbacks/context-control-callback-handler.ts:59`, `src/app/services/session-autonomy-service.ts:65` |
 | `session.todo` | `src/bot/commands/session-command.ts:136`, `src/app/services/session-autonomy-service.ts:39` |
 | `session.unrevert` | `src/bot/callbacks/message-history-callback-handler.ts:272`, `src/app/services/session-autonomy-service.ts:59` |
 | `session.update` | `src/bot/callbacks/rename-callback-handler.ts:25` |
 
-The earlier contract mixed three target APIs with current call-sites. No current Bot caller invokes `session.execution/pause/resume`; `src/bot/commands/pause-command.ts` aborts and resume prompts. They nevertheless remain production-required by the target True Pause/Resume architecture, separately from this 41-member inventory.
+The earlier contract mixed three target APIs with current call-sites. No current Bot caller invokes `session.execution/pause/resume`, and the Bot's Telegram interface exposes no pause/resume/abort control: its former Pause/Resume/Abort commands (including `src/bot/commands/pause-command.ts`, which aborted and later prompted) were deleted in Bot commit `71d9d8ea` "refactor: retire legacy run controls". The only user-facing execution control is Telegram's native Stop, which routes `src/bot/middleware/auth.ts` (`cancelStoppedGeneration`) → `src/app/services/current-run-cancellation-service.ts` (`cancelCurrentRun`, refusing a `stale-draft` when the stopped draft is not attributable to the active run) → `src/opencode/client.ts` → Core `session.abort`. The three members below nevertheless remain production-required as internal runtime capability, separately from this 41-member inventory.
 
-| Target API | Exact intended consumer / dependency path |
+| Target API | Exact intended consumer / dependency path (internal, not user-facing) |
 | --- | --- |
-| `session.execution` | Future Bot execution-control adapter → `TelegramNativeCore.inspectExecution` → `OpenCodeExecutionClient` → `OpenCodeExecutionControlPort.execution` |
-| `session.pause` | Future Bot execution-control adapter → `TelegramNativeCore.pauseRun` → serialized port pause request → authoritative Bun `SessionRunState.pause` |
-| `session.resume` | Future Bot execution-control adapter → `TelegramNativeCore.resumeRun` → serialized port resume request → same Bun continuation |
+| `session.execution` | Internal Bot execution-control adapter → `TelegramNativeCore.inspectExecution` → `OpenCodeExecutionClient` → `OpenCodeExecutionControlPort.execution` |
+| `session.pause` | Internal Bot execution-control adapter → `TelegramNativeCore.pauseRun` → serialized port pause request → authoritative Bun `SessionRunState.pause` |
+| `session.resume` | Internal Bot execution-control adapter → `TelegramNativeCore.resumeRun` → serialized port resume request → same Bun continuation |
 
-The adapter must carry the captured directory/session/run identity and forward the same `telegramRunId` at prompt admission. It is planned, not implemented in the current Bot. See [process-boundary/ownership/release-sequencing decision](TELEGRAM_EXECUTION_CONTROL.md).
+The adapter must carry the captured directory/session/run identity and forward the same `telegramRunId` at prompt admission. It is planned as an internal surface only, not implemented in the current Bot, and must not become a user-facing Telegram control. See [process-boundary/ownership/release-sequencing decision](TELEGRAM_EXECUTION_CONTROL.md).

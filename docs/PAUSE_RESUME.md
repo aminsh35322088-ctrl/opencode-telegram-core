@@ -1,9 +1,19 @@
 # Production live execution pause/resume
 
+> **Scope: internal runtime capability only.** The Bot's Telegram interface
+> exposes **no** pause, resume, or abort control to the user. The Bot's former
+> Pause/Resume/Abort commands, buttons and Reply Keyboard entries have been
+> removed. The only user-facing execution control is Telegram's own **Stop**
+> button (update type `stopped_message_generation`), which cancels — it does
+> not pause — the run attributed to the stopped draft. Nothing in this
+> document may be read as adding, planning, or recommending a user-facing
+> pause/resume control. See [TELEGRAM_EXECUTION_CONTROL.md](TELEGRAM_EXECUTION_CONTROL.md)
+> for the Stop-only contract and its draft-attribution rule.
+
 The source integration uses the existing upstream `SessionRunState` runners and
 model/tool fibers. It does not abort, recreate sessions, or send a synthetic
-resume prompt. The current Bot still aborts and reprompts. It will adopt the aligned runtime/SDK/native
-control contract in a separate migration after Core stable. See the
+resume prompt. The Bot does not surface these operations; its only
+user-facing execution control is Telegram's native Stop. See the
 [production architectural decision](TELEGRAM_EXECUTION_CONTROL.md). These three
 legacy routes remain in the minimal production build; they are not upstream-only
 compatibility APIs.
@@ -126,8 +136,12 @@ close and group death are confirmed; failure fences the execution and retains
 accounting. Completed identity loses signal authority before a later control can
 reach a reused PID/group. Unisolated/unsupported owned shell groups fail closed.
 Persistent-daemon ownership, full Linux stress and release artifact verification
-remain Core gates. Bot delivery/control/tool adoption is deferred until Core stable.
-Runtime, generated SDK, and native artifacts must
-ship from one verified prerelease before the Bot removes its old pause behavior.
+remain Core gates. Bot adoption of any control/tool surface is deferred until
+Core stable, and even after adoption the Bot's Telegram interface will not
+expose pause/resume: Telegram's native Stop remains the only user-facing
+execution control. Runtime, generated SDK, and native artifacts must
+ship from one verified prerelease before any Bot adoption of these internal
+control surfaces. The Bot's former pause-by-abort behavior has already been
+removed along with its Pause/Resume/Abort commands.
 Full Linux CI, artifact identity checks, ownership audit, Railway validation and
 production RC soak remain required. No stable release is implied by these tests.
