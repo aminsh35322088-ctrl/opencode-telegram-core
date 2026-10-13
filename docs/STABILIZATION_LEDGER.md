@@ -556,12 +556,34 @@ follow-ons; `summary.json` counted `pass: 5, fail: 0`.
 | Also unproven | The run recorded **zero** `phase:"idle"` samples: cycle 2's pre-fix 60 s W1 timeout spanned every idle window, so the phase scheduler's idle branch never executed. A green run had proved neither phasing nor its absence |
 | Fix | `a8496a1e` — `flowNewChat` returns its record (spread with the threadId); `cycle()` and the smoke stage collect it; the tally becomes `tallyResults(summaries)` in `signals.mjs`, reporting any status it cannot name as `unrecognized`; the driver exits non-zero on `fail > 0 \|\| unrecognized > 0` and carries `unrecognized` in `summary.json` |
 | Guard | Two red-first cases: tally behaviour (cycle summaries + bare records count; a record with no status and an unknown status each surface as `unrecognized`) and a source pin that `cycle()` collects the W1 record — the same source-pinning approach `persist-evidence.sh` already uses, because the driver executes `main()` on import and cannot be loaded into a test. Harness 20/20 |
-| Proof | Red (both cases failing: `tallyResults` missing, wiring absent) → green 20/20; `node --check` 0; `tsc --noEmit` 0; `eslint src --max-warnings=0` 0; suite 273 tests / 14 fail with the failing set byte-identical to `bot-suite-newthread.txt`. Re-validation of idle samples + counts-vs-file: run `38406121122` queued |
+| Proof | Red (both cases failing: `tallyResults` missing, wiring absent) → green 20/20; `node --check` 0; `tsc --noEmit` 0; `eslint src --max-warnings=0` 0; suite 273 tests / 14 fail with the failing set byte-identical to `bot-suite-newthread.txt`. Re-validation **delivered** by `38406121122`: 15 records == summary counts (`unrecognized: 0`) and 13 idle-phase rows with the §8 columns |
 
 **The rule this produced:** a workflow verdict is only as sound as the picture its exit
 code was built from — this closes the fourth way "a green workflow exit is not evidence"
 was violated (after `d95ed0ca`, `6ea8e28e`, `cf333d12`), and gates now read
 `cycles.jsonl`, never the verdict alone.
+
+---
+
+### 4.10 A Stop confirmed by an earlier Stop's confirmation — cancelled run `38403749350`
+
+The third stress execution (13:17:20Z, `cf333d12`) proved every `cf333d12` mechanism —
+W1/W6 rest gates, `restartExit=graceful`, `topicGone` ×12 — then failed W5 from cycle
+10 on and was cancelled at 39 min once the cause was reproduced from its own bot.log.
+
+| | |
+|---|---|
+| Symptom | Cycle 10's W5 recorded `confirmMs:2, lateDelta:1, withinD2:false` and failed; cycle 11 the same (`confirmMs:3`); cycle 12 passed with `confirmMs:3` — the normal value is ~303 ms, and draft ids had gone **…27, 31 → 1 → 4 → 7** across cycle 10's W7 restart |
+| Cause | W7's restart hands the new Bot process a fresh draft-id counter while the old confirmations stay in the same `bot.log`. `stopConfirmed` took the *first* `draft=<id>, result=` match in a 512 KB tail — cycle 10's Stop matched **cycle 1's line** (`13:18:08.827 draft=1 result=confirmed`) and reported "confirmed" 2 ms after the press, before the Bot had processed it; the run that was still streaming then produced the late output charged to D2. Cycle 12's identical fake confirmation passed only by quiet luck — post-restart W5 passes were unattributed as well. The product was correct throughout: the Bot's real confirmations exist (`13:26:07.208 draft=1 thread=10018`, `13:26:48.960 draft=4`, no refusals) |
+| Fix | `cc8757a0` — `stopConfirmed` gains `sinceIso` and only reads timestamped lines the Bot wrote **after this press**: first eligible match wins; pre-press confirmations are history, pre-press refusals are not this Stop's verdict, and an unparseable window never confirms (attribution fail-closed). `flowStop` passes the `t0` captured before its enqueue |
+| Guard | Red-first case carrying the run's actual lines (stale `13:18:08` vs real `13:26:07`, pre-press refusal ignored, unparseable window never confirms); harness 21/21, `tsc` 0, `eslint` 0, suite 274/14 failing set byte-identical to `bot-suite-newthread.txt` |
+| Proof | Validation soak `38406121122` on `a8496a1e`: all W5s confirmed with real timing (its stage has no restart, hence no id reset); idle-phase rows ×13 with §8 columns; file counts == summary counts, `unrecognized: 0`. Execution 4 `38410095535` dispatched 14:03:23Z on `cc8757a0`. Cancelled-run evidence: `evidence/20261013T131746Z-stress/` |
+
+**The rule this produced:** an id is not identity — a judgement that matches evidence by
+value must also bind it to *when* the claim was made. "The Bot said `result=confirmed`"
+is only admissible for a line the Bot wrote after the press that asked, which makes this
+the fifth way "a green workflow exit is not evidence" was violated (after `d95ed0ca`,
+`6ea8e28e`, `cf333d12`, `a8496a1e`).
 
 ---
 
@@ -577,8 +599,8 @@ published while any of these is pending or failed.
 
 | Gate | Required | State |
 |---|---|---|
-| Representative stress run | ≥ 2 h under active + idle phases | **failed — first execution `38370753677`, 2026-10-13: 2 h 00 m 59 s / 263 cycles, F1 ×11 (harness defect, fixed `b5fb27c1`), F6, F7; W6 v2 and W7 not yet wired into it. Second execution `38393992089` on `e436930b` **cancelled at 12:46Z** once its three causes were root-caused (§4.8: eaten New Chat presses, cold-start session create, `bot-restart.sh` refusal killing the environment); fixes `cf333d12` + `a8496a1e`, validation cycle `38403233051` green, re-run `38403749350` on `cf333d12` in flight — `SOAK_GATES.md` §7/§8** |
-| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8; per §1.1 built as 5 × 21000 s segments (≥24 h, the 360-minute job ceiling bounds each, gaps reported as gaps); phase scheduler landed in bot `42034f5c` with idle-sample re-validation queued as `38406121122`; G6 still cannot fully pass until G8 exists (§2 requires ≥1 rollback proof) and no segment has started** |
+| Representative stress run | ≥ 2 h under active + idle phases | **failed — execution 1 `38370753677`: 2 h / 263 cycles, F1 ×11 (fixed `b5fb27c1`), F6, F7, no W6 v2/W7. Execution 2 `38393992089` cancelled 12:46Z (§4.8: eaten New Chat presses, cold-start session create, restart-tool refusal; fixes `cf333d12` + `a8496a1e`). Execution 3 `38403749350` cancelled 13:56Z (§4.10: Stop confirmed against pre-restart history after W7's draft-id reset; fix `cc8757a0`). Validation cycle `38403233051` + validation soak `38406121122` green. Execution 4 `38410095535` on `cc8757a0` in flight — `SOAK_GATES.md` §7/§8** |
+| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8; per §1.1 built as 5 × 21000 s segments (≥24 h, the 360-minute job ceiling bounds each, gaps reported as gaps). Phase scheduler validated by `38406121122`: 13 idle-phase rows with the §8 columns, cycles confined to active windows, counts == file with `unrecognized: 0`. Segments not started; G6 still cannot fully pass until G8 exists (§2 requires ≥1 rollback proof)** |
 | Telegram Stop contract S1–S10 | every row demonstrated with captured evidence | **pending — S1/S5 by committed tests; stress run: 252/252 Stops confirmed by the Bot's own `result=confirmed` line, D1 303/311/635 ms, D2 `lateDelta` 0; per-row capture still incomplete** |
 | Two-Worker isolation (W3) | interleaved message/file/state traces | **pending — not implementable in current harness (single Bot process, local stub mode)** |
 | Delete Chat cleanup + Worker reuse (W6) | resource inventory before/after | **pending — W6 v2 proven in cycle `38393937702`: delete issued during an active run, `requested`/`completed` true, `topicGone: true` recorded, fresh Topic `10001` ≠ deleted `10000` and answers, `lateStreams 0`, D4 303 ms. Must still be carried by the ≥2 h stress** |
