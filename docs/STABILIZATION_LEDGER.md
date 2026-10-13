@@ -285,6 +285,14 @@ Failing tests by file (top): `test_proxy_stream_fences.StreamFenceTests` 17,
 `test_worker_bootstrap_identity.*` 6, `test_upstream.UpstreamTests` 2,
 plus singles across `test_node_agent`, `test_cloud_bootstrap`, `test_boundary_resources`.
 
+**Re-measured 2026-10-13 (after the Stop-only guard test was added):** `Ran 326 tests`
+(319 baseline + 7 new). The raw `FAIL:`/`ERROR:` **line** count flaps between runs
+(114, 117) because one test can emit more than one error block (a temp-dir cleanup
+`PermissionError` re-reports its parent test), but the **unique** failing identity set is
+**84 in every run** and `Compare-Object` against the baseline set is empty for both runs —
+plus the same `test_proxy_stream_fences` timing waits that already flap here. No new
+failing identity was introduced.
+
 **Classification.** All 116 are attributable to Windows-only conditions. Decisive
 evidence: the *same test selection* passes on Linux (§2.1, step "Test toolchain and release
 contracts" = `success`). These are **not** defects in the supported production platform.
@@ -452,6 +460,18 @@ a licence to re-expose a control.
 | Landed | Bot commits `0b4dae91` (a) and `4bd9d4b4` (b) |
 | Linux evidence | The guards are `platform === "win32"` / `getuid === undefined` only, so non-Windows executes the original code path. Bot CI @ `0b4dae91` (run `38345181835`) → `success`. |
 | Still open | 12 × `EPERM` remain inside the **published** `@opencode-telegram/native-runtime` package; its source is `runtime/src/runtime/atomic-binding-store.ts` in this repository and ships with the next Core prerelease. Two Windows-only assumptions remain inside `tests/` files. Neither is a production-source failure (§3.3). |
+
+---
+
+### 4.5 Core documentation argued from the removed Pause/Resume/Abort controls
+
+| | |
+|---|---|
+| Symptom | Core `README.md`, `docs/BOT_CORE_CALLS.md`, `docs/PAUSE_RESUME.md`, `docs/TELEGRAM_EXECUTION_CONTROL.md` and `docs/PROCESS_OWNERSHIP_MATRIX.md` still described the Bot's Pause/Resume/Abort controls as current behaviour after the product owner's **Stop-only** decision |
+| Fix | Commit `c73bb1c` — 5 documents, 89 insertions / 34 deletions: Stop-only user-facing contract stated as authoritative; pause/resume/abort recorded as internal runtime primitives that are not user commands |
+| Guard | `tests/test_execution_control_docs.py` — 7 cases over README, `TELEGRAM_EXECUTION_CONTROL`, `PAUSE_RESUME`, `BOT_CORE_CALLS`, `MINIMUM_TELEGRAM_RELEASE`, plus "no Core document advertises `` `/pause` ``, `` `/resume` ``, `` `/abort` `` as Bot commands". `STABILIZATION_LEDGER.md` is deliberately out of scope: it records the defect and this guard |
+| Proof | `python -m unittest tests.test_execution_control_docs -v` → **7/7 OK** (local CPython 3.13.16, `EXIT=0`). On Linux the file is picked up by the CI step `Test toolchain and release contracts` (`python3 -m unittest discover -s tests -p 'test_*.py' -v`), so the guard runs on every push |
+| Bot counterpart | `tests/legacy-run-controls-audit.test.ts` (5 cases, §4.3) covers the Bot repository; `CHANGELOG.md` historical entries naming `/pause` are out of scope on both sides — they describe released history, not current behaviour |
 
 ---
 
