@@ -241,23 +241,67 @@ reject. **No production deployment configuration has been modified.**
 
 | Gate | Evidence required | Status |
 |---|---|---|
-| G1 ≥2 h representative stress | Timestamped cycle log + §3 results + §8 measurements | `PENDING` |
-| G2 Telegram Stop contract (S1–S10) | Per-row captured evidence | `PENDING` (unit/contract tests for S1/S5 are committed and green) |
-| G3 Two-Worker isolation (W3) | Interleaved message/file/state traces from both Topics | `PENDING` |
-| G4 Delete Chat cleanup + Worker reuse (W6) | Resource inventory before/after | `PENDING` |
-| G5 Recovery: retry, disconnect, restart (W7) | Generation/fence logs proving no duplicate and no stale output | `PENDING` |
-| G6 ≥24 h RC soak with active/idle phases | Full 24 h log | `PENDING` |
-| G7 Controlled restart proof | Restart timeline vs D5 | `PENDING` |
-| G8 Rollback proof | Revision timeline vs D6 | `PENDING` |
-| G9 Resource evidence (§5) | Per-cycle RSS/CPU/process/headroom table (§8) | `PENDING` |
+| G1 ≥2 h representative stress | Timestamped cycle log + §3 results + §8 measurements | `FAILED` — run `38370753677` executed 2 h 00 m 59 s / 263 cycles (§8, accounting below); F1 ×11, F6, F7 fired, and the run predates W6 v2 and W7. Re-run on `e436930b` dispatched. |
+| G2 Telegram Stop contract (S1–S10) | Per-row captured evidence | `PENDING` (S1/S5 unit+contract tests green; stress run: 252/252 Stops confirmed by the Bot's `result=confirmed` line, D1 ≤ 635 ms, D2 `lateDelta` 0 — per-row capture still incomplete) |
+| G3 Two-Worker isolation (W3) | Interleaved message/file/state traces from both Topics | `PENDING` — not implementable yet: single Bot process, local stub mode |
+| G4 Delete Chat cleanup + Worker reuse (W6) | Resource inventory before/after | `PENDING` — W6 v2 proven in cycle `38393937702` (`requested`/`completed` true, `topicGone: true` recorded, `reuse=10001` ≠ deleted `10000`, `lateStreams 0`, D4 303 ms); it must still be carried by the ≥2 h stress |
+| G5 Recovery: retry, disconnect, restart (W7) | Generation/fence logs proving no duplicate and no stale output | `PENDING` — W7 proven in cycles `38393226494` and `38393937702`; must still be carried by the ≥2 h stress |
+| G6 ≥24 h RC soak with active/idle phases | Full 24 h log | `PENDING` — per §1.1, built as 4 × 6 h sequential segments; not started |
+| G7 Controlled restart proof | Restart timeline vs D5 | `PENDING` — timeline recorded in cycles `38393226494` and `38393937702` (SIGTERM → this restart's own boot line → answer = 14,938 ms / 13,938 ms ≤ 120,000 ms, pre-restart Topic served); must still repeat inside the ≥2 h stress |
+| G8 Rollback proof | Revision timeline vs D6 | `PENDING` — no rollback harness exists yet |
+| G9 Resource evidence (§5) | Per-cycle RSS/CPU/process/headroom table (§8) | `FAILED` — §8 filled from run `38370753677`: F6 and F7 fired; CPU time and system headroom were never sampled by the harness, so those columns are also incomplete evidence |
 | G10 Deployment gate fix | Operator decision on §6 | `PENDING — operator decision` |
 
 **No stable release may be published while any row above is `PENDING`.**
+
+### Evidence accounting for run `38370753677`
+
+2026-10-13 `evidence/20261013T083958Z-stress/` — 263 cycles, 1,315 records,
+2 h 00 m 59 s, `main@d95ed0ca`, job exit 1.
+
+- **F1 fired in 11 of 263 cycles.** W1 recorded the *previous* cycle's deleted
+  Topic id, so W2 prompted a Topic that no longer existed (90 s timeout), W5 was
+  `not-executed`, and W6 failed against an already-deleted Topic. The Bot was
+  correct in all 11 (`Rejected stale Topic metadata: chat=987654321, thread=…`);
+  the harness was wrong. Cause and fix: `b5fb27c1` (a cycle may only bind a
+  genuinely new id). Every failure had the stale id and no failure occurred
+  without it; the repeat interval shrank from ~5 min to ~3 min as the run aged,
+  i.e. the race window widened as the child slowed.
+- **F6 fired (resource trend).** `opencode serve` grew 563,949,568 B →
+  6,444,252,160 B (peak 6,655,377,408 B): 55 of 261 three-sample windows grew
+  monotonically (bound: none), and 118 of 262 cycle deltas exceeded +150 MB
+  (max +371,344 KB). The Bot daemon stayed inside the per-cycle bound
+  (max delta 35,576 KB), its heap stayed flat (38–57 MB), `activeChildProcesses`
+  returned 1 → 1, and the cgroup count ran 114–126 (126 at start, 118 at end,
+  never above start) — so the process-count clause holds and only the RSS clause
+  fires.
+- **F7 fired.** Child peak 6,655,377,408 B = 55 × the 120,000,000-byte ceiling;
+  Bot peak 191,864,832 B = 1.6 × it. Per ledger §6.1 item 9 that ceiling is
+  also stricter than the product's own registered envelope and fails the Bot
+  daemon itself — recorded as an open item for the registry owner and **not**
+  re-interpreted here to let a gate pass.
+- **What the run did demonstrate.** 252/252 Stops confirmed from the Bot's own
+  `result=confirmed` log line with `source=stub-draft`, D1 303/311/635 ms
+  (min/median/max), D2 `lateDelta` 0 in every cycle; no refusal was ever counted
+  as success. W6 ran in its pre-v2 idle-delete form and W7 was not yet wired, so
+  two registered workload rows are absent from this run by construction — the
+  stress on `e436930b` is the first run carrying W6 v2 + W7 + the long-stream
+  window together.
 
 ---
 
 ## 8. Measurements (filled in only by an executed run)
 
+Run `38370753677`, 2026-10-13, `ubuntu-24.04` (4 CPUs), 263 cycles.
+
 | Cycle | Timestamp | Phase | RSS bytes (peak) | CPU time | Process count | Headroom | Notes |
 |---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | no run yet |
+| 1 | 2026-10-13T08:40:20.761Z | stress start (sample 1) | Bot 147,333,120 + child 563,949,568 = 711,282,688 | not sampled (loadavg 0.23–2.02 across run) | Bot children 1; cgroup 126 | not measured (runner RAM never recorded in evidence) | `main@d95ed0ca`; child already 4.4 × its 256 MiB reservation |
+| 263 | 2026-10-13T10:40:10.012Z | stress end / run peak | Bot 191,864,832; child 6,655,377,408; combined peak 6,844,239,872 | not sampled (loadavg last 1.08) | Bot children 1 → 1 (±0 holds); cgroup 118 (range 114–126) | not measured | F7: child 55 × and Bot 1.6 × the 120,000,000 B ceiling. F6: 55 growing triples, 118/262 cycle deltas > 150 MB. Bot heap flat 43 MB; `health=healthy` (F9's warning applies — green health coexists with F6/F7) |
+
+Per-sample series (`resource-samples.jsonl`, 263 points): Bot 143,880 → 182,304 KB,
+peak 187,368 KB; child 550,732 → 6,293,140 KB, peak 6,499,392 KB; combined peak
+6,683,828 KB. Sampled ~every 4.6 s. CPU **time** was never captured — only
+`cpuLoad1` from the Bot's own heartbeats (241 heartbeats, min 0.02, max 2.02) —
+and no system-wide memory sample exists, so those two columns stay honestly
+empty rather than estimated.

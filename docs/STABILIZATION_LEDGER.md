@@ -498,35 +498,59 @@ concrete ways it was violated, each with a regression case.
 
 ---
 
+### 4.7 Restart readiness came from the process being stopped, and its updates were eaten — found by the queued validation cycle
+
+The cycle queued behind the stress run (`38372649512`, executed 10:40) failed W7 — and the
+failure exposed two more claims the harness could not support. Both were proven from that
+run's own evidence.
+
+| | |
+|---|---|
+| Symptom 1 — D5 satisfied before the new Bot booted | The record read `answered:true, pidChanged:true, withinD5:true, readyMs:13029`, but `t0` = 10:41:07.79 + 13,029 ms = **10:41:20.83**, while the new Bot's first log line is **10:41:21.109**. The "environment came back" judgement resolved before the new process existed: what grew was the process being stopped still finishing its run (`[LLM Usage] … elapsedMs=15014` at 10:41:20.769), because `flowRestart` snapshotted its baseline before the restart had produced anything attributable |
+| Symptom 2 — the Topic prompt went to a process that had already exited | The Bot was SIGTERM'd with a long-poll open; the driver enqueued `/start` and the Topic prompt into that window (both in `updates.jsonl` at second 10:41:20). `telegram-api.jsonl` then shows `10:41:20.853 getUpdates note=update:1000004+1` — both handed to the dying consumer — and the new Bot's first poll returning `note=update:none` at 10:41:51.296. The queue had been drained by a process that never processed anything, so the Bot answered `/start` only when the *next* enqueue (the long prompt, after W7's 60 s window had already expired) woke the queue at 10:42:21.154. W7 reported "the Topic that existed before the restart was not served afterwards" — the Bot had never received it |
+| Fix | `6ea8e28e` — two changes. (1) **Delivery is not acknowledgement:** `scripts/soak/update-queue.mjs` gives the stub Telegram's own at-least-once contract — an update is owed to some client until a later `offset` acks it, so a batch handed to a dead socket changes nothing and a restarted consumer receives everything it never confirmed (`takeBatch` no longer consumes on serve). (2) **Readiness is attributed:** `flowRestart` checkpoints `bot.log` before the restart, waits for *this* boot's own `Starting OpenCode Telegram Bot` line, and only then snapshots its baseline; `restartOutcome` now takes `bootMs`/`answerMs` and fails any answer observed before that line (`answeredAfterBoot`). `e436930b` then made the already-judged `topicGone` observation visible in every W6 record instead of only inferrable from `status=pass` |
+| Guard | `tests/soak-harness.test.ts` — **14 cases**: an answer observed before the new Bot's boot line cannot satisfy D5 (the assertion carries run `38372649512`'s timestamps); a served-but-unacked update must remain queued, must be re-served to a fresh client, and may vanish only on an offset ack |
+| Proof | Both rules written red first (missing module; missing field) → green. Cycle `38393226494` on `6ea8e28e` passed with `answeredAfterBoot:true, pid=2605→2749, readyMs:14938, threadId:10000` (pre-restart Topic served); cycle `38393937702` on `e436930b` repeated it (`readyMs:13938`) and recorded `topicGone:true`. Harness 14/14, `tsc --noEmit` 0, `eslint src --max-warnings=0` 0, full suite 253 pass / 14 fail with the failing set byte-identical to `bot-suite-newthread.txt` (§3.3 remainder) |
+
+**The rule this produced:** "the environment came back" is a claim about *which process*
+answered, and a response written to a socket is not proof anyone received it — the same
+discipline as the Stop contract (`d95ed0ca`), now applied to readiness and to the update
+queue.
+
+---
+
 ## 5. Soak / elapsed-time gates — **PENDING**
 
 The workload, acceptance criteria, failure criteria, resource bounds and deadlines are now
 **registered in `docs/SOAK_GATES.md`** before execution, as required. Registering them is
 not running them.
 
-No gate below has been completed. Per the release requirements, a stable artifact must not
-be published while any of these is pending.
+No gate below has passed — and two now have a **failed** first execution recorded in
+`docs/SOAK_GATES.md` §7. Per the release requirements, a stable artifact must not be
+published while any of these is pending or failed.
 
 | Gate | Required | State |
 |---|---|---|
-| Representative stress run | ≥ 2 h under active + idle phases | **pending — registered in `SOAK_GATES.md` §7 (G1), not started** |
-| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8, no RC soak candidate selected yet** |
-| Telegram Stop contract S1–S10 | every row demonstrated with captured evidence | **pending — S1/S5 covered by committed tests only** |
-| Two-Worker isolation (W3) | interleaved message/file/state traces | **pending** |
-| Delete Chat cleanup + Worker reuse (W6) | resource inventory before/after | **pending** |
-| Recovery: retry / disconnect / restart | no duplicate execution, no stale output accepted | **pending** |
-| Restart evidence | repeated restarts observed during soak | **pending** |
-| Rollback proof | demonstrated revert to a known-good artifact | **pending** |
+| Representative stress run | ≥ 2 h under active + idle phases | **failed — first execution `38370753677`, 2026-10-13: 2 h 00 m 59 s / 263 cycles, F1 ×11 (harness defect, fixed `b5fb27c1`), F6, F7; W6 v2 and W7 not yet wired into it. Re-run dispatched on `e436930b` — `SOAK_GATES.md` §7/§8** |
+| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8, no RC soak candidate selected yet; §1.1 requires 4 × 6 h segments with any gap reported as a gap** |
+| Telegram Stop contract S1–S10 | every row demonstrated with captured evidence | **pending — S1/S5 by committed tests; stress run: 252/252 Stops confirmed by the Bot's own `result=confirmed` line, D1 303/311/635 ms, D2 `lateDelta` 0; per-row capture still incomplete** |
+| Two-Worker isolation (W3) | interleaved message/file/state traces | **pending — not implementable in current harness (single Bot process, local stub mode)** |
+| Delete Chat cleanup + Worker reuse (W6) | resource inventory before/after | **pending — W6 v2 proven in cycle `38393937702`: delete issued during an active run, `requested`/`completed` true, `topicGone: true` recorded, fresh Topic `10001` ≠ deleted `10000` and answers, `lateStreams 0`, D4 303 ms. Must still be carried by the ≥2 h stress** |
+| Recovery: retry / disconnect / restart | no duplicate execution, no stale output accepted | **pending — W7 proven in cycle `38393226494`: readiness attributed to the new Bot's own boot line (the first attempt had been satisfied by the dying process — `6ea8e28e`), D5 14,938 ms, pre-restart Topic served. Must still be carried by the ≥2 h stress** |
+| Restart evidence | repeated restarts observed during soak | **pending — the stress driver restarts every 10th cycle; accrues in the re-run** |
+| Rollback proof | demonstrated revert to a known-good artifact | **pending — no rollback harness exists** |
 | Railway physical evidence | service/deployment identity, env, resource profile | **pending — §1.6** |
 | Deployment gate (CI before deploy) | operator decision on `SOAK_GATES.md` §6 | **pending — operator decision** |
 
 Environment constraint on the soak: destructive phases require a **separate test
-environment** (`SOAK_GATES.md` E1–E3) that does not exist yet and may not be created by
-adding paid resources. Until such an environment exists, or the harness runs headlessly in
-CI, the affected rows stay `pending — no admissible environment`.
+environment** (`SOAK_GATES.md` E1–E3). They now run headlessly in GitHub Actions on the
+stub Telegram API, isolated from every production Topic, with no additional paid
+resources provisioned (E3 held through all runs to date) — so that admissible-environment
+clause is satisfied for W1/W2/W5/W6/W7. W3 still needs a two-Worker harness and G8 a
+rollback harness; those rows stay `pending`.
 
-Until the elapsed time has actually accrued, the correct status of the stable release is
-**blocked**.
+Until the elapsed time has actually accrued **and passed**, the correct status of the
+stable release is **blocked**.
 
 ---
 
