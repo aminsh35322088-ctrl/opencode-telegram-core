@@ -241,15 +241,15 @@ reject. **No production deployment configuration has been modified.**
 
 | Gate | Evidence required | Status |
 |---|---|---|
-| G1 ≥2 h representative stress | Timestamped cycle log + §3 results + §8 measurements | `FAILED` — run `38370753677` executed 2 h 00 m 59 s / 263 cycles (§8, accounting below); F1 ×11, F6, F7 fired, and the run predates W6 v2 and W7. Re-run on `e436930b` dispatched. |
+| G1 ≥2 h representative stress | Timestamped cycle log + §3 results + §8 measurements | `FAILED` — first execution `38370753677` ran 2 h 00 m 59 s / 263 cycles (§8, accounting below): F1 ×11, F6, F7, no W6 v2/W7. Re-run `38393992089` on `e436930b` was **cancelled** at 12:46Z once its failures were root-caused (accounting below): the workload pressed New Chat into runs it could not see, cycle 1 hit the OpenCode server's startup recovery, and `bot-restart.sh` refused to leave a Bot behind. A cancelled run passes nothing — and none of the three is a product regression. Fixes `cf333d12` + `a8496a1e`; validation cycle `38403233051` green; re-run `38403749350` on `cf333d12` in flight. |
 | G2 Telegram Stop contract (S1–S10) | Per-row captured evidence | `PENDING` (S1/S5 unit+contract tests green; stress run: 252/252 Stops confirmed by the Bot's `result=confirmed` line, D1 ≤ 635 ms, D2 `lateDelta` 0 — per-row capture still incomplete) |
 | G3 Two-Worker isolation (W3) | Interleaved message/file/state traces from both Topics | `PENDING` — not implementable yet: single Bot process, local stub mode |
 | G4 Delete Chat cleanup + Worker reuse (W6) | Resource inventory before/after | `PENDING` — W6 v2 proven in cycle `38393937702` (`requested`/`completed` true, `topicGone: true` recorded, `reuse=10001` ≠ deleted `10000`, `lateStreams 0`, D4 303 ms); it must still be carried by the ≥2 h stress |
 | G5 Recovery: retry, disconnect, restart (W7) | Generation/fence logs proving no duplicate and no stale output | `PENDING` — W7 proven in cycles `38393226494` and `38393937702`; must still be carried by the ≥2 h stress |
-| G6 ≥24 h RC soak with active/idle phases | Full 24 h log | `PENDING` — per §1.1, built as 4 × 6 h sequential segments; not started |
+| G6 ≥24 h RC soak with active/idle phases | Full 24 h log | `PENDING` — per §1.1, built as 5 × 21000 s sequential segments (≥24 h total; the workflow's 360-minute job ceiling bounds each segment, and any gap is reported as a gap); not started. The phase scheduler landed in bot `42034f5c` but has not yet produced an `idle` sample in evidence — validation run `38406121122` queued. G6 also cannot fully pass until G8 exists (§2 requires ≥1 rollback proof inside the soak). |
 | G7 Controlled restart proof | Restart timeline vs D5 | `PENDING` — timeline recorded in cycles `38393226494` and `38393937702` (SIGTERM → this restart's own boot line → answer = 14,938 ms / 13,938 ms ≤ 120,000 ms, pre-restart Topic served); must still repeat inside the ≥2 h stress |
 | G8 Rollback proof | Revision timeline vs D6 | `PENDING` — no rollback harness exists yet |
-| G9 Resource evidence (§5) | Per-cycle RSS/CPU/process/headroom table (§8) | `FAILED` — §8 filled from run `38370753677`: F6 and F7 fired; CPU time and system headroom were never sampled by the harness, so those columns are also incomplete evidence |
+| G9 Resource evidence (§5) | Per-cycle RSS/CPU/process/headroom table (§8) | `FAILED` — §8 filled from run `38370753677`: F6 and F7 fired; CPU time and system headroom were never sampled by the harness, so those columns are also incomplete evidence. The sampling landed in bot `42034f5c` (`cpuTimeS`, `memTotalKb`/`memAvailableKb`, `phase` rows incl. idle); no run yet carries those columns, so the status stays `FAILED` until §8 is refilled |
 | G10 Deployment gate fix | Operator decision on §6 | `PENDING — operator decision` |
 
 **No stable release may be published while any row above is `PENDING`.**
@@ -287,6 +287,64 @@ reject. **No production deployment configuration has been modified.**
   two registered workload rows are absent from this run by construction — the
   stress on `e436930b` is the first run carrying W6 v2 + W7 + the long-stream
   window together.
+
+### Evidence accounting for run `38393992089` — cancelled after root cause
+
+2026-10-13, dispatched 11:59:00Z on `main@e436930b`, cancelled 12:46Z,
+`evidence/20261013T120033Z-stress/` (bot.log, cycles.jsonl, telegram-api.jsonl,
+resource-samples.jsonl, model-api.jsonl, updates.jsonl — **no summary.json**: the
+stage never ended). Cycles 1–11 ran; from cycle 1 every New Chat that mattered
+was lost. The run was stopped rather than run to completion because the failures
+were already explained — the remaining ~100 minutes would only have repeated
+three known harness defects. **A cancelled run passes nothing**: G1 stays
+`FAILED`. In each defect below the Bot behaved as designed and the workload or
+tooling violated a precondition that it owns — none is a product regression.
+
+| ID | Defect | Mechanism and evidence |
+|---|---|---|
+| D-A | A New Chat pressed during an active run is dropped without a trace | `reply-keyboard-router.ts` `menuAllowed` returns `false` whenever a run is active — *after* the router has already deleted the pressed button — so the update is consumed with no binding, no error and no reply. 3/3 during-stream presses died: consumed silently at 12:04:23.341 / 12:07:04.739 / 12:10:34.081, each surfacing only as W1's `new topic id timed out after 60000ms` 60 s later (12:05:23 / 12:08:04 / 12:11:34 — cycles 3, 5, 8). 6/6 at-rest presses passed (bindings 10000–10010). Trigger: cycle N+1 starts while cycle N's W6 reuse-run tail is still streaming ~13 s after W6 recorded on first growth (`promptChars=55`, `elapsedMs=15096`). A press that gets no reply cannot distinguish "eaten" from "slow" — the wait can only time out. |
+| D-A2 | Cycle 1 pressed during the OpenCode server's startup recovery | `session.create` threw `TimeoutError` at +10.6 s (`bot.log` 12:00:55.184 `Error creating session: TimeoutError: The operation was aborted due to timeout`); the catch replies `new.create_error` but creates no Topic, so W1 waited for a thread that could never exist (fail at 12:01:44). The server had reported ready at 12:00:38.009, was already erroring by 12:00:41 (`OpencodeAutoRestartService.startServer` → `ready-lifecycle.notifyReady` async failure) and restarted at 12:01:06 — "ready" was not "ready for session creation". |
+| D-B | `bot-restart.sh` killed the environment it was meant to refresh | The script allowed 15 s before SIGKILL; the Bot's own SIGTERM handler drains in-flight work for up to 45 000 ms (`Graceful shutdown requested … waiting up to 45000ms`, SIGTERM at 12:13:18.681). So every restart of an active Bot escalated to SIGKILL — and `kill -0` was then evaluated *immediately* after `kill -9`, succeeded against the not-yet-reaped process, and the script refused: `old bot pid=2562 is still alive after 15s; refusing to continue` (12:13:33.176, W7 fail). The old Bot's last line is 12:13:30.463; it died at its 45 s deadline with no new Bot started behind it → no Bot at all, and cycle 11's `/start` timed out against a dead environment. `flowRestart`'s own D5 = 120 s was never the constraint. |
+| F4 check | Product behaviour on delete was correct | The deleted session's run aborted at delete (`ses_ecadb…Aborted`, 12:03:49); the 12:04:29 tail was the reuse Topic's legitimate PONG run. No cross-topic emission observed. |
+| Fix | `cf333d12` | (a) **Rest is a precondition the workload waits for**: `restState(samples, stableMs)` decides rest purely (any signature change resets the clock; one reading can never claim it); `waitAtRest()` gates **both** New Chat presses (W1 and W6's recreate) on 5 s of unchanged output (Telegram output calls + model streams — `getUpdates`/typing/probe traffic excluded) **and** 2 s of `/global/health` answering `healthy`, bounded at 60 s; a timeout fails the flow with its observed `quiet=`/`healthyFor=` numbers instead of a mystery timeout, and each record carries `restWaitMs`. (b) **`bot-restart.sh` aligns with the Bot**: 50 s grace outlasts the 45 s deadline, SIGKILL is followed by a zombie-aware settle loop (`Z` state counts as dead; only a genuinely running pid refuses), and every path writes an `exit=graceful\|forced\|absent\|unkillable` marker into `bot.log`, which `flowRestart` parses into `restartExit` on every W7 record — which shutdown path ran is now evidence, not inference. (c) `run.sh` passes `--opencode-port` so the health probe targets the server the Bot spawned. W6's D4 window is untouched (`elapsed` freezes before the reuse press). |
+| Guard | `tests/soak-harness.test.ts` — 18 cases at `cf333d12` (17 prior + the red-first `restState` case) |
+| Proof | Validation cycle `38403233051` (success, 1 m 37 s) on `cf333d12`: W1 `restWaitMs=5228` → thread 10000; **W7 `restartExit=graceful`**, pid 2551→2696, `readyMs=13942` ≤ D5; W6 `restWaitMs=5030`, `topicGone=true`, reuse 10001, `lateStreams=0`. Re-run `38403749350` dispatched 13:17:20Z on `cf333d12`. |
+
+### Evidence accounting for validation run `38397066002` — "success" with a failed W1
+
+2026-10-13, dispatched 12:24:34Z, executed on `main@42034f5c` (the job checked
+out before the fixes existed), `evidence/20261013T124702Z-soak/`, 151 s, workflow
+verdict **success**. The verdict was false, and the run's own files prove it:
+
+- `cycles.jsonl` holds `12:48:40.940 W1 new-chat fail "new topic id timed out
+  after 60000ms"` (the D-A defect, un-fixed at that revision) plus
+  `12:49:11.058 W5 not-executed` and `12:49:41.192 W6 not-executed`.
+- `summary.json` says `counts: {pass: 5, fail: 0, not-executed: 2}` → exit 0.
+
+**Cause:** `cycle()` pushed every flow's return into `results` except
+`flowNewChat()`'s — the W1 record reached `cycles.jsonl` (written by `record()`)
+and never reached the tally the exit code is built from. The tally had a second
+hole: an unknown status was written to `counts[undefined]`, and the exit check
+looked only at `counts.fail`.
+
+**What else that run did not prove:** zero `phase:"idle"` samples exist — cycle
+2's pre-fix 60 s W1 timeout spanned every idle window, so the phase scheduler's
+idle branch never executed. The run is evidence of neither phasing nor its
+absence.
+
+- **Fix:** `a8496a1e` — `flowNewChat`'s pass path returns its record (spread with
+  the threadId), `cycle()` and the smoke stage collect it, the tally moves to
+  `signals.mjs` as `tallyResults(summaries)` and reports any status it cannot
+  name as `unrecognized`, and the driver exits non-zero on `fail > 0 ||
+  unrecognized > 0` with `unrecognized` carried in `summary.json`.
+- **Guard:** two red-first harness cases (tally behaviour; source pin of the
+  collection wiring, the same way `persist-evidence.sh` is pinned) — harness 20/20.
+- **Re-validation:** idle samples and counts-vs-file both asserted on run
+  `38406121122` (stage=soak, 180 s, active 30 / idle 30), queued behind
+  `38403749350`.
+
+**The rule this adds:** a workflow verdict is only as sound as the picture its
+exit code was built from — gates read `cycles.jsonl`, never the verdict alone.
 
 ---
 

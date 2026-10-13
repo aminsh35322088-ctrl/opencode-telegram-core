@@ -519,6 +519,52 @@ queue.
 
 ---
 
+### 4.8 The workload pressed New Chat into a run it could not see, and the restart tool refused to leave a Bot — cancelled re-run `38393992089`
+
+The first re-run (`38393992089`, dispatched 11:59:00Z on `e436930b`) accumulated
+W1 timeouts from cycle 1 on. It was cancelled at 12:46Z once all three causes were
+reproduced from its own evidence — running it out would only have repeated them.
+Full gate-facing accounting in `SOAK_GATES.md` §7; the mechanisms here.
+
+| | |
+|---|---|
+| Symptom 1 — presses that vanished (D-A) | 3/3 New Chat presses issued while a run was streaming died: `reply-keyboard-router.ts` `menuAllowed` returns `false` on an active run *after* the router has already deleted the pressed button, so the update is consumed with no binding, no error and no reply. The consumed presses are visible as silent windows (12:04:23.341, 12:07:04.739, 12:10:34.081); each became W1's `new topic id timed out after 60000ms` exactly 60 s later (cycles 3, 5, 8). 6/6 at-rest presses passed. The trigger is the workload's own pacing: cycle N+1 began while cycle N's W6 reuse-run tail was still streaming ~13 s after W6 recorded on first growth |
+| Symptom 2 — the first press hit a server still recovering (D-A2) | Cycle 1's `session.create` threw `TimeoutError` at +10.6 s (`Error creating session`, 12:00:55.184) and created no Topic. The server had reported ready at 12:00:38.009, errored in `startServer`/`notifyReady` by 12:00:41 and restarted at 12:01:06: "ready" was not "ready for session creation" |
+| Symptom 3 — the restart tool killed the environment (D-B) | `bot-restart.sh` allowed 15 s before SIGKILL; the Bot's own shutdown drains up to 45 000 ms, so every restart of an active Bot escalated to SIGKILL — and `kill -0` was evaluated *immediately* after `kill -9`, succeeded against the not-yet-reaped process, and the script refused (`old bot pid=2562 is still alive after 15s`, 12:13:33.176). The old Bot died at its 45 s deadline with nothing started behind it: no Bot, and cycle 11's `/start` timed out against a dead environment. D5 = 120 s was never the constraint |
+| Fix | `cf333d12` — (a) `restState` (pure: any signature change resets the clock; one reading can never claim rest) + `waitAtRest()` gates **both** New Chat presses on 5 s of unchanged output (Telegram output calls + model streams, background traffic excluded) **and** 2 s of `/global/health` healthy, bounded at 60 s, failing with its observed `quiet=`/`healthyFor=` numbers; (b) `bot-restart.sh` grace 50 s (outlasts the Bot's 45 s), zombie-aware settle after SIGKILL, only a genuinely running pid refuses, and every path writes an `exit=` marker into `bot.log` that `flowRestart` records as `restartExit`; (c) `run.sh` passes `--opencode-port`. W6's D4 window untouched (`elapsed` freezes before the reuse press) |
+| Guard | `tests/soak-harness.test.ts` — red-first `restState` case: no observation is not rest, a single reading is not rest, growth (up or down) restarts the clock, quiet is measured from the last growth |
+| Proof | Validation cycle `38403233051` on `cf333d12`: W1 `restWaitMs=5228` → thread 10000; **W7 `restartExit=graceful`**, pid 2551→2696, `readyMs=13942` ≤ D5 (the 50 s grace let the Bot finish its own shutdown instead of racing a kill); W6 `restWaitMs=5030`, `topicGone=true`. Re-run `38403749350` dispatched 13:17:20Z |
+
+**The rule this produced:** a control the Bot silently declines during an active run is a
+*precondition*, not a race — the workload waits for rest and for a healthy server before
+pressing, and a tool that must replace a process has to outlast that process's own
+shutdown and settle its death before claiming either outcome.
+
+---
+
+### 4.9 A failure that could not reach the verdict — run `38397066002` reported success with W1 failed
+
+The soak-validation run (12:24:34Z, `evidence/20261013T124702Z-soak/`) exited 0 and its
+workflow said **success**. Its own `cycles.jsonl` holds
+`12:48:40.940 W1 new-chat fail "new topic id timed out after 60000ms"` (the D-A defect
+above — the job checked out `42034f5c`, before the fix) and two `not-executed`
+follow-ons; `summary.json` counted `pass: 5, fail: 0`.
+
+| | |
+|---|---|
+| Cause | `cycle()` pushed every flow's return into `results` **except `flowNewChat()`'s**. `record()` had written W1's line to `cycles.jsonl`, but the tally — and therefore `summary.json` and the exit code — was built from a collection that never received it. The tally compounded the hole: an unknown status went to `counts[undefined]`, and the exit check read only `counts.fail` |
+| Also unproven | The run recorded **zero** `phase:"idle"` samples: cycle 2's pre-fix 60 s W1 timeout spanned every idle window, so the phase scheduler's idle branch never executed. A green run had proved neither phasing nor its absence |
+| Fix | `a8496a1e` — `flowNewChat` returns its record (spread with the threadId); `cycle()` and the smoke stage collect it; the tally becomes `tallyResults(summaries)` in `signals.mjs`, reporting any status it cannot name as `unrecognized`; the driver exits non-zero on `fail > 0 \|\| unrecognized > 0` and carries `unrecognized` in `summary.json` |
+| Guard | Two red-first cases: tally behaviour (cycle summaries + bare records count; a record with no status and an unknown status each surface as `unrecognized`) and a source pin that `cycle()` collects the W1 record — the same source-pinning approach `persist-evidence.sh` already uses, because the driver executes `main()` on import and cannot be loaded into a test. Harness 20/20 |
+| Proof | Red (both cases failing: `tallyResults` missing, wiring absent) → green 20/20; `node --check` 0; `tsc --noEmit` 0; `eslint src --max-warnings=0` 0; suite 273 tests / 14 fail with the failing set byte-identical to `bot-suite-newthread.txt`. Re-validation of idle samples + counts-vs-file: run `38406121122` queued |
+
+**The rule this produced:** a workflow verdict is only as sound as the picture its exit
+code was built from — this closes the fourth way "a green workflow exit is not evidence"
+was violated (after `d95ed0ca`, `6ea8e28e`, `cf333d12`), and gates now read
+`cycles.jsonl`, never the verdict alone.
+
+---
+
 ## 5. Soak / elapsed-time gates — **PENDING**
 
 The workload, acceptance criteria, failure criteria, resource bounds and deadlines are now
@@ -531,8 +577,8 @@ published while any of these is pending or failed.
 
 | Gate | Required | State |
 |---|---|---|
-| Representative stress run | ≥ 2 h under active + idle phases | **failed — first execution `38370753677`, 2026-10-13: 2 h 00 m 59 s / 263 cycles, F1 ×11 (harness defect, fixed `b5fb27c1`), F6, F7; W6 v2 and W7 not yet wired into it. Re-run dispatched on `e436930b` — `SOAK_GATES.md` §7/§8** |
-| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8, no RC soak candidate selected yet; §1.1 requires 4 × 6 h segments with any gap reported as a gap** |
+| Representative stress run | ≥ 2 h under active + idle phases | **failed — first execution `38370753677`, 2026-10-13: 2 h 00 m 59 s / 263 cycles, F1 ×11 (harness defect, fixed `b5fb27c1`), F6, F7; W6 v2 and W7 not yet wired into it. Second execution `38393992089` on `e436930b` **cancelled at 12:46Z** once its three causes were root-caused (§4.8: eaten New Chat presses, cold-start session create, `bot-restart.sh` refusal killing the environment); fixes `cf333d12` + `a8496a1e`, validation cycle `38403233051` green, re-run `38403749350` on `cf333d12` in flight — `SOAK_GATES.md` §7/§8** |
+| RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8; per §1.1 built as 5 × 21000 s segments (≥24 h, the 360-minute job ceiling bounds each, gaps reported as gaps); phase scheduler landed in bot `42034f5c` with idle-sample re-validation queued as `38406121122`; G6 still cannot fully pass until G8 exists (§2 requires ≥1 rollback proof) and no segment has started** |
 | Telegram Stop contract S1–S10 | every row demonstrated with captured evidence | **pending — S1/S5 by committed tests; stress run: 252/252 Stops confirmed by the Bot's own `result=confirmed` line, D1 303/311/635 ms, D2 `lateDelta` 0; per-row capture still incomplete** |
 | Two-Worker isolation (W3) | interleaved message/file/state traces | **pending — not implementable in current harness (single Bot process, local stub mode)** |
 | Delete Chat cleanup + Worker reuse (W6) | resource inventory before/after | **pending — W6 v2 proven in cycle `38393937702`: delete issued during an active run, `requested`/`completed` true, `topicGone: true` recorded, fresh Topic `10001` ≠ deleted `10000` and answers, `lateStreams 0`, D4 303 ms. Must still be carried by the ≥2 h stress** |
