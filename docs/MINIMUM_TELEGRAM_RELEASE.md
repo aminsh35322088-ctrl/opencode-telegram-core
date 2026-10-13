@@ -5,6 +5,18 @@ Bot commit `471f644aefe44950f07c2e11effced4ffca7d525` was inspected read-only. N
 source, feature behavior, pins, migration, deployment or Railway service was changed.
 The single PR includes the cumulative stabilization checkpoint `183597576af6ed6cfb343bfce3a4305774c4a377`.
 
+> **Currency of this document.** This is a release-scope report built from the
+> Bot commit named above. Sections carrying an explicit date (for example
+> "2026-10-04") are **historical snapshots** and are not current product
+> behaviour; do not read them as a description of what the Bot does today.
+> Three things supersede this report for any current release decision:
+> [the stabilization ledger](STABILIZATION_LEDGER.md) (verified identities,
+> defects, evidence), [the soak gates](SOAK_GATES.md) (registered workload and
+> gate status), and the execution-control contract below, which has been updated
+> to the current Stop-only interface. Inventory counts (SDK member lists,
+> endpoint counts, checklist percentages) are as-of the inspected commit and are
+> not re-asserted here.
+
 ## Actual production contract
 
 The [41 current SDK member call-sites plus three target APIs](BOT_CORE_CALLS.md) and [complete subsystem audit](superpowers/specs/2026-10-02-minimum-telegram-core.md)
@@ -21,17 +33,24 @@ Core embeds neither. The browser custom tool supports persistent named browser
 sessions and is required. Removing MCP's OS browser opener does not remove or
 stabilize those browser sessions.
 
-The Bot currently implements pause by aborting; resume sends a continuation prompt.
-It does not yet invoke live `execution/pause/resume` HTTP endpoints. The production
-contract separately includes **41 current SDK members and three target True
-Pause/Resume members**. The production native package already exposes
-`pauseRun/resumeRun/inspectExecution` through an execution-control port to the
-separate Bun execution authority. Removing the transport would block that migration
-and leave requested controls held as uncertain. These three thin legacy wrappers
-remain production-supported; native bindings, exact run ownership, retained child
-frames, shell-group STOP/CONT, recovery and acknowledgment semantics are preserved.
-See [the architectural decision](TELEGRAM_EXECUTION_CONTROL.md). Bot adoption follows
-Core stable in a separately authorized phase; no Bot behavior changes occur here.
+The Bot's execution control is **Telegram Stop only**. Pause, resume and abort
+were removed from the Bot interface: there is no pause/resume/abort command,
+button or keyboard, and the Bot does not invoke the live
+`execution/pause/resume` HTTP endpoints as a user-facing control. A native Stop
+cancels exactly the run that issued the stopped generation draft, attributed by
+Topic (chat/thread), session, run id and generation — never another Topic's run
+and never a newer run — and it does not delete session history or detach the
+Worker from the Topic. The production contract separately includes **41 current
+SDK members and three target True Pause/Resume members**. The production native
+package already exposes `pauseRun/resumeRun/inspectExecution` through an
+execution-control port to the separate Bun execution authority; these remain
+**internal runtime primitives**, not user controls, because removing the
+transport would block that migration. These three thin legacy wrappers remain
+production-supported; native bindings, exact run ownership, retained child
+frames, shell-group STOP/CONT, recovery and acknowledgment semantics are
+preserved. See [the architectural decision](TELEGRAM_EXECUTION_CONTROL.md).
+Bot adoption of the internal control surface stays a separately authorized phase
+following Core stable; no Bot behavior change occurs in this report.
 
 ## Removed from production
 
