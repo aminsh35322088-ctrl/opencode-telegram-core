@@ -338,6 +338,51 @@ has not been built; CI builds before vitest, and a local `npm run build` makes i
 real causes were (b) and (c) above. The conversion was a local-only experiment and was not
 committed.
 
+### 3.3 Bot root suite — the 105 Windows failures, classified per failure
+
+Gate: `node --import tsx --test tests/*.test.ts` on Windows, Node 22.23.2. Baseline
+`# tests 253 / # pass 148 / # fail 105`, reproduced deterministically across runs.
+Every one of the 105 was examined individually (per-failure table, 105 rows) at Bot
+`fa236ff8`, before any fix was attempted.
+
+| Mechanism | Count | Proof |
+|---|---:|---|
+| **M1 — `fsync()` on a *directory* handle → `EPERM` on Windows** | 101 (90 direct `EPERM: operation not permitted, fsync` + 11 assertion-shaped failures whose swallowed cause is the same `EPERM`) | Stack frames on 7 unguarded production sites (`node-bindings.ts:61` ×37, `railway-provisioning-driver.ts:89` ×27, `node-protocol.ts:60` ×16, native-runtime `atomic-binding-store` ×12, `mutations.ts:117-118` ×4, `node-registry.ts:56` ×4, `railway-credential-store.ts:36` ×1); direct experiment `open(dir,'r').sync()` → `EPERM` |
+| **M2 — POSIX `stat` uid/mode predicate on a store this process just wrote** | 3 (`worker-runtime-canary.ts:12`) | Measured: `lstat.mode = 0o666` despite `{mode:0o600}`, `process.getuid === undefined` → both predicate halves permanently true on Windows |
+| **M3 — POSIX shell quoting executed through `cmd.exe`** | 1 | The test builds `node -e '…|…'` → `budgetedExec` → `exec` → `cmd.exe` → `'PROJECT)?_?TOKEN$' is not recognized…`, exit 255. The argument-array probes (`execFile`, `spawn`) in the *same* test passed |
+
+**Production-path relevance.** 104 of 105 run real Bot production code (control-plane
+binding store, signed Bot↔Worker replay admission, provisioning journal, credential
+store, Global-mutation rollback, Core binding registration, worker binding/session
+routing, startup canary) — they are **not** dismissed as irrelevant. 1 of 105 (`M3`)
+fails on a POSIX-quoted command string authored by the test, which exists nowhere in
+production.
+
+**Verdict — no latent product defect, but a real platform defect.** No failure encodes
+a behavioural difference that would occur on Linux: CI runs the identical gate green
+on `ubuntu-24.04`. Two supporting facts: `src/app/stores/app-state-store.ts:101`
+already guarded the identical directory-fsync idiom with `process.platform !== "win32"`
+while the seven sites above did not, and no POSIX API (`statvfs`, `O_DIRECTORY`,
+`killpg`, `mkfifo`, `O_NOFOLLOW`, `chown`) appears anywhere in the repository. What the
+105 *did* prove is that **a Windows host could not read back six of its own write-through
+stores at all** — a genuine defect, now fixed (§4.4).
+
+**Progression (all with `tsc --noEmit = 0` and `eslint --max-warnings = 0`):**
+
+| Step | Result | Δ |
+|---|---|---|
+| Baseline | 148 pass / 105 fail | — |
+| After §4.4 (a) directory-fsync guard | 232 pass / 21 fail | 84 fixed, **0 regressions** |
+| After §4.4 (b) POSIX ownership/mode predicates | **239 pass / 14 fail** | 7 fixed, **0 regressions** |
+
+**The remaining 14 hold no production-source failure:** 12 are the directory fsync
+*inside* the published `@opencode-telegram/native-runtime` package (its source lives in
+this repository under `runtime/src/runtime/atomic-binding-store.ts` and ships with the
+next Core prerelease), 1 asserts `mode & 0o777 === 0o600` verbatim (`438 !== 384` because
+NTFS stores no POSIX mode bits), 1 is `M3`. None is "pre-existing and ignorable": the
+first is a pending Core release item (§6.1), the last two are Windows-only assumptions
+inside `tests/` files.
+
 ---
 
 ## 4. Fixed defects (with red → green proof)
@@ -391,6 +436,22 @@ a licence to re-expose a control.
 | Guard | `tests/legacy-run-controls-audit.test.ts` extended with two cases: user-facing docs must not document `/pause`, `/resume`, `/abort`, and README must document Telegram Stop as the only execution control |
 | Red → green proof | Both new cases failed first (`README.md still documents /abort`, `README must document the Telegram native Stop control`), then passed; file now 5/5 |
 | Landed | Same commit `ce22712849d723008fc6f271da2065624bba960f` |
+
+---
+
+### 4.4 Bot: a Windows host could not read back six of its own write-through stores
+
+| | |
+|---|---|
+| Reported symptom | 105 of 253 local Windows tests failing — 101 with `EPERM: operation not permitted, fsync`, the rest with `Invalid <store>` rejections. Per-failure classification in §3.3. |
+| Claimed status before | Handled as "Windows-only, pre-existing"; the open question was *fix vs. narrow supported platforms* |
+| Root cause | (a) Windows rejects `fsync()` on a **directory** handle with `EPERM`. (b) Windows has no POSIX DAC: `lstat().mode` is synthesized as `0o666` even for a file created with `{mode:0o600}`, and `process.getuid` does not exist. Eight write-through stores ran (a) after their atomic rename and six validated with (b) — so on Windows each of them threw *while writing* and, once a file existed, rejected *itself* on read. `app-state-store.ts:101` already guarded (a); the rest did not. |
+| Fix | (a) new `src/utils/sync-directory.ts` — `syncDirectory()`, a no-op on `win32` and byte-identical elsewhere — routed through all eight directory barriers. (b) new `src/utils/file-ownership.ts` — `isRestrictiveMode` / `isOwnUser` / `isRootUser` — replacing the inline uid/mode predicates in six stores. Type, symlink and size checks untouched; `launcher.ts` keeps its deliberate root requirement. |
+| Product code changed? | **Yes — 9 production files.** This is a genuine platform defect, not a test artifact: without it the Bot cannot persist its binding registry, replay admission, identity seeds, Worker settings, provisioning journal or credential store on Windows at all. |
+| Red → green proof | Baseline `148 pass / 105 fail` → after (a) `232 / 21` → after (b) **`239 / 14`**, with **zero** tests moving from pass to fail at either step (`tsc --noEmit = 0`, `eslint --max-warnings = 0` throughout) |
+| Landed | Bot commits `0b4dae91` (a) and `4bd9d4b4` (b) |
+| Linux evidence | The guards are `platform === "win32"` / `getuid === undefined` only, so non-Windows executes the original code path. Bot CI @ `0b4dae91` (run `38345181835`) → `success`. |
+| Still open | 12 × `EPERM` remain inside the **published** `@opencode-telegram/native-runtime` package; its source is `runtime/src/runtime/atomic-binding-store.ts` in this repository and ships with the next Core prerelease. Two Windows-only assumptions remain inside `tests/` files. Neither is a production-source failure (§3.3). |
 
 ---
 
