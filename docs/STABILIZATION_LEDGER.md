@@ -793,3 +793,36 @@ eslint src --max-warnings=0 && tsc --noEmit && npm run build
 | Railway Workers | project `opencode-topic-01`, 4 × `topic-node-*`, image `@sha256:6c365cc6…`, all `SUCCESS` |
 | Railway CLI | `railway 5.65.0`, auth `rizcaf@mailviro.com`, workspace `ali475-lab's Projects` |
 | Live probes | control plane `GET /health` 200 `{"status":"healthy"}`; 4 × Workers 200 `{"alive":true,"readiness":"ready-unbound"}` |
+
+## 8. 2026-10-14 soak continuation
+
+This dated addendum supersedes the earlier soak status above. It does not erase the
+historical observations in §§4–7.
+
+- Core `main` is `65a11128fd0f3227bd3450f6164bf938cf2de45d`; Core pre.35 is published
+  from merge `343fe1a337bb5cb84038d26d82a256a5d6a068d7`. Bot production `main` remains
+  `57ac7606`; Bot PR #192 is not merged, so no production deployment was triggered.
+- Bot PR #192 head `56d723714ab8eb70e0e4ee7c2b7c4d079d81e18d` contains M-1, G8, and the
+  fix that prevents the soak workflow from dirtying tracked `run.sh` mode before the
+  rollback checkout. Its CI run `38590435690` succeeded. Local verification: 29/29
+  soak-harness tests, 282/282 full Bot tests, TypeScript, ESLint, shell syntax, and
+  Node syntax checks passed.
+- G8 standalone rollback proof passed in run `38590936914`, evidence
+  `20261014T153745Z-cycle`. The tested SHA was `56d723714ab8eb70e0e4ee7c2b7c4d079d81e18d`,
+  the explicitly supplied rollback SHA was `cf333d12f7b9da3d37ba0042b162ba7b0d188294`,
+  and the latest matching successful `ci.yml` run was `38403232635` / #2573. Rollback
+  took 34,826 ms against D6 300,000 ms; restore took 10,362 ms and served after boot;
+  both script exits were 0. G8 is PASS. G6 remains pending until rollback is demonstrated
+  within its soak segments.
+- G1 execution 5 (`38585090356`) was cancelled after 25 minutes because the evidence
+  persister stopped after W7 replaced the original Bot PID. It passes no gate. The
+  persister now follows the run directory, and execution 6 (`38591337444`) has survived
+  W7: the 15:50:32Z evidence checkpoint includes W7's 15:48:31Z restart and later cycle
+  records. At that checkpoint 62 cycle records were all `pass`; the latest W1/W6
+  `topicLatencyMs` values were about 2.1 seconds. Workspace bytes reached 2.23 GB while
+  the runner disk was 43% used and inode headroom remained above 18 million. This is an
+  interim measurement, not the G1 verdict; execution 6 is still in progress and must be
+  judged from its final cycle log, summary and resource samples.
+- G1 remains FAILED until a complete qualifying stress run passes; G2/G3/G4/G5/G6/G7/G9
+  are still pending or failed as shown in `SOAK_GATES.md`. G10 still needs the operator's
+  deployment-gate decision. No Stable Core release is authorized by this evidence.
