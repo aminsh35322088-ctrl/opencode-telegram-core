@@ -17,6 +17,7 @@ export * from "./presentation/agent-document-chunker.js";
 export * from "./presentation/agent-document-text.js";
 export * from "./presentation/agent-inline.js";
 export * from "./presentation/markdown-document-parser.js";
+export * from "./presentation/telegram-rich-capabilities.js";
 export * from "./presentation/telegram-rich-renderer.js";
 export * from "./railway/resource-governor.js";
 export * from "./ipc/worker-outbound-gate.js";
