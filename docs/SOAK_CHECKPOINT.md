@@ -1,10 +1,9 @@
 # Soak checkpoint — 2026-10-13 end of day (UTC)
 
 **Purpose.** This file is the complete resume point for the soak/stabilization workstream.
-It is written so that work can continue from it without any conversation context: it
-records the exact repository state, every gate's standing with its evidence, the finished
-designs that have not yet been implemented (G8 rollback proof, M-1 instrumentation), the
-run ledger, the operating rules that do not change, and the exact next actions in order.
+It records the current repository state, each gate's standing with evidence, implemented
+harness capabilities, the run ledger, the operating rules that do not change, and the
+next actions in order.
 
 Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 `STABILIZATION_LEDGER.md`. This file is the "where were we" layer on top of both.
@@ -15,11 +14,12 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Item | Value |
 |---|---|
-| Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, branch `main`, tip **`cc8757a0`** (pushed; working tree clean except known noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
-| Core repo | `aminsh35322088-ctrl/opencode-telegram-core`, branch `main` (this commit; pushed) |
+| Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, soak harness branch `fix/soak-evidence-through-restart`, tip **`56d723714ab8eb70e0e4ee7c2b7c4d079d81e18d`** (pushed; PR #192; not merged to `main`; known local noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
+| Bot `main` | **`57ac7606`**; do not merge PR #192 while G10 deployment decision is open |
+| Core repo | `aminsh35322088-ctrl/opencode-telegram-core`, branch `main`, tip **`343fe1a337bb5cb84038d26d82a256a5d6a068d7`** (pushed; Core pre.35 source) |
 | Evidence branch | `origin/soak-evidence`, dirs `evidence/<stamp>-<stage>/` pushed incrementally during runs (persist interval 300 s) |
 | Bot commits in play | `cf333d12` (rest precondition + restart-tool zombie/stop conventions), `a8496a1e` (tally can't lose a flow), `cc8757a0` (Stop attribution `sinceIso`) |
-| Harness baseline | 21/21 red-first cases in `tests/soak-harness.test.ts`; full suite baseline is `AppData/Local/Temp/opencode/bot-suite-newthread.txt` (14 known Windows failures, `atomic-binding-store.ts` in core — needs next core prerelease) |
+| Harness verification | 29/29 in `tests/soak-harness.test.ts`; full local suite 282/282; PR #192 CI run `38590435690` succeeded. The original Windows baseline had 14 known `atomic-binding-store.ts` failures; Core pre.35 includes the Windows fix. |
 | Local verification commands | harness: `node --import tsx --test tests/soak-harness.test.ts`; suite: `node --import tsx --test tests/*.test.ts`; lint: `node_modules\.bin\eslint.cmd src --max-warnings=0`; `bash -n` only via `C:\Program Files\Git\bin\bash.exe`; `gh` at `C:\Program Files\GitHub CLI\gh.exe` |
 | Commit style | PowerShell here-strings with `"` break `git commit -m` → write message to a file and use `git commit -F <file>` |
 
@@ -27,20 +27,20 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Gate | Standing | Evidence / note |
 |---|---|---|
-| G1 ≥2 h stress | **FAILED** (execution 4, run `38410095535`) | First honest 2 h verdict: 449 records = 434 pass + 7 fail + 8 cascade not-executed, `summary.json` == file, `unrecognized: 0`. Root cause: session-create aborted at the SDK's ~10 s timeout in cycles 78–89 (P-1, product-visible); leading hypothesis = runner disk pressure from ~174 accumulated topic workspaces, **unmeasured** (M-1). Full accounting: `SOAK_GATES.md` §7 "run 38410095535", `STABILIZATION_LEDGER.md` §4.11 |
+| G1 ≥2 h stress | **FAILED; execution 6 in progress** (`38591337444`) | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID; it passes nothing. Exec 6 uses the corrected persister and M-1 instrumentation; evaluate from its final `cycles.jsonl`. |
 | G2 Stop contract S1–S10 | PENDING | 252/252 confirmed in exec 1; per-row capture incomplete |
 | G3 Two-Worker | PENDING | not implementable in current harness (single Bot, stub mode) |
 | G4 Delete-Chat cleanup + reuse | PENDING | W6 v2 proven in cycle `38393937702`; carried by exec 4's passes, blocked by same G1 verdict |
 | G5 Recovery/restart | PENDING | W7 ×8 all `exit=graceful` in exec 4 (ready 22.9–26.0 s, pid changed each time) — evidence accrues for the row, verdict still PENDING with G1 |
 | G6 ≥24 h RC soak | PENDING, not started | 5 × 21000 s segments per §1.1; phase scheduler validated by `38406121122`; **cannot fully pass until G8 exists** (§2 requires ≥1 rollback proof inside the soak) |
 | G7 Restart proof | PENDING | timelines recorded in cycles `38393226494`, `38393937702`, and exec 4's 8 restarts |
-| G8 Rollback proof | PENDING — **designed, not yet built** (§4 below) | no harness exists yet |
-| G9 Resource evidence | FAILED | §8 filled from exec 1 only; exec 4 added mem/CPU/idle-phase data but M-1 (disk) is still missing |
+| G8 Rollback proof | **PASS** | Run `38590936914`, evidence `20261014T153745Z-cycle`: pinned rollback and restore both exited 0; exact CI run `38403232635` / #2573 qualified `cf333d12f7b9da3d37ba0042b162ba7b0d188294`; rollback took 34,826 ms ≤ 300,000 ms and restore served after boot. |
+| G9 Resource evidence | FAILED | M-1 columns are implemented and present in cycle `38590936914`; G1 exec 6 must supply the required full stress resource evidence before this gate can be reconsidered. |
 | G10 Deployment gate | PENDING — operator decision | §6 |
 
 **No stable release while any row is PENDING or FAILED.**
 
-## 3. G1 story (four executions, all on the books)
+## 3. G1 story (six executions, all on the books)
 
 | Exec | Run | Outcome | What it found / proved |
 |---|---|---|---|
@@ -48,6 +48,8 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 | 2 | `38393992089` | cancelled after root cause | D-A eaten presses, D-A2 cold-start session create, D-B restart tool refusing to leave a Bot; fixes `cf333d12` + `a8496a1e` |
 | 3 | `38403749350` | cancelled at 39 min after root cause | D-E: Stop confirmed against pre-restart history (draft-id counter reset by W7); fix `cc8757a0` |
 | 4 | `38410095535` | **FAILED, full 2 h / 89 cycles** | All harness fixes held (rest gates, tally, attribution under exact former failure conditions, W7 ×8). New product-visible failure P-1 + measurement gap M-1 (§2/§4.11 in ledger). Verdict honest: 7 fail + 8 cascade |
+| 5 | `38585090356` | cancelled at 25 min | Evidence persister stopped after W7 changed the Bot PID; fixed on PR #192. Partial evidence; no gate passes |
+| 6 | `38591337444` | in progress | Uses the corrected persister and M-1 instrumentation on Bot tip `56d72371`; evaluate only after completion |
 
 Validation runs that de-risked the fixes between executions: cycle `38403233051`
 (attribution + rest e2e), soak `38406121122` (phase scheduler + tally, success exit).
@@ -57,7 +59,15 @@ fully explained from its own evidence; otherwise let it finish and evaluate from
 `cycles.jsonl`. A failed/cancelled run passes nothing; gates read the file, never the
 workflow verdict alone.
 
-## 4. M-1 instrumentation spec (next harness change — build this before G1 execution 5)
+## 4. M-1 instrumentation spec (implemented)
+
+**Implemented and pushed** on Bot PR #192 (commits `7e776c3c` and `57ac7606`): df/du
+parsers, disk/inode and per-cycle workspace measurements, and W1/W6 topic latency.
+The first G1 attempt using this instrumentation was run `38585090356`; it was cancelled
+after 25 minutes when evidence showed the checkpoint persister exited after W7 changed
+the Bot PID. Its partial measurements do not qualify G1. Corrected run `38591337444`
+is in progress; inspect its own `cycles.jsonl` and resource samples before attributing
+the previous timeout to disk pressure.
 
 Problem it closes: exec 4's failure could not discriminate "disk pressure from
 accumulated workspaces" vs "egress stall during dependency materialization" because the
@@ -71,7 +81,12 @@ harness sampled CPU/memory but never disk.
 | create latency | `flowNewChat` / W6 reuse record | `topicLatencyMs` = press timestamp → first observation of the new topic id (the driver already waits for it; record the delta) |
 | red-first tests | `tests/soak-harness.test.ts` | df/du parsers (happy + absent-dir + malformed), source pins (sampler carries `df`/`du`, flows record `topicLatencyMs`) |
 
-## 5. G8 rollback-proof design (fully specified — ready to build TDD red-first)
+## 5. G8 rollback-proof design (implemented and validated)
+
+**Implemented and validated** on Bot PR #192 (`57ac7606`, plus checkout-clean fix
+`56d72371`). Run `38590936914` completed successfully; its cycle evidence contains the
+rollback/restore proof below. The implementation details and marker contract that
+follow remain the reference for future soak segments.
 
 Hard constraints from the operator: the target is **always a pinned, explicitly supplied
 SHA** (`rollbackSha`), never `HEAD^` or any implicit previous revision; qualification is
@@ -156,17 +171,22 @@ no `HEAD^`; soak.yml input + env; run.sh flag; driver wiring
 
 ### 5.6 G8 validation run
 
-`stage=cycle` with `-f rollback-sha=cf333d12` (CI success on main, ancestor of tip,
+`stage=cycle` with `-f rollback_sha=cf333d12` (CI success on main, ancestor of tip,
 ≠ tip, resolvable). Assert the cycle record carries both SHAs, the CI run identity,
-the D6 timeline, and a serving restore leg. G8 stays PENDING until that evidence
-exists; G6 then needs ≥1 real rollback proof inside its soak (one per segment when
-`ROLLBACK_SHA` is set — my call: cycle index 1 of each segment).
+the D6 timeline, and a serving restore leg. Validation evidence:
+`evidence/20261014T153745Z-cycle/cycles.jsonl`, run `38590936914`, Bot tip
+`56d723714ab8eb70e0e4ee7c2b7c4d079d81e18d`; `rollbackSha` is
+`cf333d12f7b9da3d37ba0042b162ba7b0d188294`, the latest matching successful CI run is
+`38403232635` / #2573, `rollbackMs=34826`, `withinD6=true`, `restoreMs=10362`,
+`restoreServing=true`, `rollbackExit=0`, `restoreExit=0`. G8 is PASS. G6 still needs a
+real rollback proof inside its soak (one per segment when `ROLLBACK_SHA` is set —
+cycle index 1 of each segment).
 
-## 6. G6 plan (starts after G1 attempt 5 is green or its result is known)
+## 6. G6 plan (starts after G1 execution 6 is complete and judged)
 
 Five sequential `stage=soak` segments, `duration=21000` each (defaults active 2700 /
 idle 900), dispatched one after another, each verified from its own `cycles.jsonl`
-before the next; `rollback-sha` supplied so each segment carries one rollback proof.
+before the next; `rollback_sha` supplied so each segment carries one rollback proof.
 Any gap between segments is reported as a gap, never smoothed over.
 
 ## 7. Run ledger
@@ -182,10 +202,15 @@ Any gap between segments is reported as a gap, never smoothed over.
 | `38403749350` | stress 2 h | cancelled 13:56Z | D-E root-caused (pre-restart Stop attribution) |
 | `38406121122` | soak 180 s | success | phase scheduler + tally validation |
 | `38410095535` | stress 2 h | **failure** | G1 exec 4: honest 2 h verdict; P-1 + M-1 |
+| `38585090356` | stress 2 h | cancelled at 25 min | G1 exec 5: evidence persister stopped after W7 changed the Bot PID; no gate passes |
+| `38590936914` | cycle | success | G8 rollback/restore proof against pinned `cf333d12`; rollback 34.826 s and restore serving |
+| `38591337444` | stress 2 h | in progress | G1 exec 6 on Bot tip `56d72371`, with corrected evidence persistence and M-1 instrumentation |
 
-Evidence dirs on `origin/soak-evidence`: `20261013T140350Z-stress` (exec 4 — the
-current focus), `20261013T135754Z-soak`, `20261013T131746Z-stress`, `20261013T124702Z-soak`,
-`20261013T120033Z-stress`.
+Evidence dirs on `origin/soak-evidence` include `20261014T153745Z-cycle` (G8 validation),
+`20261014T145737Z-stress` (G1 exec 5, cancelled; partial), `20261013T140350Z-stress`
+(exec 4), `20261013T135754Z-soak`, `20261013T131746Z-stress`, `20261013T124702Z-stress`,
+and `20261013T120033Z-stress`. Exec 6 evidence will appear after run `38591337444`
+pushes its first checkpoint.
 
 ## 8. Operating rules that do not change
 
@@ -207,13 +232,11 @@ current focus), `20261013T135754Z-soak`, `20261013T131746Z-stress`, `20261013T12
 
 ## 9. Next actions, in order
 
-1. **M-1 instrumentation** (§4): red-first tests → `parseDfOutput`/`parseDuTotal` in
-   signals → driver disk/du/count sampling + `topicLatencyMs` on W1/W6 records → verify
-   (harness all, tsc 0, eslint 0, suite vs baseline) → commit `soak:` + push.
-2. **G1 execution 5**: dispatch `stage=stress duration=7200` on the new tip; evaluate
-   from `cycles.jsonl` at finish; use the new disk/latency columns to confirm or refute
-   the disk hypothesis; update G1 row + §7/§4.11 accordingly.
-3. **G8 build** (§5): red-first tests → judges → `bot-rollback.sh` → `flowRollback` +
-   wiring → `soak.yml`/`run.sh` plumbing → verify → commit + push.
-4. **G8 validation**: `stage=cycle -f rollback-sha=cf333d12`; assert the full record.
-5. **G6**: five 21000 s segments with `rollback-sha` set (§6), evidence-verified one by one.
+1. **G1 execution 6** (`38591337444`): await the 2 h run; evaluate the complete
+   `cycles.jsonl`, `summary.json`, disk/workspace samples, and topic latency. Update the
+   G1 row and §7/§4.11 from the evidence.
+2. **G6**: after G1's full result is known, run five 21000 s segments sequentially with
+   `rollback_sha` supplied (§6); inspect each segment's own evidence before dispatching
+   the next. The correct workflow input is `rollback_sha` (underscore).
+3. Resolve remaining G2/G3/G4/G5/G7/G9 evidence and the G10 operator deployment gate.
+   No Stable release until every gate is admissibly closed.
