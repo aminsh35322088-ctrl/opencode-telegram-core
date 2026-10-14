@@ -1,6 +1,6 @@
 # Telegram Rich Presentation Ownership Design
 
-Status: implemented and CI-verified; final branch sync/review pending.
+Status: implementation complete; synchronized feature CI green; ready for independent review.
 Date: 2026-10-14
 Branch: `feat/telegram-native-presentation-gaps`
 Bot integration: `opencode-telegram-bot#191`
@@ -44,7 +44,7 @@ PR #31 moves that policy into Core:
 - `tableBlock()` sets `isCompact: true` for ordinary GFM tables;
 - explicit HTML rich tables keep attribute-driven semantics: `<table>` stays non-compact unless `compact` is present;
 - renderer remains a pure mapping of `AgentBlock.isCompact` to Telegram `is_compact`;
-- Bot #191 removes its post-render compact-table override only after consuming a published/pinned Core artifact containing this PR.
+- Bot #191 has removed its post-render table override and now preserves whatever compactness the pinned Core artifact supplies.
 
 ### 2. Public capability contract
 
@@ -102,7 +102,7 @@ Core continues progressive enhancement:
 
 ## Testing contract
 
-The Core PR must prove:
+The Core PR proves:
 
 1. GFM Markdown table produces an Agent table with `isCompact: true` and Telegram `is_compact: true`.
 2. Explicit HTML table without `compact` keeps existing explicit semantics; `<table compact>` remains compact.
@@ -114,11 +114,12 @@ The Core PR must prove:
 
 ## Implementation and verification evidence
 
-TDD evidence was intentionally retained in GitHub Actions history:
+TDD evidence is intentionally retained in GitHub Actions history:
 
 - RED run `38593967940`: **342 pass / 1 fail**; the only new failure was the expected missing `isCompact: true` on a GFM table. The explicit HTML-table test was already green.
 - RED run `38594262691`: failed at typecheck because `TELEGRAM_RICH_PRESENTATION_CAPABILITIES` did not exist yet.
-- Final GREEN run `38594717524` on head `635491ac6161f678142d322bd0308a488086a477`:
+- Pre-sync GREEN run `38594717524` on implementation head `635491ac6161f678142d322bd0308a488086a477` proved the implementation before base synchronization.
+- Post-rebase GREEN run `38601561471` on head `b33344c939fd646a54238199c052e6252aeae1fd` proved:
   - `validate`: success
   - TypeScript typecheck: success
   - Bun runtime suite: **344 pass / 0 fail**, 27 files, 1863 assertions
@@ -136,7 +137,9 @@ The dedicated ownership tests are green for:
 
 ### Branch freshness
 
-At this evidence point, Core `main` advanced to `9ed7f4ec42701435d216497ddb3a7bfb709a800a` with documentation-only commits after the feature branch fork. GitHub compare reports the PR branch **8 commits ahead / 2 behind**. The PR remains Draft until it is synchronized onto the latest `main` and the final post-sync CI is green. The pre-sync green run above is evidence of implementation correctness, not permission to claim merge readiness.
+The verified feature head was rebased onto Core `main` `9e6e5e152520a2e1584d2edebe55057d27d42370` before run `38601561471`.
+
+The stabilization/soak process then appended documentation-only checkpoints, including `c794cba48783eda6df24f8a9c3115ff2f81b8bca` touching `docs/SOAK_CHECKPOINT.md`. Those concurrent docs-only commits do not overlap this PR's production/runtime/test files and are not treated as invalidating the verified feature evidence. GitHub mergeability and the current base must still be refreshed immediately before any eventual merge.
 
 ## Documentation contract
 
@@ -147,9 +150,8 @@ The PR includes:
 - capability matrix;
 - ownership split with Bot PR #191;
 - fallback/security notes;
-- exact TDD and CI evidence.
-
-Before marking ready for review, update the branch-sync SHA and final post-sync CI run in the PR body.
+- exact TDD and CI evidence;
+- explicit handoff steps for the Bot artifact pin.
 
 ## Non-goals
 
