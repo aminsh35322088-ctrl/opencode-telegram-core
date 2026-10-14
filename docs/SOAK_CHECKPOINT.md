@@ -274,3 +274,15 @@ and `20261013T120033Z-stress`. Exec 6 partial evidence was durably pushed in
   dependency install, pinned Core runtime verification/materialization, and build passed;
   the `Run soak stage` step is active. No gate verdict is available until the run finishes
   and its own evidence is inspected.
+
+
+### 8.3 First durable checkpoint for G1 execution 7
+
+Evidence commit `bda832920830e0ecafd912193472642754703c6c` added
+`evidence/20261014T163854Z-stress/` at `16:43:56Z`. Its partial `cycles.jsonl` has 31
+records, all `pass` (W1 6, W2 6, W5 6, W6 6, W0 7); 12 W1/W6 topic-latency values
+average 2,567 ms and max at 2,720 ms. Six resource sample rows carry the nested Topic
+workspace count (maximum 6) and bytes (maximum 1,114,198,745), disk used 43%, minimum
+free inodes 18,363,577, minimum available memory 13,988,940 KiB, and maximum child RSS
+1,228,020 KiB. This is about six minutes of the required 120; interim evidence only, no
+gate verdict.

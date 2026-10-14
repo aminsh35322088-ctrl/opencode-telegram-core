@@ -849,3 +849,11 @@ root cause. It passes no gate. Bot `da2728cfb2a4447bed2489791bb09125278002fe` in
 `phaseForStage`, which confines active/idle transitions to `soak`, plus tests pinning that
 `stress` and `cycle` remain active. CI run `38599189898` was still in progress when this
 addendum was written. CI `38599189898` subsequently passed and corrected 7200 s execution 7 (`38599794531`) was dispatched on `da2728cf`; its stage is in progress and has no verdict yet.
+
+
+**First checkpoint (interim):** evidence commit `bda832920830e0ecafd912193472642754703c6c`
+for G1 execution 7 records 31/31 pass across W1/W2/W5/W6/W0 and 12 topic latencies
+(mean 2,567 ms, max 2,720 ms). Workspace count reached 6, workspace bytes 1,114,198,745,
+disk use 43%, free inodes 18,363,577, minimum available memory 13,988,940 KiB, and
+maximum child RSS 1,228,020 KiB. These are the first ~6 minutes of a 2 h run, not gate
+verdict evidence.
