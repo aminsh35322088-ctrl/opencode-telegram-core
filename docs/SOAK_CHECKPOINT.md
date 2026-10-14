@@ -1,4 +1,4 @@
-# Soak checkpoint — 2026-10-13 end of day (UTC)
+# Soak checkpoint — updated 2026-10-14 (UTC)
 
 **Purpose.** This file is the complete resume point for the soak/stabilization workstream.
 It records the current repository state, each gate's standing with evidence, implemented
@@ -10,13 +10,24 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 ---
 
+## Current operator direction — Bot recovery completed
+
+The operator deferred Stable Bot publication and explicitly requested independent
+review, fixes, merges of Bot #191/Core #31, and restoration of Bot usability. Both PRs
+are now merged and the production Bot deployment is verified online. Core pre.36 is
+a prerelease with a complete changelog. See `BOT_RECOVERY_2026-10-14.md` for exact
+revisions, tests, CI, artifact and deployment evidence. Do not start G6 or another
+qualification run under the superseded Stable Bot objective. The already-running G1
+execution 7 is pinned to the earlier candidate and may finish independently; it does
+not qualify the new Bot/Core production pair.
+
 ## 1. Repository state at this checkpoint
 
 | Item | Value |
 |---|---|
 | Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, soak harness branch `fix/soak-evidence-through-restart`, tip **`da2728cfb2a4447bed2489791bb09125278002fe`** (pushed; PR #192; CI run `38599189898` succeeded; not merged to `main`; known local noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
-| Bot `main` | **`57ac7606`**; do not merge PR #192 while G10 deployment decision is open |
-| Core repo | `aminsh35322088-ctrl/opencode-telegram-core`, branch `main`, tip **`343fe1a337bb5cb84038d26d82a256a5d6a068d7`** (pushed; Core pre.35 source) |
+| Bot `main` | **`8b0716207e7db7ec717ac30a806214239b1b95e9`**; user-authorized recovery merge of #191, verified live. PR #192 remains separate and unmerged |
+| Core repo | `aminsh35322088-ctrl/opencode-telegram-core`, branch `main`, reviewed #31 merge **`6e19b05849ace61271d8fbc1adc14e7e8f85c297`** (Core pre.36 source; later docs-only commits do not change that immutable release source) |
 | Evidence branch | `origin/soak-evidence`, dirs `evidence/<stamp>-<stage>/` pushed incrementally during runs (persist interval 300 s) |
 | Bot commits in play | `cf333d12` (rest precondition + restart-tool zombie/stop conventions), `a8496a1e` (tally can't lose a flow), `cc8757a0` (Stop attribution `sinceIso`) |
 | Harness verification | 29/29 in `tests/soak-harness.test.ts`; full local suite 282/282; PR #192 CI run `38590435690` succeeded. The original Windows baseline had 14 known `atomic-binding-store.ts` failures; Core pre.35 includes the Windows fix. |
@@ -240,14 +251,17 @@ and `20261013T120033Z-stress`. Exec 6 partial evidence was durably pushed in
   P-1(b) orphaned workspace cleanup race, §5 memory ceiling (child peak 6.66 GB vs the
   120 MB registered ceiling), G10 deployment gate.
 
-## 9. Next actions, in order
+## 9. Next actions under the current operator direction
 
-1. **G1 execution 7** (`38599794531`): wait for the full 7200 s `stage=stress` on `da2728cfb2a4447bed2489791bb09125278002fe`; inspect its own `cycles.jsonl`, summary, and resource samples before judging. Execution 6 (`38591337444`) was cancelled after its samples proved stress entered the default idle phase at the 45-minute boundary; it passes no gate.
-2. **G6**: after G1's full result is known, run five 21000 s segments sequentially with
-   `rollback_sha` supplied (§6); inspect each segment's own evidence before dispatching
-   the next. The correct workflow input is `rollback_sha` (underscore).
-3. Resolve remaining G2/G3/G4/G5/G7/G9 evidence and the G10 operator deployment gate.
-   No Stable release until every gate is admissibly closed.
+1. Bot recovery is complete: #191 and Core #31 are merged, pre.36 is pinned, CI is
+   green and deployment `a873d8d5-6674-4465-8cc8-9d214f4d6ab9` is online with Telegram
+   polling started and `/health` HTTP 200. Stable Bot publication is deferred.
+2. Existing G1 execution 7 (`38599794531`) tests old Bot `da2728cf` / Core pre.35,
+   not current Bot `8b071620` / Core pre.36. Let that isolated run finish; do not
+   treat its results as qualification of the new pair. Gates retain their statuses.
+3. If stabilization is explicitly resumed, first rebase/adapt PR #192 to the current
+   pre.36 pin before any merge or new stress. Then collect evidence for the new
+   candidate; G6 remains unstarted and requires a fresh explicit direction.
 
 
 ### 8.1 Continuation — stress phase defect (2026-10-14)
@@ -307,3 +321,17 @@ Evidence commit `6df12ba55591c48950a9e722ae91ad7b8d0a6e47` updated
 max 3,335 ms); workspace count max 17 / bytes 3,162,957,073; disk max 44%, minimum free
 inodes 18,305,678, minimum available memory 13,104,076 KiB, and child RSS max 1,320,256
 KiB. About 15 minutes are complete; no gate verdict yet.
+
+
+### 8.6 Reviewed production recovery completed
+
+Bot #191 merged as `8b0716207e7db7ec717ac30a806214239b1b95e9`, Core #31 as
+`6e19b05849ace61271d8fbc1adc14e7e8f85c297`. Core pre.36 is published with full
+changelog; Bot pins its verified archives and matching default Worker image.
+Review-fixed Activity redaction/chunking, intermediate Activity retirement,
+compaction cancellation/joined teardown and exact-session completion. Final local
+verification: 298/298 Node and 2268/2268 CI-only tests plus lint/typecheck/build.
+Bot final-head CI `38608919771` and merge CI `38609512837` succeeded. Production
+deployment `a873d8d5-6674-4465-8cc8-9d214f4d6ab9` is SUCCESS/Online, polling started
+17:47:45Z, healthy HTTP 200, and startup/first 91 s heartbeats show no startup error.
+Stable Bot publication remains deferred; no gate row changes in this recovery.
