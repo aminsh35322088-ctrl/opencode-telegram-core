@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   parseMarkdownDocument,
   renderTelegramRichDocument,
+  TELEGRAM_RICH_PRESENTATION_CAPABILITIES,
 } from "../src/index.js";
 
 describe("Telegram rich presentation ownership", () => {
@@ -52,5 +53,34 @@ describe("Telegram rich presentation ownership", () => {
     expect(compact?.type).toBe("table");
     if (compact?.type !== "table") throw new Error("expected compact HTML table");
     expect(compact.isCompact).toBe(true);
+  });
+
+  test("public capability contract matches the tested Telegram rich surface", () => {
+    expect(TELEGRAM_RICH_PRESENTATION_CAPABILITIES).toEqual({
+      richMessages: true,
+      details: true,
+      expandableQuotes: true,
+      math: true,
+      dateTime: true,
+      anchors: true,
+      references: true,
+      compactTables: true,
+      richButtons: true,
+      rtlBidi: true,
+    });
+
+    const rich = renderTelegramRichDocument(
+      parseMarkdownDocument(
+        "<details><summary>More</summary>Body</details>\n\n<blockquote expandable>Long quote</blockquote>\n\n<tg-math>x^2</tg-math>\n\n<tg-time unix=1760457600 format=R>now</tg-time>\n\n<a name=proof></a>[proof](#proof)",
+      ),
+      { draft: false },
+    );
+    const serialized = JSON.stringify(rich);
+    expect(serialized).toContain('"type":"details"');
+    expect(serialized).toContain('"type":"expandable_blockquote"');
+    expect(serialized).toContain('"type":"mathematical_expression"');
+    expect(serialized).toContain('"type":"date_time"');
+    expect(serialized).toContain('"type":"anchor"');
+    expect(serialized).toContain('"type":"anchor_link"');
   });
 });
