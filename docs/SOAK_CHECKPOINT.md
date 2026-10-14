@@ -27,7 +27,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Gate | Standing | Evidence / note |
 |---|---|---|
-| G1 ≥2 h stress | **FAILED; execution 6 in progress** (`38591337444`) | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID; it passes nothing. Exec 6 uses the corrected persister and M-1 instrumentation; evaluate from its final `cycles.jsonl`. |
+| G1 ≥2 h stress | **FAILED; execution 6 in progress** (`38591337444`) | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID; it passes nothing. Exec 6 uses the corrected persister and disk/byte/latency measurements, but its `workspaceCount` only counted chat grouping directories. The two-level count fix is CI-green in Bot commit `981bf841`; judge whether exec 6 otherwise qualifies from its final evidence, and rerun on `981bf841` for a full accurate count if required by §8. |
 | G2 Stop contract S1–S10 | PENDING | 252/252 confirmed in exec 1; per-row capture incomplete |
 | G3 Two-Worker | PENDING | not implementable in current harness (single Bot, stub mode) |
 | G4 Delete-Chat cleanup + reuse | PENDING | W6 v2 proven in cycle `38393937702`; carried by exec 4's passes, blocked by same G1 verdict |
@@ -35,7 +35,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 | G6 ≥24 h RC soak | PENDING, not started | 5 × 21000 s segments per §1.1; phase scheduler validated by `38406121122`; **cannot fully pass until G8 exists** (§2 requires ≥1 rollback proof inside the soak) |
 | G7 Restart proof | PENDING | timelines recorded in cycles `38393226494`, `38393937702`, and exec 4's 8 restarts |
 | G8 Rollback proof | **PASS** | Run `38590936914`, evidence `20261014T153745Z-cycle`: pinned rollback and restore both exited 0; exact CI run `38403232635` / #2573 qualified `cf333d12f7b9da3d37ba0042b162ba7b0d188294`; rollback took 34,826 ms ≤ 300,000 ms and restore served after boot. |
-| G9 Resource evidence | FAILED | M-1 columns are implemented and present in cycle `38590936914`; G1 exec 6 must supply the required full stress resource evidence before this gate can be reconsidered. |
+| G9 Resource evidence | FAILED | M-1 columns are implemented and present in cycle `38590936914`; exec 6 provides disk, workspace bytes and latency but has an undercounted `workspaceCount`. Run a full stress stage on Bot commit `981bf841` before reconsidering this gate. |
 | G10 Deployment gate | PENDING — operator decision | §6 |
 
 **No stable release while any row is PENDING or FAILED.**
@@ -68,6 +68,14 @@ after 25 minutes when evidence showed the checkpoint persister exited after W7 c
 the Bot PID. Its partial measurements do not qualify G1. Corrected run `38591337444`
 is in progress; inspect its own `cycles.jsonl` and resource samples before attributing
 the previous timeout to disk pressure.
+
+**Count correction:** the workspace service stores Topic directories as
+`topic-workspaces/<chatId>/<sessionId>`. Exec 6 initially counted only the direct
+`chatId` entries, so its `workspaceCount=1` is not a Topic count. Bot commit `981bf841`
+counts the nested session directories and has passing CI plus a fixture test; this fix
+was pushed while exec 6 remained pinned to its original SHA. Its disk, workspace byte
+and latency measurements remain usable, but use the corrected commit for complete §8
+resource evidence.
 
 Problem it closes: exec 4's failure could not discriminate "disk pressure from
 accumulated workspaces" vs "egress stall during dependency materialization" because the
@@ -204,7 +212,7 @@ Any gap between segments is reported as a gap, never smoothed over.
 | `38410095535` | stress 2 h | **failure** | G1 exec 4: honest 2 h verdict; P-1 + M-1 |
 | `38585090356` | stress 2 h | cancelled at 25 min | G1 exec 5: evidence persister stopped after W7 changed the Bot PID; no gate passes |
 | `38590936914` | cycle | success | G8 rollback/restore proof against pinned `cf333d12`; rollback 34.826 s and restore serving |
-| `38591337444` | stress 2 h | in progress | G1 exec 6 on Bot tip `56d72371`, with corrected evidence persistence and M-1 instrumentation |
+| `38591337444` | stress 2 h | in progress | G1 exec 6 on Bot tip `56d72371`, with corrected evidence persistence and M-1 except for the nested workspace count, fixed by `981bf841` |
 
 Evidence dirs on `origin/soak-evidence` include `20261014T153745Z-cycle` (G8 validation),
 `20261014T145737Z-stress` (G1 exec 5, cancelled; partial), `20261013T140350Z-stress`
@@ -232,9 +240,10 @@ pushes its first checkpoint.
 
 ## 9. Next actions, in order
 
-1. **G1 execution 6** (`38591337444`): await the 2 h run; evaluate the complete
-   `cycles.jsonl`, `summary.json`, disk/workspace samples, and topic latency. Update the
-   G1 row and §7/§4.11 from the evidence.
+1. **G1 execution 6** (`38591337444`): await the 2 h run and judge its cycle outcomes,
+   duration, summary and the usable M-1 disk/byte/latency fields. The workspace count is
+   undercounted on this SHA; if the gate requires all §8 fields, repeat the full stress
+   on `981bf841` before closing G1/G9.
 2. **G6**: after G1's full result is known, run five 21000 s segments sequentially with
    `rollback_sha` supplied (§6); inspect each segment's own evidence before dispatching
    the next. The correct workflow input is `rollback_sha` (underscore).

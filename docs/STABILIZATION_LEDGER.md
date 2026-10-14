@@ -826,3 +826,11 @@ historical observations in §§4–7.
 - G1 remains FAILED until a complete qualifying stress run passes; G2/G3/G4/G5/G6/G7/G9
   are still pending or failed as shown in `SOAK_GATES.md`. G10 still needs the operator's
   deployment-gate decision. No Stable Core release is authorized by this evidence.
+- **M-1 count correction:** early samples in exec 6 report `workspaceCount=1`, but a
+  repository inspection shows Topic directories at
+  `topic-workspaces/<chatId>/<sessionId>`; the driver counted only direct chat-ID entries.
+  Workspace bytes and disk samples above are real, but that count is not the number of
+  Topic workspaces. Bot commit `981bf841fb1a52267c75b81aea440cb6324022f6` now counts
+  nested session directories and adds a filesystem fixture test; PR CI run `38594412061`
+  succeeded. Exec 6 remains pinned to `56d72371`, so use the corrected Bot revision for
+  any full resource dataset that must include an accurate workspace count.
