@@ -864,3 +864,10 @@ contains 60/60 passes and one passing W7 restart (PID changed, 23,961 ms ready, 
 exit). Workspace count/bytes reached 11 / 2,044,485,262; disk use 43%, free inodes
 18,337,185, minimum available memory 13,629,700 KiB, and child RSS max 1,320,256 KiB.
 At ~11 minutes, it does not qualify the 2 h G1 gate.
+
+
+**Third checkpoint (interim):** evidence commit `6df12ba55591c48950a9e722ae91ad7b8d0a6e47`
+has 87/87 passing records, 34 topic latencies (mean 2,740 ms, max 3,335 ms), workspace
+count/bytes 17 / 3,162,957,073, disk 44%, free inodes 18,305,678, available memory
+minimum 13,104,076 KiB, and child RSS maximum 1,320,256 KiB. At ~15 minutes, this is
+interim only.

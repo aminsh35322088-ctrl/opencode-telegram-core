@@ -297,3 +297,13 @@ boot, `restartExit=graceful`, and D5 met. There are 23 topic-latency rows (mean 
 max 3,325 ms); workspace count maximum 11 / bytes 2,044,485,262; disk 43%, free inodes
 minimum 18,337,185, available memory minimum 13,629,700 KiB, and child RSS maximum
 1,320,256 KiB. This is about 11 minutes of 120 and remains interim only.
+
+
+### 8.5 Third durable checkpoint for G1 execution 7
+
+Evidence commit `6df12ba55591c48950a9e722ae91ad7b8d0a6e47` updated
+`evidence/20261014T163854Z-stress/` at `16:54:03Z`: 87 records, all pass (W0 18, W1
+17, W2 17, W5 17, W6 17, W7 1). It contains 34 topic-latency values (mean 2,740 ms,
+max 3,335 ms); workspace count max 17 / bytes 3,162,957,073; disk max 44%, minimum free
+inodes 18,305,678, minimum available memory 13,104,076 KiB, and child RSS max 1,320,256
+KiB. About 15 minutes are complete; no gate verdict yet.
