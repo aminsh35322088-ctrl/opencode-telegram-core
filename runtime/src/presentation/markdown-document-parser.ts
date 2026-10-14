@@ -630,7 +630,7 @@ function tableBlock(node: MdNode, context: ParseContext): AgentBlock {
       ...(align[columnIndex] ? { align: align[columnIndex]! } : {}),
     })),
   );
-  return { type: "table", cells, isBordered: true };
+  return { type: "table", cells, isBordered: true, isCompact: true };
 }
 
 function parseAttrs(raw: string): Readonly<Record<string, string | true>> {
