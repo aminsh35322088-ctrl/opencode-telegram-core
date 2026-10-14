@@ -286,3 +286,14 @@ workspace count (maximum 6) and bytes (maximum 1,114,198,745), disk used 43%, mi
 free inodes 18,363,577, minimum available memory 13,988,940 KiB, and maximum child RSS
 1,228,020 KiB. This is about six minutes of the required 120; interim evidence only, no
 gate verdict.
+
+
+### 8.4 Second durable checkpoint for G1 execution 7
+
+Evidence commit `f6393eace1122091391212313bd3bdc8149e9f25` updated the same evidence
+directory at `16:49:00Z`. It contains 60 records, all pass (W0 12, W1 12, W2 12, W5
+12, W6 11, W7 1). The W7 record passes: PID changed, `readyMs=23,961`, answered after
+boot, `restartExit=graceful`, and D5 met. There are 23 topic-latency rows (mean 2,641 ms,
+max 3,325 ms); workspace count maximum 11 / bytes 2,044,485,262; disk 43%, free inodes
+minimum 18,337,185, available memory minimum 13,629,700 KiB, and child RSS maximum
+1,320,256 KiB. This is about 11 minutes of 120 and remains interim only.

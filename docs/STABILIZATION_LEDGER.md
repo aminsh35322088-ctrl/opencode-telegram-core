@@ -857,3 +857,10 @@ for G1 execution 7 records 31/31 pass across W1/W2/W5/W6/W0 and 12 topic latenci
 disk use 43%, free inodes 18,363,577, minimum available memory 13,988,940 KiB, and
 maximum child RSS 1,228,020 KiB. These are the first ~6 minutes of a 2 h run, not gate
 verdict evidence.
+
+
+**Second checkpoint (interim):** evidence commit `f6393eace1122091391212313bd3bdc8149e9f25`
+contains 60/60 passes and one passing W7 restart (PID changed, 23,961 ms ready, graceful
+exit). Workspace count/bytes reached 11 / 2,044,485,262; disk use 43%, free inodes
+18,337,185, minimum available memory 13,629,700 KiB, and child RSS max 1,320,256 KiB.
+At ~11 minutes, it does not qualify the 2 h G1 gate.
