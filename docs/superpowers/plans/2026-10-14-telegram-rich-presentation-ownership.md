@@ -18,7 +18,7 @@
 - Capability descriptor only claims tested behavior.
 - No arbitrary text-color API.
 - No privileged model-generated interactive action is enabled.
-- No merge/release until branch is synchronized to latest `main` and fresh CI is green.
+- No merge/release is part of this PR.
 
 ## Task 1 — Compact GFM tables
 
@@ -38,10 +38,6 @@
 
 ## Task 3 — Full regression evidence
 
-Final pre-sync implementation head: `635491ac6161f678142d322bd0308a488086a477`.
-
-Final pre-sync CI: `38594717524`.
-
 - [x] TypeScript typecheck — success.
 - [x] Bun runtime — **344 / 344 pass**, 27 files, 1863 assertions.
 - [x] unbound session probe boundary — **3 / 3 pass**.
@@ -49,29 +45,35 @@ Final pre-sync CI: `38594717524`.
 - [x] toolchain/release contracts — success.
 - [x] `upstream-runtime` — success.
 - [x] `telegram-headless` / production graph / Bot SDK surface — success.
-- [x] Record TDD + CI evidence in the design spec.
+- [x] Record TDD + CI evidence in the design spec / PR.
 
-## Task 4 — Branch freshness / review gate
+Verified synchronized feature head: `b33344c939fd646a54238199c052e6252aeae1fd`.
 
-Current latest observed Core `main`: `9ed7f4ec42701435d216497ddb3a7bfb709a800a`.
+Full post-rebase CI: **run `38601561471`**:
 
-At the evidence checkpoint the PR branch is **8 commits ahead / 2 behind** latest main; the behind commits are outside the rich-presentation implementation, but stale green CI is not final merge evidence.
+- [x] `validate` — success.
+- [x] `upstream-runtime` — success.
+- [x] `telegram-headless` — success.
 
-- [ ] Synchronize branch onto latest Core `main` without dropping PR changes.
-- [ ] Re-run all three GitHub Actions jobs on the synchronized head.
-- [ ] Require `validate`, `upstream-runtime`, and `telegram-headless` = success.
-- [ ] Confirm PR `mergeable=true`.
-- [ ] Update PR body/spec with synchronized head SHA and final CI run ID.
-- [ ] Mark PR ready for independent review only after the items above.
+The feature head was rebased onto Core `main` `9e6e5e152520a2e1584d2edebe55057d27d42370`. Immediately after that successful CI, the soak process appended a documentation-only checkpoint `c794cba48783eda6df24f8a9c3115ff2f81b8bca` touching `docs/SOAK_CHECKPOINT.md`. It does not overlap this PR's runtime/test files and does not invalidate the feature evidence; mergeability/freshness must still be refreshed immediately before an eventual merge.
+
+## Task 4 — Review gate
+
+- [x] Synchronize feature work onto then-latest Core `main` without dropping PR changes.
+- [x] Re-run all three GitHub Actions jobs on the synchronized feature head.
+- [x] Require `validate`, `upstream-runtime`, and `telegram-headless` = success.
+- [x] Verify the later soak checkpoint is documentation-only and does not overlap feature files.
+- [x] Update PR documentation with synchronized head SHA and CI run ID.
+- [x] Ready for independent code review; **not** merged or released.
 
 ## Task 5 — Bot handoff
 
 - [x] Bot PR #191 documentation explicitly delegates semantic Telegram grammar to Core #31.
 - [x] Bot #191 is prohibited from adding parallel Details/math/date/reference/table/button parsers.
+- [x] Bot #191 removed its table post-process and added a version-agnostic pass-through regression, so Bot no longer owns table compactness semantics.
 - [ ] After Core #31 is accepted, publish or otherwise provide a pinned native-runtime artifact containing #31.
-- [ ] Update Bot #191 to that exact artifact.
-- [ ] Remove Bot's temporary `is_compact` table post-process only after the new artifact is pinned.
-- [ ] Re-run full Bot CI after the artifact migration.
+- [ ] Update Bot #191 to that exact artifact and prove Core supplies GFM compactness directly.
+- [ ] Re-run full Bot verification after that artifact migration before any production merge/deploy.
 
 ## Final review focus
 
