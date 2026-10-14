@@ -241,7 +241,7 @@ reject. **No production deployment configuration has been modified.**
 
 | Gate | Evidence required | Status |
 |---|---|---|
-| G1 ≥2 h representative stress | Timestamped cycle log + §3 results + §8 measurements | `FAILED` — execution 1 `38370753677` ran 2 h / 263 cycles (F1 ×11, F6, F7; no W6 v2/W7); execution 2 `38393992089` **cancelled** once three harness defects were root-caused (D-A eaten New Chat presses, D-A2 cold-start session create, D-B restart-tool refusal; accounting below); execution 3 `38403749350` **cancelled at 39 min** once W5's failures were root-caused — the Stop confirmation matched *pre-restart* history after W7 reset the draft-id counter (accounting below). A cancelled run passes nothing. Fixes `cf333d12`, `a8496a1e`, `cc8757a0`; validation cycle `38403233051` and validation soak `38406121122` green; execution 4 `38410095535` on `cc8757a0` in flight. |
+| G1 ≥2 h representative stress | Timestamped cycle log + §3 results + §8 measurements | `FAILED` — execution 1 `38370753677` ran 2 h / 263 cycles (F1 ×11, F6, F7; no W6 v2/W7); execution 2 `38393992089` **cancelled** once three harness defects were root-caused (D-A eaten New Chat presses, D-A2 cold-start session create, D-B restart-tool refusal; accounting below); execution 3 `38403749350` **cancelled at 39 min** once W5's failures were root-caused — the Stop confirmation matched *pre-restart* history after W7 reset the draft-id counter (accounting below). A cancelled run passes nothing. Fixes `cf333d12`, `a8496a1e`, `cc8757a0`; validation cycle `38403233051` and validation soak `38406121122` green; execution 4 `38410095535` (2026-10-13) ran the full 2 h / 89 cycles and its verdict is **FAILED**, taken from `cycles.jsonl` itself: 434 pass, 7 fail, 8 not-executed (the fails' direct cascades), `summary.json` equal to the file, `unrecognized: 0`. Root cause fully attributed from the run's own evidence: session-create aborted at the SDK's ~10 s timeout during cycles 78–89, after ~174 topic workspaces had accumulated on the runner (accounting below). Every harness fix it exercised held. |
 | G2 Telegram Stop contract (S1–S10) | Per-row captured evidence | `PENDING` (S1/S5 unit+contract tests green; stress run: 252/252 Stops confirmed by the Bot's `result=confirmed` line, D1 ≤ 635 ms, D2 `lateDelta` 0 — per-row capture still incomplete) |
 | G3 Two-Worker isolation (W3) | Interleaved message/file/state traces from both Topics | `PENDING` — not implementable yet: single Bot process, local stub mode |
 | G4 Delete Chat cleanup + Worker reuse (W6) | Resource inventory before/after | `PENDING` — W6 v2 proven in cycle `38393937702` (`requested`/`completed` true, `topicGone: true` recorded, `reuse=10001` ≠ deleted `10000`, `lateStreams 0`, D4 303 ms); it must still be carried by the ≥2 h stress |
@@ -363,6 +363,65 @@ worked (W1 `restWaitMs` 5.2–25 s ×12, W6 `topicGone` ×12, W7
 | Guard | Red-first harness case carrying run `38403749350`'s actual lines (stale `13:18:08` vs real `13:26:07`, pre-press refusal ignored, unparseable window never confirms) — harness 21/21 |
 | Proof | Validation soak `38406121122`: W5 confirmed with real timing on every cycle (no id reset — no restart in that stage). Re-run `38410095535` dispatched 14:03:23Z on `cc8757a0` |
 | Cancellation basis | Root cause fully explained by the run's own bot.log; the remaining ~80 minutes would only have repeated the misattribution in cycles whose verdicts it already invalidates, and a run that ends `exit 1` cannot pass G1 either way. Same doctrine as `38393992089` |
+
+### Evidence accounting for run `38410095535` - the first honestly failed 2 h (2026-10-13)
+
+Execution 4 of G1: `stage=stress duration=7200` on `cc8757a0`, dispatched 14:03:23Z,
+finished 2h1m5s. Verdict **FAILED**, counted from `cycles.jsonl` directly per the gate
+rule: 449 records = **434 pass + 7 fail + 8 not-executed**; `summary.json` equals the
+file's counts and `unrecognized: 0` (the `a8496a1e` tally held end-to-end). 89 cycles
+over 7205 s. Evidence: `evidence/20261013T140350Z-stress/` on `origin/soak-evidence`.
+
+| # | What the failures were | Count |
+|---|---|---|
+| F-s1 | `W1/new-chat :: new topic id timed out after 60000ms` (15:33:34, 15:37:16, 15:40:28, 15:48:23) | 4 |
+| F-s2 | `W6/delete-chat :: no Topic was created after the delete` (15:36:07, 15:42:36, 15:44:53) | 3 |
+| cascade | `W5/stop` + `W6/delete-chat :: issued generation draft timed out after 30000ms` - no thread existed, so the drafts were never issued (not-executed, correctly) | 8 |
+
+**Root cause (fully attributed from the run's own bot.log).** Every one of the 7 fails
+maps 1:1 onto a bot.log line `[Bot] Error creating session: TimeoutError: The operation
+was aborted due to timeout`, logged exactly ~10.8 s after the driver's press (15:32:45,
+15:35:48, 15:36:27, 15:39:39, 15:42:16, 15:44:34, 15:47:34 - the SDK's ~10 s abort on
+the loopback `session.create` call). The trace of one failed create: the press **was
+consumed** (`Consuming Reply Keyboard control ... text=💬 New Chat`), the isolated
+workspace **was created**, `Creating session pinned to selected model` was logged, and
+10 s later the call aborted; the Bot's cleanup then raced the still-writing server
+(`ENOTEMPTY .../​.opencode/node_modules/effect/src` - the server was still materializing
+the workspace's dependency tree when the client gave up), orphaning 6 of the 7
+workspaces. Successful creates in the same window completed in ~4-5 s, so the condition
+was intermittent (~50% of creates), spanning cycles 78-89, and the run ended before it
+resolved.
+
+**What the machine was doing.** Nothing unusual, and the evidence says so:
+`memAvailable` 9.5-11.1 GB of 16 GB flat, loadavg <= 1.1 on 4 CPUs, the OpenCode child
+used only ~20-30 s CPU per 10-minute stretch, `/global/health` answered in 15 ms, and
+W5 drafts confirmed in ~320 ms *inside the failing window*; the server process never
+restarted except by W7's own 8 restarts (all `exit=graceful`, ready 22.9-26.0 s, pid
+changed every time). The rest precondition held before every press (`restWaitMs`
+5088-26127). The D-E attribution fix was exercised under its exact former failure
+conditions and held: post-restart draft counter reset 31->1 with real `confirmMs`
+317-324 and `lateDelta 0` on every cycle.
+
+**Leading hypothesis, honestly labeled unmeasured (M-1).** The run created **174
+isolated topic workspaces** (W1 + W6-reuse creates); only W6's deletes remove any, so
+~89 accumulated by the end, each carrying its own materialized `.opencode/node_modules`
+(full `effect` source tree). The timing - first failure at cycle ~78 (~90 min in), no
+memory/CPU pressure, idle-CPU file-write stalls - is consistent with runner **disk
+pressure** from that accumulation. The alternative (a network egress stall while
+materializing plugin dependencies) is not excluded. The harness sampled CPU and memory
+but **never disk**, so neither can be confirmed from this run: that is measurement gap
+**M-1**, and closing it is the next harness change (`df -B1` + `df -i` on the state
+directory, `du -sb` + directory count of `topic-workspaces` on per-cycle samples, and
+press-to-topic latency on the W1/W6 create records).
+
+**Classification.** `P-1` is a product-visible failure, not a harness defect: a user
+pressing New Chat would have received an error. Two product questions are recorded for
+the owner, and no product code was changed by the harness: (a) the SDK's ~10 s
+session-create abort has no retry, so one slow provision = one failed chat; (b) a
+timed-out create leaves an orphaned workspace behind (the cleanup races the server's
+ongoing writes). G1 stays `FAILED` until a full 2 h re-run passes; the run's other
+evidence (W7 restarts, W5 attribution, rest gates, tally integrity) is recorded as
+carried.
 
 ---
 

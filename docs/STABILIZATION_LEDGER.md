@@ -585,6 +585,45 @@ is only admissible for a line the Bot wrote after the press that asked, which ma
 the fifth way "a green workflow exit is not evidence" was violated (after `d95ed0ca`,
 `6ea8e28e`, `cf333d12`, `a8496a1e`).
 
+### 4.11 A session create that outran its 10 s budget after 90 minutes of accumulation - run `38410095535`
+
+**Found by:** G1 execution 4 (`stage=stress duration=7200`, on `cc8757a0`,
+2026-10-13T14:03:23Z-16:04:28Z, evidence `evidence/20261013T140350Z-stress/`). This one
+is **not** a harness defect - it is the first honestly failed 2 h verdict the workload
+has produced, and the first product-visible failure the soak has caught: 449 records =
+434 pass + **7 fail + 8 cascade not-executed**, `summary.json` == file,
+`unrecognized: 0`.
+
+**Defect (P-1, product-visible).** During cycles 78-89, ~50% of new-session creations
+failed: the Bot consumed the press, created the isolated workspace, logged
+`Creating session pinned to selected model`, and the loopback `session.create` aborted
+at the SDK's ~10 s timeout (`[Bot] Error creating session: TimeoutError` - 7 lines,
+each ~10.8 s after its press, one per driver fail). The Bot then failed to clean the
+half-built workspace (`ENOTEMPTY .../​.opencode/node_modules/effect/src` - the server
+was still writing when the client gave up), orphaning 6 of 7. A user pressing New Chat
+would have seen an error. Two owner decisions recorded, untouched by the harness: the
+~10 s create abort has no retry, and the timeout path orphans workspaces.
+
+**Evidence the machine was not the cause.** `memAvailable` 9.5-11.1/16 GB flat,
+loadavg <= 1.1/4 CPUs, OpenCode child ~20-30 s CPU per 10 min, health 15 ms, W5 drafts
+confirmed ~320 ms inside the failing window, no server restarts outside W7's own 8
+(all `exit=graceful`, ready 22.9-26.0 s). Rest gates passed before every press
+(`restWaitMs` 5088-26127); the cc8757a0/a8496a1e fixes held under their exact former
+failure conditions (draft counter reset 31->1 with `confirmMs` 317-324, `lateDelta 0`).
+
+**Leading hypothesis, unmeasured (M-1).** 174 topic workspaces were created in the run
+and only W6 deletes remove any: ~89 accumulated, each with its own materialized
+`.opencode/node_modules`. First failure at ~90 min with idle CPU is consistent with
+runner disk pressure; an egress stall during dependency materialization is not
+excluded. The harness never sampled disk, so the run cannot discriminate: closing that
+gap (`df -B1` + `df -i`, `du -sb` + workspace count on per-cycle samples,
+press-to-topic latency on W1/W6 records) is the next harness change before G1
+execution 5.
+
+**Status:** G1 `FAILED` on the books; P-1/M-1 open; full accounting in
+`docs/SOAK_GATES.md` §7 ("run `38410095535`"); checkpoint state in
+`docs/SOAK_CHECKPOINT.md`.
+
 ---
 
 ## 5. Soak / elapsed-time gates — **PENDING**
@@ -599,7 +638,7 @@ published while any of these is pending or failed.
 
 | Gate | Required | State |
 |---|---|---|
-| Representative stress run | ≥ 2 h under active + idle phases | **failed — execution 1 `38370753677`: 2 h / 263 cycles, F1 ×11 (fixed `b5fb27c1`), F6, F7, no W6 v2/W7. Execution 2 `38393992089` cancelled 12:46Z (§4.8: eaten New Chat presses, cold-start session create, restart-tool refusal; fixes `cf333d12` + `a8496a1e`). Execution 3 `38403749350` cancelled 13:56Z (§4.10: Stop confirmed against pre-restart history after W7's draft-id reset; fix `cc8757a0`). Validation cycle `38403233051` + validation soak `38406121122` green. Execution 4 `38410095535` on `cc8757a0` in flight — `SOAK_GATES.md` §7/§8** |
+| Representative stress run | ≥ 2 h under active + idle phases | **failed — execution 1 `38370753677`: 2 h / 263 cycles, F1 ×11 (fixed `b5fb27c1`), F6, F7, no W6 v2/W7. Execution 2 `38393992089` cancelled 12:46Z (§4.8: eaten New Chat presses, cold-start session create, restart-tool refusal; fixes `cf333d12` + `a8496a1e`). Execution 3 `38403749350` cancelled 13:56Z (§4.10: Stop confirmed against pre-restart history after W7's draft-id reset; fix `cc8757a0`). Validation cycle `38403233051` + validation soak `38406121122` green. Execution 4 `38410095535` finished 2 h / 89 cycles: **failed** (§4.11: session-create aborted at the SDK's ~10 s budget in cycles 78-89 after ~174 topic workspaces accumulated; disk was never sampled — M-1; the run's own verdict integrity, rest gates, W7 ×8, and W5 attribution all held). Execution 5 pending the M-1 instrumentation — `SOAK_GATES.md` §7/§8** |
 | RC soak | ≥ 24 h with active/idle phases, restarts, and rollback proof | **pending — `SOAK_GATES.md` G6/G7/G8; per §1.1 built as 5 × 21000 s segments (≥24 h, the 360-minute job ceiling bounds each, gaps reported as gaps). Phase scheduler validated by `38406121122`: 13 idle-phase rows with the §8 columns, cycles confined to active windows, counts == file with `unrecognized: 0`. Segments not started; G6 still cannot fully pass until G8 exists (§2 requires ≥1 rollback proof)** |
 | Telegram Stop contract S1–S10 | every row demonstrated with captured evidence | **pending — S1/S5 by committed tests; stress run: 252/252 Stops confirmed by the Bot's own `result=confirmed` line, D1 303/311/635 ms, D2 `lateDelta` 0; per-row capture still incomplete** |
 | Two-Worker isolation (W3) | interleaved message/file/state traces | **pending — not implementable in current harness (single Bot process, local stub mode)** |
