@@ -14,7 +14,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Item | Value |
 |---|---|
-| Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, soak harness branch `fix/soak-evidence-through-restart`, tip **`56d723714ab8eb70e0e4ee7c2b7c4d079d81e18d`** (pushed; PR #192; not merged to `main`; known local noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
+| Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, soak harness branch `fix/soak-evidence-through-restart`, tip **`da2728cfb2a4447bed2489791bb09125278002fe`** (pushed; PR #192; CI run `38599189898` in progress at checkpoint; not merged to `main`; known local noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
 | Bot `main` | **`57ac7606`**; do not merge PR #192 while G10 deployment decision is open |
 | Core repo | `aminsh35322088-ctrl/opencode-telegram-core`, branch `main`, tip **`343fe1a337bb5cb84038d26d82a256a5d6a068d7`** (pushed; Core pre.35 source) |
 | Evidence branch | `origin/soak-evidence`, dirs `evidence/<stamp>-<stage>/` pushed incrementally during runs (persist interval 300 s) |
@@ -27,7 +27,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Gate | Standing | Evidence / note |
 |---|---|---|
-| G1 ≥2 h stress | **FAILED; execution 6 in progress** (`38591337444`) | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID; it passes nothing. Exec 6 uses the corrected persister and disk/byte/latency measurements, but its `workspaceCount` only counted chat grouping directories. The two-level count fix is CI-green in Bot commit `981bf841`; judge whether exec 6 otherwise qualifies from its final evidence, and rerun on `981bf841` for a full accurate count if required by §8. |
+| G1 ≥2 h stress | **FAILED; execution 6 cancelled, execution 7 pending CI** | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID. Exec 6 (`38591337444`) was cancelled after its own evidence showed `stage=stress` incorrectly entered the default idle window at the 45-minute boundary; its partial records do not qualify. Bot `da2728cf` makes only `soak` stages use active/idle phasing; CI run `38599189898` must pass before a corrected full stress is dispatched. |
 | G2 Stop contract S1–S10 | PENDING | 252/252 confirmed in exec 1; per-row capture incomplete |
 | G3 Two-Worker | PENDING | not implementable in current harness (single Bot, stub mode) |
 | G4 Delete-Chat cleanup + reuse | PENDING | W6 v2 proven in cycle `38393937702`; carried by exec 4's passes, blocked by same G1 verdict |
@@ -40,7 +40,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 **No stable release while any row is PENDING or FAILED.**
 
-## 3. G1 story (six executions, all on the books)
+## 3. G1 story (six executions completed; execution 7 awaits CI)
 
 | Exec | Run | Outcome | What it found / proved |
 |---|---|---|---|
@@ -49,7 +49,8 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 | 3 | `38403749350` | cancelled at 39 min after root cause | D-E: Stop confirmed against pre-restart history (draft-id counter reset by W7); fix `cc8757a0` |
 | 4 | `38410095535` | **FAILED, full 2 h / 89 cycles** | All harness fixes held (rest gates, tally, attribution under exact former failure conditions, W7 ×8). New product-visible failure P-1 + measurement gap M-1 (§2/§4.11 in ledger). Verdict honest: 7 fail + 8 cascade |
 | 5 | `38585090356` | cancelled at 25 min | Evidence persister stopped after W7 changed the Bot PID; fixed on PR #192. Partial evidence; no gate passes |
-| 6 | `38591337444` | in progress | Uses the corrected persister and M-1 instrumentation on Bot tip `56d72371`; evaluate only after completion |
+| 6 | `38591337444` | cancelled after root cause | Its own resource samples show `phase:"idle"` beginning at 16:26:08Z after cycles stopped at 16:26:05Z, the configured 2700 s active boundary. `stress` must be continuously active; `phaseForStage` now applies active/idle windows only to `soak`. The count was also undercounted on this run's SHA. This partial run passes no gate |
+| 7 | not dispatched | pending CI | Full 7200 s continuous stress on `da2728cfb2a4447bed2489791bb09125278002fe`, after CI run `38599189898` succeeds; corrected nested workspace count and stress phasing included |
 
 Validation runs that de-risked the fixes between executions: cycle `38403233051`
 (attribution + rest e2e), soak `38406121122` (phase scheduler + tally, success exit).
@@ -65,9 +66,10 @@ workflow verdict alone.
 parsers, disk/inode and per-cycle workspace measurements, and W1/W6 topic latency.
 The first G1 attempt using this instrumentation was run `38585090356`; it was cancelled
 after 25 minutes when evidence showed the checkpoint persister exited after W7 changed
-the Bot PID. Its partial measurements do not qualify G1. Corrected run `38591337444`
-is in progress; inspect its own `cycles.jsonl` and resource samples before attributing
-the previous timeout to disk pressure.
+the Bot PID. Its partial measurements do not qualify G1. Run `38591337444` corrected that persister, but was cancelled after its own
+samples proved stress had incorrectly entered the default idle window at the 45-minute
+boundary. That partial run does not qualify G1. Bot commit `da2728cf` scopes phase windows
+to `soak`; the next complete stress must use this corrected head and its evidence.
 
 **Count correction:** the workspace service stores Topic directories as
 `topic-workspaces/<chatId>/<sessionId>`. Exec 6 initially counted only the direct
@@ -212,13 +214,13 @@ Any gap between segments is reported as a gap, never smoothed over.
 | `38410095535` | stress 2 h | **failure** | G1 exec 4: honest 2 h verdict; P-1 + M-1 |
 | `38585090356` | stress 2 h | cancelled at 25 min | G1 exec 5: evidence persister stopped after W7 changed the Bot PID; no gate passes |
 | `38590936914` | cycle | success | G8 rollback/restore proof against pinned `cf333d12`; rollback 34.826 s and restore serving |
-| `38591337444` | stress 2 h | in progress | G1 exec 6 on Bot tip `56d72371`, with corrected evidence persistence and M-1 except for the nested workspace count, fixed by `981bf841` |
+| `38591337444` | stress 2 h | cancelled | G1 exec 6 on Bot tip `56d72371`; stress incorrectly entered idle at 45 minutes. Root cause fixed in Bot `da2728cf`; execution 7 awaits CI. |
 
 Evidence dirs on `origin/soak-evidence` include `20261014T153745Z-cycle` (G8 validation),
 `20261014T145737Z-stress` (G1 exec 5, cancelled; partial), `20261013T140350Z-stress`
 (exec 4), `20261013T135754Z-soak`, `20261013T131746Z-stress`, `20261013T124702Z-stress`,
-and `20261013T120033Z-stress`. Exec 6 evidence will appear after run `38591337444`
-pushes its first checkpoint.
+and `20261013T120033Z-stress`. Exec 6 partial evidence was durably pushed in
+`20261014T163301Z-stress`; it is not qualifying gate evidence.
 
 ## 8. Operating rules that do not change
 
@@ -240,12 +242,25 @@ pushes its first checkpoint.
 
 ## 9. Next actions, in order
 
-1. **G1 execution 6** (`38591337444`): await the 2 h run and judge its cycle outcomes,
-   duration, summary and the usable M-1 disk/byte/latency fields. The workspace count is
-   undercounted on this SHA; if the gate requires all §8 fields, repeat the full stress
-   on `981bf841` before closing G1/G9.
+1. **G1 execution 7**: await Bot PR CI `38599189898` for head `da2728cfb2a4447bed2489791bb09125278002fe`. If green, dispatch a full 7200 s `stage=stress` on that exact branch/head and judge its own `cycles.jsonl`, summary, and resource samples. Execution 6 (`38591337444`) is cancelled: its samples prove that stress entered the default idle phase at the 45-minute boundary; it passes no gate.
 2. **G6**: after G1's full result is known, run five 21000 s segments sequentially with
    `rollback_sha` supplied (§6); inspect each segment's own evidence before dispatching
    the next. The correct workflow input is `rollback_sha` (underscore).
 3. Resolve remaining G2/G3/G4/G5/G7/G9 evidence and the G10 operator deployment gate.
    No Stable release until every gate is admissibly closed.
+
+
+### 8.1 Continuation — stress phase defect (2026-10-14)
+
+- G1 execution 6 (`38591337444`, Bot `56d72371`) completed as `cancelled`, not a gate
+  pass. Its own evidence showed the final cycle at `16:26:05.265Z`, followed by the first
+  `phase:"idle"` sample at `16:26:08.940Z`; this matches the configured 2700 s active
+  boundary. `phaseForStage` had applied active/idle windows to `stress`, which must be
+  continuous. The run's evidence was pushed to `origin/soak-evidence` as
+  `318eb674` (`20261014T163301Z-stress`).
+- Bot `da2728cfb2a4447bed2489791bb09125278002fe` fixes the scheduler so only `soak`
+  stages use active/idle windows and pins driver use with a regression test. Bot CI run
+  `38599189898` is still in progress at this checkpoint. Once green, start a fresh 7200 s
+  stress on that exact SHA; the cancelled run is not G1 evidence.
+- Core documentation commit `9ed7f4ec` was current before this addendum; no gate status
+  changes here. G1 and G9 remain FAILED, G8 PASS, G10 awaits the operator decision.

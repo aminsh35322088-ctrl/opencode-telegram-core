@@ -834,3 +834,18 @@ historical observations in §§4–7.
   nested session directories and adds a filesystem fixture test; PR CI run `38594412061`
   succeeded. Exec 6 remains pinned to `56d72371`, so use the corrected Bot revision for
   any full resource dataset that must include an accurate workspace count.
+
+
+### 2026-10-14 continuation — stress-only stage phasing
+
+**Found by:** G1 execution 6 (`38591337444`, Bot `56d72371`). Its own evidence shows
+cycles stopped at `2026-10-14T16:26:05.265Z`; the first idle sample followed at
+`16:26:08.940Z`, at the configured 2700 s active boundary. Workflow defaults had supplied
+active/idle values to every stage, and the driver incorrectly applied the phase scheduler
+to `stress`.
+
+**Disposition:** run `38591337444` was cancelled only after its evidence established this
+root cause. It passes no gate. Bot `da2728cfb2a4447bed2489791bb09125278002fe` introduces
+`phaseForStage`, which confines active/idle transitions to `soak`, plus tests pinning that
+`stress` and `cycle` remain active. CI run `38599189898` was still in progress when this
+addendum was written. A corrected 7200 s stress is the next G1 execution after CI succeeds.
