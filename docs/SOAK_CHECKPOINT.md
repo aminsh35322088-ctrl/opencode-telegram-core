@@ -14,7 +14,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Item | Value |
 |---|---|
-| Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, soak harness branch `fix/soak-evidence-through-restart`, tip **`da2728cfb2a4447bed2489791bb09125278002fe`** (pushed; PR #192; CI run `38599189898` in progress at checkpoint; not merged to `main`; known local noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
+| Bot repo | `aminsh35322088-ctrl/opencode-telegram-bot`, soak harness branch `fix/soak-evidence-through-restart`, tip **`da2728cfb2a4447bed2489791bb09125278002fe`** (pushed; PR #192; CI run `38599189898` succeeded; not merged to `main`; known local noise: ` D node_modules` (tracked symlink), untracked `control-plane/`, `runtime/` — never commit these) |
 | Bot `main` | **`57ac7606`**; do not merge PR #192 while G10 deployment decision is open |
 | Core repo | `aminsh35322088-ctrl/opencode-telegram-core`, branch `main`, tip **`343fe1a337bb5cb84038d26d82a256a5d6a068d7`** (pushed; Core pre.35 source) |
 | Evidence branch | `origin/soak-evidence`, dirs `evidence/<stamp>-<stage>/` pushed incrementally during runs (persist interval 300 s) |
@@ -27,7 +27,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 | Gate | Standing | Evidence / note |
 |---|---|---|
-| G1 ≥2 h stress | **FAILED; execution 6 cancelled, execution 7 pending CI** | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID. Exec 6 (`38591337444`) was cancelled after its own evidence showed `stage=stress` incorrectly entered the default idle window at the 45-minute boundary; its partial records do not qualify. Bot `da2728cf` makes only `soak` stages use active/idle phasing; CI run `38599189898` must pass before a corrected full stress is dispatched. |
+| G1 ≥2 h stress | **FAILED; execution 7 in progress** (`38599794531`) | Exec 4 remains the latest completed full-duration verdict: 434 pass + 7 fail + 8 not-executed. Exec 5 (`38585090356`) was cancelled after its evidence persister stopped after W7 changed the Bot PID. Exec 6 (`38591337444`) was cancelled after its own evidence showed `stage=stress` incorrectly entered the default idle window at the 45-minute boundary; its partial records do not qualify. Bot `da2728cf` makes only `soak` stages use active/idle phasing; CI run `38599189898` succeeded and execution 7 is the corrected full stress. |
 | G2 Stop contract S1–S10 | PENDING | 252/252 confirmed in exec 1; per-row capture incomplete |
 | G3 Two-Worker | PENDING | not implementable in current harness (single Bot, stub mode) |
 | G4 Delete-Chat cleanup + reuse | PENDING | W6 v2 proven in cycle `38393937702`; carried by exec 4's passes, blocked by same G1 verdict |
@@ -40,7 +40,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 
 **No stable release while any row is PENDING or FAILED.**
 
-## 3. G1 story (six executions completed; execution 7 awaits CI)
+## 3. G1 story (six executions completed; execution 7 in progress)
 
 | Exec | Run | Outcome | What it found / proved |
 |---|---|---|---|
@@ -50,7 +50,7 @@ Authoritative gate definitions remain in `SOAK_GATES.md`; defect history in
 | 4 | `38410095535` | **FAILED, full 2 h / 89 cycles** | All harness fixes held (rest gates, tally, attribution under exact former failure conditions, W7 ×8). New product-visible failure P-1 + measurement gap M-1 (§2/§4.11 in ledger). Verdict honest: 7 fail + 8 cascade |
 | 5 | `38585090356` | cancelled at 25 min | Evidence persister stopped after W7 changed the Bot PID; fixed on PR #192. Partial evidence; no gate passes |
 | 6 | `38591337444` | cancelled after root cause | Its own resource samples show `phase:"idle"` beginning at 16:26:08Z after cycles stopped at 16:26:05Z, the configured 2700 s active boundary. `stress` must be continuously active; `phaseForStage` now applies active/idle windows only to `soak`. The count was also undercounted on this run's SHA. This partial run passes no gate |
-| 7 | not dispatched | pending CI | Full 7200 s continuous stress on `da2728cfb2a4447bed2489791bb09125278002fe`, after CI run `38599189898` succeeds; corrected nested workspace count and stress phasing included |
+| 7 | `38599794531` | in progress | Full 7200 s continuous stress on `da2728cfb2a4447bed2489791bb09125278002fe`; CI `38599189898` passed; build/runtime setup passed and `Run soak stage` is active. Judge only after evidence and final summary are available. |
 
 Validation runs that de-risked the fixes between executions: cycle `38403233051`
 (attribution + rest e2e), soak `38406121122` (phase scheduler + tally, success exit).
@@ -242,7 +242,7 @@ and `20261013T120033Z-stress`. Exec 6 partial evidence was durably pushed in
 
 ## 9. Next actions, in order
 
-1. **G1 execution 7**: await Bot PR CI `38599189898` for head `da2728cfb2a4447bed2489791bb09125278002fe`. If green, dispatch a full 7200 s `stage=stress` on that exact branch/head and judge its own `cycles.jsonl`, summary, and resource samples. Execution 6 (`38591337444`) is cancelled: its samples prove that stress entered the default idle phase at the 45-minute boundary; it passes no gate.
+1. **G1 execution 7** (`38599794531`): wait for the full 7200 s `stage=stress` on `da2728cfb2a4447bed2489791bb09125278002fe`; inspect its own `cycles.jsonl`, summary, and resource samples before judging. Execution 6 (`38591337444`) was cancelled after its samples proved stress entered the default idle phase at the 45-minute boundary; it passes no gate.
 2. **G6**: after G1's full result is known, run five 21000 s segments sequentially with
    `rollback_sha` supplied (§6); inspect each segment's own evidence before dispatching
    the next. The correct workflow input is `rollback_sha` (underscore).
@@ -264,3 +264,13 @@ and `20261013T120033Z-stress`. Exec 6 partial evidence was durably pushed in
   stress on that exact SHA; the cancelled run is not G1 evidence.
 - Core documentation commit `9ed7f4ec` was current before this addendum; no gate status
   changes here. G1 and G9 remain FAILED, G8 PASS, G10 awaits the operator decision.
+
+
+### 8.2 G1 execution 7 started (2026-10-14)
+
+- Bot CI `38599189898` succeeded for `da2728cfb2a4447bed2489791bb09125278002fe`.
+- G1 execution 7, run `38599794531`, was dispatched at `16:38:28Z` as a 7200 s
+  `stage=stress` against `fix/soak-evidence-through-restart` at that exact SHA. Checkout,
+  dependency install, pinned Core runtime verification/materialization, and build passed;
+  the `Run soak stage` step is active. No gate verdict is available until the run finishes
+  and its own evidence is inspected.

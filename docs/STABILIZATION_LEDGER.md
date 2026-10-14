@@ -848,4 +848,4 @@ to `stress`.
 root cause. It passes no gate. Bot `da2728cfb2a4447bed2489791bb09125278002fe` introduces
 `phaseForStage`, which confines active/idle transitions to `soak`, plus tests pinning that
 `stress` and `cycle` remain active. CI run `38599189898` was still in progress when this
-addendum was written. A corrected 7200 s stress is the next G1 execution after CI succeeds.
+addendum was written. CI `38599189898` subsequently passed and corrected 7200 s execution 7 (`38599794531`) was dispatched on `da2728cf`; its stage is in progress and has no verdict yet.
