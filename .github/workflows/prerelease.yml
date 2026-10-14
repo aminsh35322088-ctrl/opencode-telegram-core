@@ -74,10 +74,20 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           source_commit="$(git rev-parse HEAD)"
+          python3 - "$RELEASE_TAG" "$source_commit" > "$RUNNER_TEMP/core-release-notes.md" <<'PY'
+          import pathlib, re, sys
+          version = sys.argv[1].removeprefix("v")
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          match = re.search(r"^## (?:v)?" + re.escape(version) + r"(?:[ \t][^\n]*)?\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
+          if match is None or not match.group(1).strip():
+              raise SystemExit("Missing changelog for prerelease " + version)
+          print(match.group(1).strip())
+          print("\nVerified release source: `" + sys.argv[2] + "`.")
+          PY
           gh release create "$RELEASE_TAG" dist/release/* \
             --target "$source_commit" --prerelease \
             --title "OpenCode Telegram Core $RELEASE_TAG" \
-            --notes "Verified Core runtime, SDK, and native runtime from $source_commit. CI, runtime compatibility, release identity, and artifact checksums passed."
+            --notes-file "$RUNNER_TEMP/core-release-notes.md"
 
   worker-image:
     # Reuse the existing verified release workflow; build once per verified Core revision.

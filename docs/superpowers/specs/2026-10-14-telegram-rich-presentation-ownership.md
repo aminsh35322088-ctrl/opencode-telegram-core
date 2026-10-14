@@ -48,7 +48,7 @@ PR #31 moves that policy into Core:
 
 ### 2. Public capability contract
 
-Native runtime now exports an immutable build-time contract:
+Native runtime now exports a TypeScript-readonly build-time contract:
 
 ```ts
 export const TELEGRAM_RICH_PRESENTATION_CAPABILITIES = {

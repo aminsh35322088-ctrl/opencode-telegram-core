@@ -1,3 +1,42 @@
+## 1.18.33-bot.13-pre.36 (2026-10-14)
+
+Telegram presentation compatibility prerelease for Bot PR #191, based on Core
+pre.35 and upstream OpenCode 1.18.33 (`51ef4be1d3c122f18fefb510dca8d778571f4f18`).
+
+### Changes
+
+- Core now renders ordinary GFM Markdown tables as compact Telegram tables. Header
+  flags, alignment, cell contents, chunking and readable fallbacks retain their
+  existing semantics. Explicit HTML tables remain non-compact unless their author
+  supplies the `compact` attribute. This removes the need for a Bot-owned table override.
+- Export `TELEGRAM_RICH_PRESENTATION_CAPABILITIES` and its key type from the native
+  runtime Node artifact. The build-time contract describes Rich Messages, Details,
+  expandable quotes, math, date/time, anchors, references, compact tables, trusted
+  rich buttons and Persian/RTL bidi support. It is not Telegram-client negotiation.
+- Add presentation ownership regressions for compact GFM tables, explicit HTML
+  compactness and public capability exports. Document the Core/Bot ownership split
+  and the required artifact-pin handoff for Bot #191.
+- Prerelease automation now publishes the exact version's full changelog section
+  and source revision, and fails if that version has no changelog entry.
+
+### Compatibility and upgrade
+
+- Runtime, SDK and native-runtime archives remain one verified compatibility unit.
+  Consumers must pin the release's source commit and checksums together.
+- Bot #191 must consume this release and the matching immutable Worker image, then
+  pass its combined CI before deployment. Existing production Workers are not
+  migrated by publishing this prerelease.
+- Windows atomic binding-store replacement fixes from pre.35 are retained.
+
+### Verification and limitations
+
+- Core #31's reviewed feature head passed validate, upstream-runtime and
+  telegram-headless CI, including 344 runtime tests and 326 Python tests. Publication
+  additionally requires successful CI on the release source and verifies packaged
+  runtime/SDK/native identity and every artifact checksum.
+- This is a prerelease. Stabilization gates and the RC soak remain open; it makes
+  no Stable-release claim. Deployment recovery is tracked separately from those gates.
+
 ## 1.18.33-bot.13-pre.30
 
 - Added safe reusable Railway Worker generations across persistent volumes.
