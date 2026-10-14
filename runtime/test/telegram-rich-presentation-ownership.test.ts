@@ -71,7 +71,7 @@ describe("Telegram rich presentation ownership", () => {
 
     const rich = renderTelegramRichDocument(
       parseMarkdownDocument(
-        "<details><summary>More</summary>Body</details>\n\n<blockquote expandable>Long quote</blockquote>\n\n<tg-math>x^2</tg-math>\n\n<tg-time unix=1760457600 format=R>now</tg-time>\n\n<a name=proof></a>[proof](#proof)",
+        "<details><summary>More</summary>Body</details>\n\n<blockquote expandable>Long quote</blockquote>\n\n<tg-math>x^2</tg-math>\n\n<tg-time unix=1760457600 format=r>now</tg-time>\n\n<a name=proof></a>",
       ),
       { draft: false },
     );
@@ -81,6 +81,13 @@ describe("Telegram rich presentation ownership", () => {
     expect(serialized).toContain('"type":"mathematical_expression"');
     expect(serialized).toContain('"type":"date_time"');
     expect(serialized).toContain('"type":"anchor"');
-    expect(serialized).toContain('"type":"anchor_link"');
+
+    const references = renderTelegramRichDocument(
+      parseMarkdownDocument("See note[^proof].\n\n[^proof]: Evidence"),
+      { draft: false },
+    );
+    const referenceSerialized = JSON.stringify(references);
+    expect(referenceSerialized).toContain('"type":"reference_link"');
+    expect(referenceSerialized).toContain('"type":"reference"');
   });
 });
