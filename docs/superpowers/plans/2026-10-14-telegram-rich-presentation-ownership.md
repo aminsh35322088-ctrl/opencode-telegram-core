@@ -1,160 +1,82 @@
 # Telegram Rich Presentation Ownership Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans or subagent-driven-development task-by-task. Checkboxes represent verified evidence, not intent.
 
 **Goal:** Make Core the single source of truth for Telegram-rich presentation primitives, move compact Markdown-table policy out of Bot, and expose a tested capability contract.
 
-**Architecture:** Keep parsing/rendering semantics in `@opencode-telegram/native-runtime`; Bot remains a consumer. Change only Core presentation code and tests. Existing rich primitives stay behavior-compatible; the only presentation behavior change is GFM Markdown tables becoming compact by default.
-
-**Tech Stack:** TypeScript, `@opencode-telegram/native-runtime`, grammY rich-message types, unified/remark parser, Vitest/runtime tests.
+**Architecture:** Keep parsing/rendering semantics in `@opencode-telegram/native-runtime`; Bot remains a consumer. Existing rich primitives stay behavior-compatible; the only semantic presentation change is GFM Markdown tables becoming compact by default.
 
 **Spec:** `docs/superpowers/specs/2026-10-14-telegram-rich-presentation-ownership.md`
 
-## Global Constraints
+**Bot integration:** `aminsh35322088-ctrl/opencode-telegram-bot#191`
 
-- Do not duplicate Bot lifecycle/activity logic in Core.
-- Existing `details`, math, date/time, anchors/references, expandable quotes, buttons, fallback and RTL behavior must remain compatible.
-- Standard GFM Markdown tables must set `isCompact: true`; explicit HTML table semantics remain attribute-driven.
-- Capability descriptor may only claim behavior covered by tests.
-- No arbitrary custom text-color API is introduced.
-- No privileged model-generated button behavior is enabled.
+## Global constraints
 
-## Review Focus
+- Do not move Bot lifecycle/activity aggregation into Core.
+- Existing Details/math/date-time/anchors/references/expandable quotes/buttons/fallback/RTL behavior remains compatible.
+- GFM Markdown tables set `isCompact: true`; explicit HTML table compactness remains attribute-driven.
+- Capability descriptor only claims tested behavior.
+- No arbitrary text-color API.
+- No privileged model-generated interactive action is enabled.
+- No merge/release until branch is synchronized to latest `main` and fresh CI is green.
 
-- A normal Markdown table becomes compact without altering cells, alignment, header flags or fallback text.
-- An HTML `<table>` without `compact` does not silently gain a semantic attribute it did not request.
-- Invalid/unsupported rich syntax still degrades to visible fallback content.
-- Capability metadata cannot drift from tested parser/renderer behavior.
-- Persian/RTL and chunking limits remain unchanged after the compact-table policy moves.
+## Task 1 — Compact GFM tables
 
----
+- [x] Add failing regression requiring GFM `isCompact: true` while preserving cells, headers and alignment.
+- [x] Capture RED CI evidence: run `38593967940`, 342 pass / 1 expected fail.
+- [x] Set `isCompact: true` in the GFM `tableBlock()` path.
+- [x] Prove `<table>` stays explicit/non-compact unless `compact` is authored.
+- [x] Verify Telegram renderer produces `is_compact: true` from the semantic property.
 
-### Task 1: Lock compact Markdown-table semantics
+## Task 2 — Public rich-presentation capability contract
 
-**Files:**
-- Modify: `runtime/src/presentation/markdown-document-parser.ts`
-- Test: `runtime/test/markdown-document-renderer.test.ts`
-- Test: `runtime/test/rich-blocks.test.ts` if renderer-level assertion is needed
+- [x] Add failing import/contract test.
+- [x] Capture RED typecheck evidence: run `38594262691` failed because export was absent.
+- [x] Add `runtime/src/presentation/telegram-rich-capabilities.ts`.
+- [x] Export `TELEGRAM_RICH_PRESENTATION_CAPABILITIES` from public runtime index.
+- [x] Bind the contract to public parser/renderer smoke coverage for Details, expandable quote, math, date-time, anchors/references and compact tables.
 
-**Interfaces:**
-- Consumes: existing `AgentBlock` table shape with `isCompact?: boolean`.
-- Produces: GFM Markdown tables parsed with `isCompact: true`.
+## Task 3 — Full regression evidence
 
-- [ ] **Step 1: Write the failing parser regression test**
+Final pre-sync implementation head: `635491ac6161f678142d322bd0308a488086a477`.
 
-Add a test named `markdown tables are compact by default without changing table semantics` that parses a GFM table and asserts:
+Final pre-sync CI: `38594717524`.
 
-```ts
-expect(table).toMatchObject({ type: "table", isBordered: true, isCompact: true })
-```
+- [x] TypeScript typecheck — success.
+- [x] Bun runtime — **344 / 344 pass**, 27 files, 1863 assertions.
+- [x] unbound session probe boundary — **3 / 3 pass**.
+- [x] Python repository suite — **326 / 326 pass**.
+- [x] toolchain/release contracts — success.
+- [x] `upstream-runtime` — success.
+- [x] `telegram-headless` / production graph / Bot SDK surface — success.
+- [x] Record TDD + CI evidence in the design spec.
 
-Also assert the existing header/alignment/cell text shape is unchanged.
+## Task 4 — Branch freshness / review gate
 
-- [ ] **Step 2: Run the focused test and verify RED**
+Current latest observed Core `main`: `9ed7f4ec42701435d216497ddb3a7bfb709a800a`.
 
-Run the runtime test command targeting `markdown-document-renderer.test.ts`.
-Expected: the new `isCompact: true` assertion fails on current Core.
+At the evidence checkpoint the PR branch is **8 commits ahead / 2 behind** latest main; the behind commits are outside the rich-presentation implementation, but stale green CI is not final merge evidence.
 
-- [ ] **Step 3: Implement the minimal parser change**
+- [ ] Synchronize branch onto latest Core `main` without dropping PR changes.
+- [ ] Re-run all three GitHub Actions jobs on the synchronized head.
+- [ ] Require `validate`, `upstream-runtime`, and `telegram-headless` = success.
+- [ ] Confirm PR `mergeable=true`.
+- [ ] Update PR body/spec with synchronized head SHA and final CI run ID.
+- [ ] Mark PR ready for independent review only after the items above.
 
-In `tableBlock(node, context): AgentBlock`, return Markdown tables with `isCompact: true` in addition to existing `isBordered: true`.
+## Task 5 — Bot handoff
 
-- [ ] **Step 4: Prove explicit HTML table semantics remain unchanged**
+- [x] Bot PR #191 documentation explicitly delegates semantic Telegram grammar to Core #31.
+- [x] Bot #191 is prohibited from adding parallel Details/math/date/reference/table/button parsers.
+- [ ] After Core #31 is accepted, publish or otherwise provide a pinned native-runtime artifact containing #31.
+- [ ] Update Bot #191 to that exact artifact.
+- [ ] Remove Bot's temporary `is_compact` table post-process only after the new artifact is pinned.
+- [ ] Re-run full Bot CI after the artifact migration.
 
-Add/retain assertions that `<table>` without `compact` has no `isCompact`, while `<table compact>` has `isCompact: true`.
+## Final review focus
 
-- [ ] **Step 5: Run focused parser/renderer tests and verify GREEN**
-
-Expected: all table parser/renderer tests pass.
-
-- [ ] **Step 6: Commit**
-
-Commit message: `feat(runtime): make markdown tables compact by default`
-
-### Task 2: Add a tested Core capability contract
-
-**Files:**
-- Create: `runtime/src/presentation/telegram-rich-capabilities.ts`
-- Modify: `runtime/src/index.ts`
-- Create or modify: `runtime/test/telegram-rich-capabilities.test.ts`
-
-**Interfaces:**
-- Produces: `TELEGRAM_RICH_PRESENTATION_CAPABILITIES` exported from native runtime.
-- Consumers: Bot PR #191 documentation/integration and future clients/reviewers.
-
-- [ ] **Step 1: Write the failing export test**
-
-Test imports `TELEGRAM_RICH_PRESENTATION_CAPABILITIES` from runtime public index and asserts exact booleans for:
-
-```ts
-richMessages
-details
-expandableQuotes
-math
-dateTime
-anchors
-references
-compactTables
-richButtons
-rtlBidi
-```
-
-- [ ] **Step 2: Run the focused test and verify RED**
-
-Expected: export/module does not exist.
-
-- [ ] **Step 3: Implement the immutable descriptor**
-
-Create:
-
-```ts
-export const TELEGRAM_RICH_PRESENTATION_CAPABILITIES = { ... } as const;
-```
-
-and export it from `runtime/src/index.ts`.
-
-- [ ] **Step 4: Bind capability claims to existing behavior tests**
-
-In the capability test file, add small smoke assertions using public parser/renderer APIs for `details`, expandable quote, math, date/time, anchor/reference, compact table, and trusted rich button rendering. Reuse public APIs; do not duplicate full existing test suites.
-
-- [ ] **Step 5: Run capability + existing rich presentation tests and verify GREEN**
-
-Expected: capability test and rich parser/renderer suites pass.
-
-- [ ] **Step 6: Commit**
-
-Commit message: `test(runtime): publish Telegram rich capability contract`
-
-### Task 3: Regression gate and ownership documentation
-
-**Files:**
-- Update: `docs/superpowers/specs/2026-10-14-telegram-rich-presentation-ownership.md`
-- Update: this plan checklist
-- Update PR body with final evidence
-
-**Interfaces:**
-- Produces: auditable Core PR that Bot #191 can depend on without reconstructing chat history.
-
-- [ ] **Step 1: Run focused presentation suites**
-
-Run parser, rich blocks, rich inline, message renderer, Persian bidi, and chunker tests.
-
-- [ ] **Step 2: Run full Core verification**
-
-Run repository lint/typecheck/build/package verification and full runtime test suite exactly as CI does.
-
-- [ ] **Step 3: Verify diff and public package surface**
-
-Run `git diff --check`; verify the new capability export is present in the packaged native-runtime artifact and no unrelated generated files are included.
-
-- [ ] **Step 4: Record exact evidence**
-
-Add commit SHA, test counts, CI run IDs, and any artifact/pre-release identity to the Core PR body and spec verification section.
-
-- [ ] **Step 5: Update Bot #191 dependency note**
-
-Document that Bot removes local compact-table post-processing only after consuming a Core artifact containing this PR.
-
-- [ ] **Step 6: Final independent review**
-
-Review ownership boundaries: Core owns semantic parsing/rendering; Bot owns run aggregation/lifecycle/UI. Reject any duplicated rich-parser implementation found in Bot #191.
+- Markdown table compactness must not alter data, alignment or fallback text.
+- Explicit HTML table semantics must stay author-controlled.
+- Capability metadata must match the tested public runtime surface.
+- Persian/RTL, rich fallback, limits and chunking must remain unchanged.
+- Ownership must stay clean: Core semantic presentation; Bot run lifecycle/UI.
