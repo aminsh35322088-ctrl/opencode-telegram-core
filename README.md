@@ -28,7 +28,7 @@ The source of truth is upstream/lock.json. The Bot release pin is core-release.l
 | OpenCode version | 1.18.33 |
 | OpenCode commit | 51ef4be1d3c122f18fefb510dca8d778571f4f18 |
 | Bun | 1.3.14 |
-| Telegram Core candidate | 1.18.33-bot.13-pre.34 |
+| Telegram Core candidate | 1.18.33-bot.13-pre.35 |
 | Native runtime package | 0.1.0 |
 | Platform | Linux x64 |
 | Production runtime size ceiling | 120,000,000 bytes |
