@@ -3,6 +3,7 @@ import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { BindingIntegrityError, BindingRegistry } from "./binding-registry.js";
 import type { BindingIdentity } from "./identity.js";
+import { syncDirectory } from "./sync-directory.js";
 
 type BindingLifecycle = "ACTIVE" | "DELETING";
 
@@ -226,12 +227,7 @@ export class AtomicBindingStore {
 
     try {
       await rename(tmp, this.filePath);
-      const dir = await open(directory, "r");
-      try {
-        await dir.sync();
-      } finally {
-        await dir.close();
-      }
+      await syncDirectory(directory);
     } finally {
       await rm(tmp, { force: true }).catch(() => undefined);
     }
