@@ -512,6 +512,26 @@ class Agent:
             if isinstance(run_id, str) and run_id:
                 self.slot.begin_run(run_id)
 
+    def reconcile_completed_run(self):
+        """Caller holds self.lock and has verified that native execution is absent."""
+        prepared = self.boundary.get('runPrepared')
+        if (self.boundary.get('runMode') != 'native' or self.callback_owner
+                or prepared and prepared['expiresAt'] >= time.time()):
+            return
+        run_id = self.boundary.get('runId')
+        terminal = self.boundary.get('runTerminal')
+        expired_prepare = prepared and prepared['expiresAt'] < time.time()
+        if not expired_prepare and terminal != {'runId': run_id, 'sessionId': self.boundary.get('session')}:
+            return
+        if self.slot.active_run_id is not None:
+            if self.slot.active_run_id != run_id or self.slot.state is not SlotState.RUNNING:
+                raise ValueError('inconsistent completed run owner')
+            self.mcp_proxy.end(self.boundary.get('session'), run_id)
+            self.slot.finish_run(run_id)
+        self.boundary.set('runPrepared', None)
+        self.boundary.set('nativeRunId', None)
+        self.boundary.set('runId', None)
+
     def readiness_state(self):
         if self.retired or self.fatal_exit_requested:
             return 'retiring'
@@ -608,10 +628,41 @@ class Agent:
         return watcher
 
     def start_core(self):
-        with self.lifecycle_lock:
+        # Match dispatch/retirement: Agent admission lock precedes lifecycle lock.
+        with self.lock, self.lifecycle_lock:
             return self._start_core()
 
-    def wait_for_core_ready(self, process, *, deadline_s=CORE_STARTUP_DEADLINE_S):
+    def _reconcile_inherited_run(self, process, inherited_owner):
+        """Only a fresh supervised Core lease, before ready/admission, can retire legacy state."""
+        if inherited_owner is None:
+            return
+        session, run_id = inherited_owner
+        with self.lock, self.process_lock:
+            lease = self.process_lease
+            if (self.ready or self.process is not process or process.poll() is not None
+                    or self.process_stopping or not lease or lease['process'] is not process
+                    or lease['intentional'] or lease['joined']):
+                raise ValueError('invalid startup lease for inherited run recovery')
+            if (self.boundary.get('session'), self.boundary.get('runId')) != inherited_owner:
+                raise ValueError('inherited run owner changed before startup recovery')
+            if self.callback_owner:
+                raise ValueError('inherited callback owner has not joined')
+            execution = self.local('GET', '/session/' + quote(session, safe='') + '/execution', timeout=CORE_READINESS_PROBE_TIMEOUT_S)
+            if execution:
+                return
+            if (self.boundary.get('session'), self.boundary.get('runId')) != inherited_owner:
+                raise ValueError('inherited run owner changed during startup recovery')
+            if self.process is not process or process.poll() is not None or self.process_stopping or self.ready:
+                raise ValueError('startup lease changed during inherited run recovery')
+            if self.slot.active_run_id is not None:
+                if self.slot.active_run_id != run_id or self.slot.state is not SlotState.RUNNING:
+                    raise ValueError('inherited run owner differs from slot')
+                self.slot.finish_run(run_id)
+            self.mcp_proxy.end(session, run_id)
+            for key in ('runId', 'nativeRunId', 'runPrepared', 'runTerminal'):
+                self.boundary.set(key, None)
+
+    def wait_for_core_ready(self, process, *, deadline_s=CORE_STARTUP_DEADLINE_S, inherited_owner=None):
         if deadline_s <= 0:
             raise ValueError('Core readiness deadline must be positive')
         started = time.monotonic()
@@ -644,6 +695,7 @@ class Agent:
                 time.sleep(sleep_for)
                 delay = min(delay * 2, 0.1)
                 continue
+            self._reconcile_inherited_run(process, inherited_owner)
             with self.process_lock:
                 if self.process is not process or self.process_stopping or process.poll() is not None:
                     raise RuntimeError('Core startup lease ended')
@@ -658,6 +710,9 @@ class Agent:
         with self.process_lock:
             if self.fatal_exit_requested or self.process is not None:
                 raise RuntimeError('Core lease must be intentionally joined before replacement')
+        inherited_owner = (self.boundary.get('session'), self.boundary.get('runId'))
+        if not all(isinstance(value, str) and value for value in inherited_owner):
+            inherited_owner = None
         snapshot = self.boundary.snapshot
         if snapshot is None:
             raise ValueError('snapshot unavailable')
@@ -763,7 +818,7 @@ class Agent:
         self.supervise_core(process)
         # Immediate first probe, then short capped backoff under a strict deadline.
         try:
-            self.wait_for_core_ready(process)
+            self.wait_for_core_ready(process, inherited_owner=inherited_owner)
         except Exception:
             if process.poll() is None:
                 self.stop_core()
@@ -1304,6 +1359,7 @@ class Agent:
                     raise ValueError('invalid prepared run')
                 if self.local('GET', '/session/' + encoded + '/execution'):
                     raise ValueError('execution already active')
+                self.reconcile_completed_run()
                 self.slot.begin_run(run_id)
                 try:
                     self.refresh_snapshot()
@@ -1313,6 +1369,7 @@ class Agent:
                     raise
                 self.boundary.set('runId', run_id)
                 self.boundary.set('runMode', 'native')
+                self.boundary.set('runTerminal', None)
                 self.boundary.set('nativeRunId', None)
                 self.boundary.set('runPrepared', {'runId': run_id, 'expiresAt': time.time() + 30})
                 return {'prepared': True, 'runId': run_id}
@@ -1383,6 +1440,7 @@ class Agent:
                 self.boundary.set('runId', run_id)
                 self.boundary.set('nativeRunId', None)
                 self.boundary.set('runMode', 'native')
+                self.boundary.set('runTerminal', None)
                 body = {'parts': parts}
                 for key in ('model', 'variant', 'agent'):
                     if key in payload:
@@ -1443,7 +1501,13 @@ class Agent:
                 return self.local('POST', '/session/' + encoded + '/abort', {'runId': execution['runId']})
             if operation == 'status':
                 execution = self.local('GET', '/session/' + encoded + '/execution')
-                return {**execution, 'externalRunId': run_id} if execution else None
+                if not execution:
+                    self.reconcile_completed_run()
+                if execution:
+                    return {**execution, 'externalRunId': run_id}
+                if self.slot.active_run_id is not None:
+                    return {'continuation': 'pending', 'externalRunId': self.slot.active_run_id}
+                return {'continuation': 'idle', 'externalRunId': None}
             if operation in ('permission.list', 'permission.reply'):
                 pending = self.local('GET', '/permission')
                 owned = [item for item in pending if item.get('sessionID') == session]
@@ -1544,7 +1608,7 @@ class Agent:
         lines = []
         size = 0
         sequence = 0
-        started = not require_start
+        started = not require_start and self.boundary.get('runMode') != 'native'
         stream_nonce = secrets.token_hex(24) if stream_nonce is None else stream_nonce
         for raw_line in stream:
             if self.retired or not self.ready or self.boundary.get('runId') != run_id or self.boundary.get('session') != session:
@@ -1587,7 +1651,11 @@ class Agent:
             if terminal and not started:
                 continue
             if terminal:
-                self.mcp_proxy.end(session, run_id)
+                with self.lock:
+                    if self.boundary.get('session') != session or self.boundary.get('runId') != run_id:
+                        return
+                    self.boundary.set('runTerminal', {'runId': run_id, 'sessionId': session})
+                    self.mcp_proxy.end(session, run_id)
             envelope = self.boundary.envelope('session.event', {'runId': run_id, 'event': event, 'streamNonce': stream_nonce, 'sequence': sequence}, session)
             raw = canonical(envelope)
             yield canonical({'envelope': envelope, 'body': raw.decode('utf-8'), 'signature': self.boundary.signature(raw)})
