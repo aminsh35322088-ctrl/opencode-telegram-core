@@ -628,10 +628,41 @@ class Agent:
         return watcher
 
     def start_core(self):
-        with self.lifecycle_lock:
+        # Match dispatch/retirement: Agent admission lock precedes lifecycle lock.
+        with self.lock, self.lifecycle_lock:
             return self._start_core()
 
-    def wait_for_core_ready(self, process, *, deadline_s=CORE_STARTUP_DEADLINE_S):
+    def _reconcile_inherited_run(self, process, inherited_owner):
+        """Only a fresh supervised Core lease, before ready/admission, can retire legacy state."""
+        if inherited_owner is None:
+            return
+        session, run_id = inherited_owner
+        with self.lock, self.process_lock:
+            lease = self.process_lease
+            if (self.ready or self.process is not process or process.poll() is not None
+                    or self.process_stopping or not lease or lease['process'] is not process
+                    or lease['intentional'] or lease['joined']):
+                raise ValueError('invalid startup lease for inherited run recovery')
+            if (self.boundary.get('session'), self.boundary.get('runId')) != inherited_owner:
+                raise ValueError('inherited run owner changed before startup recovery')
+            if self.callback_owner:
+                raise ValueError('inherited callback owner has not joined')
+            execution = self.local('GET', '/session/' + quote(session, safe='') + '/execution', timeout=CORE_READINESS_PROBE_TIMEOUT_S)
+            if execution:
+                return
+            if (self.boundary.get('session'), self.boundary.get('runId')) != inherited_owner:
+                raise ValueError('inherited run owner changed during startup recovery')
+            if self.process is not process or process.poll() is not None or self.process_stopping or self.ready:
+                raise ValueError('startup lease changed during inherited run recovery')
+            if self.slot.active_run_id is not None:
+                if self.slot.active_run_id != run_id or self.slot.state is not SlotState.RUNNING:
+                    raise ValueError('inherited run owner differs from slot')
+                self.slot.finish_run(run_id)
+            self.mcp_proxy.end(session, run_id)
+            for key in ('runId', 'nativeRunId', 'runPrepared', 'runTerminal'):
+                self.boundary.set(key, None)
+
+    def wait_for_core_ready(self, process, *, deadline_s=CORE_STARTUP_DEADLINE_S, inherited_owner=None):
         if deadline_s <= 0:
             raise ValueError('Core readiness deadline must be positive')
         started = time.monotonic()
@@ -664,6 +695,7 @@ class Agent:
                 time.sleep(sleep_for)
                 delay = min(delay * 2, 0.1)
                 continue
+            self._reconcile_inherited_run(process, inherited_owner)
             with self.process_lock:
                 if self.process is not process or self.process_stopping or process.poll() is not None:
                     raise RuntimeError('Core startup lease ended')
@@ -678,6 +710,9 @@ class Agent:
         with self.process_lock:
             if self.fatal_exit_requested or self.process is not None:
                 raise RuntimeError('Core lease must be intentionally joined before replacement')
+        inherited_owner = (self.boundary.get('session'), self.boundary.get('runId'))
+        if not all(isinstance(value, str) and value for value in inherited_owner):
+            inherited_owner = None
         snapshot = self.boundary.snapshot
         if snapshot is None:
             raise ValueError('snapshot unavailable')
@@ -783,7 +818,7 @@ class Agent:
         self.supervise_core(process)
         # Immediate first probe, then short capped backoff under a strict deadline.
         try:
-            self.wait_for_core_ready(process)
+            self.wait_for_core_ready(process, inherited_owner=inherited_owner)
         except Exception:
             if process.poll() is None:
                 self.stop_core()

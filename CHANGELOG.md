@@ -13,6 +13,13 @@
   establish that the Worker is idle before recovering uncertain admission. Signed
   status distinguishes `pending` admission from explicit `idle`; an absent native
   runner alone is never treated as proof of completion.
+- Recover inherited legacy run metadata before a newly spawned, supervised Core
+  lease becomes ready: preserve recovered paused/native executions, require exact
+  unchanged session/run identity and absent execution, and never apply this startup
+  path to same-process accepted admission. This lets existing pre.34 Workers recover
+  safely during an approved image rollout without deleting their Topic/workspace.
+- Keep startup and retirement in the same Agent/admission-before-lifecycle lock
+  order; a deterministic concurrent regression prevents a startup/retire deadlock.
 - Revoke the completed run's MCP authority and clear its stale prepared/native
   run metadata while retaining the Topic session and workspace.
 - Preserve live executions, accepted prompts still staging before runner

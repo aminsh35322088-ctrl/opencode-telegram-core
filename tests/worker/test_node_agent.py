@@ -260,6 +260,39 @@ class LifecycleTests(SecurityTests):
         self.assertEqual(self.agent.dispatch(self.request('status'))['continuation'], 'pending')
         self.assertEqual(self.agent.slot.active_run_id, 'admitted')
 
+    def test_fresh_core_start_reconciles_inherited_legacy_owner_before_ready(self):
+        self.agent.process_lease = {'process': self.agent.process, 'intentional': False, 'joined': False}
+        self.agent.ready = False
+        self.agent.local = lambda *args, **kwargs: None
+        self.agent._reconcile_inherited_run(self.agent.process, ('ses_owned', 'run_owned'))
+        self.assertIsNone(self.b.get('runId'))
+        self.agent.ready = True
+        self.assertEqual(self.agent.readiness_state(), 'ready')
+
+    def test_fresh_core_start_preserves_recovered_paused_execution(self):
+        self.agent.process_lease = {'process': self.agent.process, 'intentional': False, 'joined': False}
+        self.agent.ready = False
+        self.agent.local = lambda *args, **kwargs: {'runId': 'native-paused', 'continuation': 'unavailable', 'paused': True}
+        self.agent._reconcile_inherited_run(self.agent.process, ('ses_owned', 'run_owned'))
+        self.assertEqual(self.b.get('runId'), 'run_owned')
+
+    def test_startup_recovery_cannot_clear_same_process_admission_after_ready(self):
+        self.agent.local = lambda *args, **kwargs: None
+        with self.assertRaisesRegex(ValueError, 'startup lease'):
+            self.agent._reconcile_inherited_run(self.agent.process, ('ses_owned', 'run_owned'))
+        self.assertEqual(self.b.get('runId'), 'run_owned')
+
+    def test_startup_recovery_rejects_identity_change_during_native_probe(self):
+        self.agent.process_lease = {'process': self.agent.process, 'intentional': False, 'joined': False}
+        self.agent.ready = False
+        def local(*args, **kwargs):
+            self.b.set('runId', 'replacement')
+            return None
+        self.agent.local = local
+        with self.assertRaisesRegex(ValueError, 'inherited run owner'):
+            self.agent._reconcile_inherited_run(self.agent.process, ('ses_owned', 'run_owned'))
+        self.assertEqual(self.b.get('runId'), 'replacement')
+
     def test_stop_without_native_execution_releases_single_slot(self):
         self.b.set('runId', None)
         self.agent.local = lambda method, route, payload=None: None
@@ -619,6 +652,47 @@ class ProcessSupervisorTests(SecurityTests):
             self.exit_codes.append(code)
             self.exit_called.set()
         return a.Agent(self.b, 'https://control.invalid', exit_on_crash=exit_callback)
+
+    def test_startup_and_retirement_share_agent_then_lifecycle_lock_order(self):
+        import threading
+        agent = self.agent()
+        underlying = threading.RLock()
+        startup_waiting = threading.Event()
+        retire_holds_agent = threading.Event()
+        allow_retire = threading.Event()
+        errors = []
+        class ObservedLock:
+            def __enter__(self):
+                if threading.current_thread().name == 'core-startup':
+                    startup_waiting.set()
+                underlying.acquire()
+                return self
+            def __exit__(self, *_):
+                underlying.release()
+        agent.lock = ObservedLock()
+        def startup():
+            with agent.lock:
+                pass
+        agent._start_core = startup
+        def retiring():
+            try:
+                with agent.lock:
+                    retire_holds_agent.set()
+                    allow_retire.wait(1)
+                    agent.stop_core()
+            except Exception as error:
+                errors.append(error)
+        retire = threading.Thread(target=retiring, daemon=True)
+        start = threading.Thread(target=agent.start_core, name='core-startup', daemon=True)
+        retire.start()
+        self.assertTrue(retire_holds_agent.wait(1))
+        start.start()
+        self.assertTrue(startup_waiting.wait(1))
+        allow_retire.set()
+        retire.join(0.5)
+        start.join(0.5)
+        self.assertFalse(retire.is_alive() or start.is_alive(), 'startup and retirement deadlocked')
+        self.assertEqual(errors, [])
 
     def test_core_readiness_probes_immediately_with_short_bounded_backoff(self):
         from unittest.mock import patch
