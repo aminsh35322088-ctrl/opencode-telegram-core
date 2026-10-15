@@ -162,6 +162,104 @@ class LifecycleTests(SecurityTests):
             self.agent.dispatch(self.request('run.prepare', {'runId': 'run-two'}))
         self.assertEqual(self.b.get('runId'), 'run-one')
 
+    def observe_native_terminal(self, run_id, event_type='session.error'):
+        import io
+        events = [
+            {'type': 'session.status', 'properties': {'sessionID': 'ses_owned', 'status': {'type': 'busy'}}},
+            {'type': event_type, 'properties': {'sessionID': 'ses_owned'}},
+        ]
+        raw = b''.join(b'data: ' + a.canonical(event) + b'\n\n' for event in events)
+        self.assertEqual(len(list(self.agent.stream_frames(io.BytesIO(raw), 'ses_owned', run_id, 0, require_start=True))), 2)
+
+    def test_idle_status_preserves_accepted_prompt_still_staging(self):
+        self.b.set('runId', None)
+        self.agent.local = lambda *args: None
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'staging'}))
+        # POST prompt_async has accepted admission, but native staging has not yet
+        # registered its runner. Absence of execution alone cannot release it.
+        self.b.set('runPrepared', None)
+        result = self.agent.dispatch(self.request('status'))
+        self.assertEqual(result, {'continuation': 'pending', 'externalRunId': 'staging'})
+        self.assertEqual(self.agent.slot.active_run_id, 'staging')
+        with self.assertRaisesRegex(ValueError, 'another run'):
+            self.agent.dispatch(self.request('run.prepare', {'runId': 'second'}))
+        self.assertEqual(self.b.get('runId'), 'staging')
+
+    def test_completed_native_execution_allows_next_prepare_without_explicit_stop(self):
+        self.b.set('runId', None)
+        execution = [None]
+        self.agent.local = lambda method, route, payload=None: execution[0]
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'first'}))
+        # A provider error/completion has removed native execution, but the Worker
+        # previously retained its single-slot owner after the stream ended.
+        self.b.set('runPrepared', None)
+        self.observe_native_terminal('first')
+        result = self.agent.dispatch(self.request('run.prepare', {'runId': 'second'}))
+        self.assertEqual(result, {'prepared': True, 'runId': 'second'})
+        self.assertEqual(self.agent.slot.active_run_id, 'second')
+        self.assertEqual(self.b.get('runId'), 'second')
+
+    def test_idle_signed_status_reconciles_completed_native_slot(self):
+        self.b.set('runId', None)
+        self.agent.local = lambda *args: None
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'completed'}))
+        self.b.set('runPrepared', None)
+        self.observe_native_terminal('completed')
+        self.assertEqual(self.agent.dispatch(self.request('status')), {'continuation': 'idle', 'externalRunId': None})
+        self.assertEqual(self.agent.readiness_state(), 'ready')
+        self.assertIsNone(self.agent.slot.active_run_id)
+        self.assertIsNone(self.b.get('runId'))
+
+    def test_signed_status_does_not_release_live_native_execution(self):
+        self.b.set('runId', None)
+        execution = [None]
+        self.agent.local = lambda *args: execution[0]
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'live'}))
+        self.b.set('runPrepared', None)
+        execution[0] = {'runId': 'native-live', 'continuation': 'live'}
+        self.assertEqual(self.agent.dispatch(self.request('status'))['externalRunId'], 'live')
+        self.assertEqual(self.agent.slot.active_run_id, 'live')
+        with self.assertRaisesRegex(ValueError, 'execution already active'):
+            self.agent.dispatch(self.request('run.prepare', {'runId': 'foreign'}))
+        self.assertEqual(self.b.get('runId'), 'live')
+
+    def test_idle_status_preserves_unexpired_prepared_admission(self):
+        self.b.set('runId', None)
+        self.agent.local = lambda *args: None
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'prepared'}))
+        self.assertEqual(self.agent.dispatch(self.request('status'))['continuation'], 'pending')
+        self.assertEqual(self.agent.slot.active_run_id, 'prepared')
+        self.assertEqual(self.b.get('runPrepared')['runId'], 'prepared')
+
+    def test_idle_status_rejects_inconsistent_slot_owner(self):
+        self.agent.local = lambda *args: None
+        self.agent.readiness_state()
+        self.b.set('runMode', 'native')
+        self.b.set('runId', 'different')
+        self.b.set('runTerminal', {'runId': 'different', 'sessionId': 'ses_owned'})
+        with self.assertRaisesRegex(ValueError, 'inconsistent completed run owner'):
+            self.agent.dispatch(self.request('status'))
+        self.assertEqual(self.agent.slot.active_run_id, 'run_owned')
+
+    def test_native_idle_before_start_is_not_completion_evidence(self):
+        import io
+        self.b.set('runId', None)
+        self.agent.local = lambda *args: None
+        self.agent.refresh_snapshot = lambda: None
+        self.agent.dispatch(self.request('run.prepare', {'runId': 'admitted'}))
+        self.b.set('runPrepared', None)
+        event = {'type': 'session.idle', 'properties': {'sessionID': 'ses_owned'}}
+        raw = b'data: ' + a.canonical(event) + b'\n\n'
+        self.assertEqual(list(self.agent.stream_frames(io.BytesIO(raw), 'ses_owned', 'admitted', 0)), [])
+        self.assertIsNone(self.b.get('runTerminal'))
+        self.assertEqual(self.agent.dispatch(self.request('status'))['continuation'], 'pending')
+        self.assertEqual(self.agent.slot.active_run_id, 'admitted')
+
     def test_stop_without_native_execution_releases_single_slot(self):
         self.b.set('runId', None)
         self.agent.local = lambda method, route, payload=None: None

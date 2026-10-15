@@ -1,3 +1,42 @@
+## 1.18.33-bot.13-pre.37
+
+### Worker execution recovery
+
+- Fix a native execution lifecycle bug where a completed or failed model run left
+  the Worker single-slot owner RUNNING. The following signed `run.prepare` then
+  failed, even after the native Core execution had ended.
+- Before admitting the next prepared run, reconcile the previous exact slot owner
+  only after a session/run-scoped terminal event has been observed and the native
+  execution endpoint confirms no execution exists. An expired, unconsumed prepare
+  receipt can also be released without admitting model work.
+- Apply the same reconciliation to authenticated idle status reads so Control can
+  establish that the Worker is idle before recovering uncertain admission. Signed
+  status distinguishes `pending` admission from explicit `idle`; an absent native
+  runner alone is never treated as proof of completion.
+- Revoke the completed run's MCP authority and clear its stale prepared/native
+  run metadata while retaining the Topic session and workspace.
+- Preserve live executions, accepted prompts still staging before runner
+  registration, unexpired prepared admission, and callback ownership. Native
+  streams require a start event before recording their terminal receipt.
+  Inconsistent slot identity fails closed. No automatic provider retries or model
+  changes are introduced.
+
+### Verification and operational limits
+
+- Red-first regressions reproduce second-request rejection after completion and
+  a signed idle status that incorrectly left the Worker running.
+- Regression coverage includes live-run preservation, prepared-run preservation,
+  inconsistent owner rejection, accepted-but-still-staging admission, and the
+  existing foreign-session/run boundaries.
+- Release publication still requires successful Core CI and artifact verification.
+- Existing deployed Worker images need an explicit rollout; publishing this
+  prerelease does not update them. No Topic/session/workspace migration is needed.
+- Provider free-tier eligibility is unchanged. A provider's client restriction
+  must be handled by selecting an eligible configured provider; this release does
+  not bypass that restriction or claim that every free model is usable.
+- This is a prerelease. Stabilization gates remain unchanged and no Stable Bot or
+  Stable Core release is claimed.
+
 ## 1.18.33-bot.13-pre.36 (2026-10-14)
 
 Telegram presentation compatibility prerelease for Bot PR #191, based on Core

@@ -512,6 +512,26 @@ class Agent:
             if isinstance(run_id, str) and run_id:
                 self.slot.begin_run(run_id)
 
+    def reconcile_completed_run(self):
+        """Caller holds self.lock and has verified that native execution is absent."""
+        prepared = self.boundary.get('runPrepared')
+        if (self.boundary.get('runMode') != 'native' or self.callback_owner
+                or prepared and prepared['expiresAt'] >= time.time()):
+            return
+        run_id = self.boundary.get('runId')
+        terminal = self.boundary.get('runTerminal')
+        expired_prepare = prepared and prepared['expiresAt'] < time.time()
+        if not expired_prepare and terminal != {'runId': run_id, 'sessionId': self.boundary.get('session')}:
+            return
+        if self.slot.active_run_id is not None:
+            if self.slot.active_run_id != run_id or self.slot.state is not SlotState.RUNNING:
+                raise ValueError('inconsistent completed run owner')
+            self.mcp_proxy.end(self.boundary.get('session'), run_id)
+            self.slot.finish_run(run_id)
+        self.boundary.set('runPrepared', None)
+        self.boundary.set('nativeRunId', None)
+        self.boundary.set('runId', None)
+
     def readiness_state(self):
         if self.retired or self.fatal_exit_requested:
             return 'retiring'
@@ -1304,6 +1324,7 @@ class Agent:
                     raise ValueError('invalid prepared run')
                 if self.local('GET', '/session/' + encoded + '/execution'):
                     raise ValueError('execution already active')
+                self.reconcile_completed_run()
                 self.slot.begin_run(run_id)
                 try:
                     self.refresh_snapshot()
@@ -1313,6 +1334,7 @@ class Agent:
                     raise
                 self.boundary.set('runId', run_id)
                 self.boundary.set('runMode', 'native')
+                self.boundary.set('runTerminal', None)
                 self.boundary.set('nativeRunId', None)
                 self.boundary.set('runPrepared', {'runId': run_id, 'expiresAt': time.time() + 30})
                 return {'prepared': True, 'runId': run_id}
@@ -1383,6 +1405,7 @@ class Agent:
                 self.boundary.set('runId', run_id)
                 self.boundary.set('nativeRunId', None)
                 self.boundary.set('runMode', 'native')
+                self.boundary.set('runTerminal', None)
                 body = {'parts': parts}
                 for key in ('model', 'variant', 'agent'):
                     if key in payload:
@@ -1443,7 +1466,13 @@ class Agent:
                 return self.local('POST', '/session/' + encoded + '/abort', {'runId': execution['runId']})
             if operation == 'status':
                 execution = self.local('GET', '/session/' + encoded + '/execution')
-                return {**execution, 'externalRunId': run_id} if execution else None
+                if not execution:
+                    self.reconcile_completed_run()
+                if execution:
+                    return {**execution, 'externalRunId': run_id}
+                if self.slot.active_run_id is not None:
+                    return {'continuation': 'pending', 'externalRunId': self.slot.active_run_id}
+                return {'continuation': 'idle', 'externalRunId': None}
             if operation in ('permission.list', 'permission.reply'):
                 pending = self.local('GET', '/permission')
                 owned = [item for item in pending if item.get('sessionID') == session]
@@ -1544,7 +1573,7 @@ class Agent:
         lines = []
         size = 0
         sequence = 0
-        started = not require_start
+        started = not require_start and self.boundary.get('runMode') != 'native'
         stream_nonce = secrets.token_hex(24) if stream_nonce is None else stream_nonce
         for raw_line in stream:
             if self.retired or not self.ready or self.boundary.get('runId') != run_id or self.boundary.get('session') != session:
@@ -1587,7 +1616,11 @@ class Agent:
             if terminal and not started:
                 continue
             if terminal:
-                self.mcp_proxy.end(session, run_id)
+                with self.lock:
+                    if self.boundary.get('session') != session or self.boundary.get('runId') != run_id:
+                        return
+                    self.boundary.set('runTerminal', {'runId': run_id, 'sessionId': session})
+                    self.mcp_proxy.end(session, run_id)
             envelope = self.boundary.envelope('session.event', {'runId': run_id, 'event': event, 'streamNonce': stream_nonce, 'sequence': sequence}, session)
             raw = canonical(envelope)
             yield canonical({'envelope': envelope, 'body': raw.decode('utf-8'), 'signature': self.boundary.signature(raw)})
