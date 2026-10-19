@@ -154,6 +154,21 @@ class BoundaryResourceTests(unittest.TestCase):
 
 
 class HTTPAdmissionTests(unittest.TestCase):
+    def test_response_write_after_client_disconnect_is_quietly_closed(self):
+        class DisconnectedWriter:
+            def write(self, _):
+                raise BrokenPipeError('client disconnected')
+            def flush(self):
+                return None
+
+        handler = object.__new__(a.Handler)
+        handler.wfile = DisconnectedWriter()
+        handler.close_connection = False
+        with patch.object(a.Handler, 'send_response'), patch.object(a.Handler, 'send_header'), patch.object(a.Handler, 'end_headers'):
+            handler.respond(409, {'ok': False, 'error': 'operation rejected'})
+        self.assertTrue(handler.close_connection)
+        handler.send_response.assert_called_once_with(409)
+
     def test_admission_happens_before_thread_and_limits_header_read(self):
         server = a.BoundedHTTPServer(('127.0.0.1', 0), a.Handler)
         left, right = socket.socketpair()
