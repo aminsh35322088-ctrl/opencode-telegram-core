@@ -27,6 +27,7 @@ CORE_READINESS_PROBE_TIMEOUT_S = 2.0
 CORE_BOOTSTRAP_ATTEMPTS = 3
 CORE_BOOTSTRAP_RETRY_DELAY_S = 1.0
 BROWSER_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "browser.ts"
+RUNTIME_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "runtime.ts"
 
 
 def runtime_identity(filename=Path('/usr/local/share/core-build-info.json')):
@@ -137,6 +138,10 @@ def materialize_browser_tool(tools):
     materialize_image_tool(tools, BROWSER_TOOL_SOURCE, 'browser.ts')
 
 
+def materialize_runtime_tool(tools):
+    materialize_image_tool(tools, RUNTIME_TOOL_SOURCE, 'runtime.ts')
+
+
 def materialize_network_tool(tools):
     materialize_image_tool(tools, Path('/opt/worker/runtime_tools/network.ts'), 'network.ts')
 
@@ -150,15 +155,15 @@ def materialize_image_tool(tools, source_path, filename):
     try:
         fd = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as error:
-        raise ValueError('browser adapter source unavailable or unsafe') from error
+        raise ValueError('worker tool source unavailable or unsafe') from error
     try:
         source = os.fstat(fd)
         if not stat.S_ISREG(source.st_mode) or source.st_uid != 0 or source.st_mode & 0o022 or source.st_size > 65536:
-            raise ValueError('browser adapter source must be immutable root-owned image code')
+            raise ValueError('worker tool source must be immutable root-owned image code')
         with os.fdopen(fd, 'rb', closefd=False) as stream:
             data = stream.read(65537)
         if len(data) > 65536:
-            raise ValueError('browser adapter source exceeds bound')
+            raise ValueError('worker tool source exceeds bound')
     finally:
         os.close(fd)
     atomic(tools / filename, data)
@@ -768,6 +773,7 @@ class Agent:
         atomic(tools / 'bot.ts', self.bridge.tool_source().encode())
         atomic(tools / 'actions.ts', self.bridge.actions_tool_source().encode())
         materialize_browser_tool(tools)
+        materialize_runtime_tool(tools)
         network_configured = not self.boundary.unbound and any(isinstance(ref,dict) and ref.get('integrationId') == 'tailscale'
             and ref.get('configured') is True for ref in snapshot['credentialReferences'])
         if network_configured:

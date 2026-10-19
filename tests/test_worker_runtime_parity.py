@@ -30,6 +30,39 @@ if(accepted.length!==1)throw Error('unexpected execution');
         subprocess.run(['node', '-e', script, str(ROOT / 'worker/runtime_tools/browser.ts')], check=True,
                        capture_output=True, text=True, timeout=10)
 
+    def test_runtime_inspection_tool_forwards_only_captured_topic_context(self):
+        script = '''const fs=require('fs'),vm=require('vm');
+const calls=[];const box={module:{exports:{}},fetch:async (url,options)=>{calls.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({ok:true,result:{section:'verify',passed:true}})}}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8').replace('export default','module.exports ='),box);
+const tool=box.module.exports;
+(async()=>{
+for(const action of ['capabilities','diagnostics','verify']){
+const result=await tool.execute({action},{sessionID:'ses_owned',messageID:'msg_current'});
+if(!JSON.parse(result).passed && action==='verify')throw Error('result');
+}
+if(calls.length!==3)throw Error('unexpected request count');
+for(let i=0;i<calls.length;i++){
+if(calls[i].url!=='http://127.0.0.1:4098/control')throw Error('endpoint');
+if(calls[i].body.action!=='runtime.inspect'||calls[i].body.sessionId!=='ses_owned'||calls[i].body.payload.messageID!=='msg_current')throw Error('context');
+if(calls[i].body.payload.section!==['capabilities','diagnostics','verify'][i])throw Error('section');
+if(Object.keys(calls[i].body).sort().join(',')!=='action,payload,sessionId')throw Error('extra authority');
+}
+for(const [args,ctx] of [[{action:'exec'},{sessionID:'ses',messageID:'msg'}],[{action:'verify'},{sessionID:'ses'}]]){
+let rejected=false;try{await tool.execute(args,ctx)}catch{rejected=true}if(!rejected)throw Error('invalid request accepted');
+}
+if(calls.length!==3)throw Error('invalid request reached bridge');
+})().catch(e=>{console.error(e.message);process.exit(1)});'''
+        subprocess.run(['node', '-e', script, str(ROOT / 'worker/runtime_tools/runtime.ts')], check=True,
+                       capture_output=True, text=True, timeout=10)
+
+    def test_runtime_tool_is_present_in_worker_image_source_tree(self):
+        source = (ROOT / 'Dockerfile.worker').read_text()
+        self.assertIn('COPY worker /opt/worker', source)
+        self.assertIn("RUNTIME_TOOL_SOURCE = Path(__file__).parent / \"runtime_tools\" / \"runtime.ts\"", (ROOT / 'worker/node_agent.py').read_text())
+        agent = (ROOT / 'worker/node_agent.py').read_text()
+        self.assertIn('materialize_runtime_tool(tools)', agent)
+        self.assertIn("'runtime.ts'", agent)
+
     def test_core_dependency_layer_is_stable_across_runtime_source_and_commit_changes(self):
         source = (ROOT / 'Dockerfile.worker').read_text()
         prepare = source.index('./scripts/prepare-runtime-deps.sh')

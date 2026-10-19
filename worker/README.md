@@ -12,7 +12,7 @@ The Topic Worker is the per-Topic runtime boundary used by the Bot Control Plane
 | control_bridge.py | Calls the Bot Control Plane for narrowly scoped operations and credentials |
 | credential_broker.py and credential_transport.py | Acquire purpose- and capability-bound credential leases when a supported request needs them |
 | provider_proxy.py, github_proxy.py, mcp_proxy.py | Forward supported provider/GitHub/MCP traffic without persisting plaintext credentials in Core config |
-| action_runtime.py and runtime_tools/ | Resolve enabled generated actions and provide explicit browser/network helper capabilities |
+| action_runtime.py and runtime_tools/ | Resolve enabled generated actions, provide governed browser/network helpers, and expose read-only Topic runtime introspection |
 | single_slot.py | Enforce one-Topic-at-a-time state and safe retirement/reuse |
 | git_shim.py, tailscale_remote.py, tailscale_runtime.py | Provide constrained Git and optional network/runtime integration bridges |
 
@@ -38,6 +38,12 @@ Global snapshots use canonical JSON hashes and verified Skill hashes. They are s
 Snapshots contain credential references rather than plaintext credentials. Provider and remote MCP proxies lease secrets only for an admitted, bound operation and keep them in memory for a bounded time. Core configuration, process environment, logs, and model prompts must not receive lease values. Remote MCP uses the fixed Streamable HTTP boundary described below; unsupported OAuth/SSE negotiation fails closed.
 
 Generated action discovery resolves exact enabled snapshot records and immutable arguments. Execution uses the resolved native, action, or MCP tool inside the current Core permission/process context. The bridge does not expose a generic remote tool-execution endpoint, and a model cannot mint a Telegram approval.
+
+## Runtime introspection tool
+
+The image-owned `runtime` custom tool provides three read-only actions. `capabilities` queries the live OpenCode tool registry (including dynamic MCP tools) and, when the captured assistant message identifies a model, asks the pinned model-specific registry for that model's available tools. It returns tool IDs and bounded descriptions, never parameter schemas or secrets. If model resolution is unavailable, it falls back to the exact live tool-ID list rather than guessing from filenames. The routes are verified against the pinned upstream implementation at [OpenCode commit `51ef4be`](https://github.com/anomalyco/opencode/blob/51ef4be1d3c122f18fefb510dca8d778571f4f18/packages/opencode/src/server/routes/instance/httpapi/groups/experimental.ts).
+
+`diagnostics` reports this Topic's readiness, Core process liveness/available RSS, uptime, snapshot revision/integrity, and whether the supported GitHub/Tailscale integrations are configured. `verify` checks the bound Topic, Core process/readiness, snapshot integrity and activation against the current revision/hash, expected generated tool files (including stale optional integration files), and the loopback Core health endpoint. It does not run shell commands, tests, or mutations. None of the actions returns prompts, environment variables, credential values, arbitrary process output, or filesystem paths. Requests go through the existing loopback ControlBridge and must carry the exact captured session ID; the bridge fails closed for unbound or retired Workers.
 
 ## One Topic per Worker and lifecycle
 
