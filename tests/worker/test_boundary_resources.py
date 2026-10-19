@@ -205,6 +205,36 @@ class RuntimeToolTests(unittest.TestCase):
                 a.materialize_browser_tool(tools)
             self.assertEqual((tools / 'browser.ts').read_text(), source.read_text())
 
+    def test_runtime_tool_materializes_verified_image_source(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'runtime.ts'
+            source.write_text('export default {}')
+            source.chmod(0o644)
+            tools = Path(root) / 'tools'
+            tools.mkdir()
+            from types import SimpleNamespace
+            original = a.os.fstat
+            def image_stat(fd):
+                value = original(fd)
+                return SimpleNamespace(st_mode=value.st_mode, st_uid=0, st_size=value.st_size)
+            with patch.object(a, 'RUNTIME_TOOL_SOURCE', source), patch.object(a.os, 'fstat', image_stat):
+                a.materialize_runtime_tool(tools)
+            self.assertEqual((tools / 'runtime.ts').read_text(), source.read_text())
+
+    def test_runtime_tool_rejects_writable_or_symlink_source(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'runtime.ts'
+            source.write_text('export default {}')
+            source.chmod(0o666)
+            tools = Path(root) / 'tools'
+            tools.mkdir()
+            with patch.object(a, 'RUNTIME_TOOL_SOURCE', source), self.assertRaises(ValueError):
+                a.materialize_runtime_tool(tools)
+            link = Path(root) / 'link'
+            link.symlink_to(source)
+            with patch.object(a, 'RUNTIME_TOOL_SOURCE', link), self.assertRaises(ValueError):
+                a.materialize_runtime_tool(tools)
+
     def test_browser_tool_rejects_writable_or_symlink_source(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / 'browser.ts'
