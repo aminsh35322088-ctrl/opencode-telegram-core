@@ -141,6 +141,10 @@ def materialize_network_tool(tools):
     materialize_image_tool(tools, Path('/opt/worker/runtime_tools/network.ts'), 'network.ts')
 
 
+def materialize_github_tool(tools):
+    materialize_image_tool(tools, Path('/opt/worker/runtime_tools/github.ts'), 'github.ts')
+
+
 def materialize_image_tool(tools, source_path, filename):
     # Source belongs to the immutable image, never a Topic snapshot/workspace.
     try:
@@ -495,6 +499,8 @@ class Agent:
         self.network = None
         from github_proxy import GitHubProxy
         self.github = GitHubProxy(self)
+        from github_api_proxy import GitHubApiProxy
+        self.github_api = GitHubApiProxy(self)
         from provider_proxy import ProviderProxy
         self.proxy = ProviderProxy(self)
         from mcp_proxy import MCPProxy
@@ -771,6 +777,12 @@ class Agent:
                 self.network = TailscaleRuntime(self)
         else:
             (tools / 'network.ts').unlink(missing_ok=True)
+        github_configured = not self.boundary.unbound and any(isinstance(ref,dict) and ref.get('integrationId') == 'github'
+            and ref.get('configured') is True for ref in snapshot['credentialReferences'])
+        if github_configured:
+            materialize_github_tool(tools)
+        else:
+            (tools / 'github.ts').unlink(missing_ok=True)
         atomic(config / 'opencode.json', canonical(runtime_config))
         atomic(runtime_root / 'global-snapshot.json', canonical(snapshot))
         skills = config / 'skills'
@@ -829,6 +841,7 @@ class Agent:
         if not self.boundary.unbound and any(isinstance(ref, dict) and ref.get('integrationId') == 'github' and
             ref.get('configured') is True for ref in (self.boundary.snapshot or {}).get('credentialReferences', [])):
             self.github.start()
+            self.github_api.start()
             result['CORE_GIT_PROXY_URL'] = 'http://127.0.0.1:4100/github/'
         if self.boundary.unbound:
             # Availability boot must not create durable Topic/session/execution state.
@@ -844,6 +857,7 @@ class Agent:
         self.mcp_proxy.close_active()
         self.proxy.close_active()
         self.github.close_active()
+        self.github_api.close_active()
         if self.network is not None:self.network.retire_core()
         with self.lifecycle_lock:
             with self.process_lock:
@@ -1123,7 +1137,7 @@ class Agent:
             self.callback_owner = None
         # Retirement joins active requests/children; also relinquish listeners before
         # a replacement Agent starts proxies on the same loopback ports.
-        for proxy in (self.proxy, self.mcp_proxy, self.github, self.bridge, self.network):
+        for proxy in (self.proxy, self.mcp_proxy, self.github, self.github_api, self.bridge, self.network):
             server = getattr(proxy, 'server', None)
             if server is not None:
                 server.shutdown()
