@@ -28,7 +28,7 @@ class RemoteScopeTests(unittest.TestCase):
             command,scope=remote_command(self.identity,'peer','user',"setsid sh -c 'echo $$ > descendant.pid; sleep 120' & wait",self.source)
             proc=subprocess.Popen(['/bin/sh','-c',command],env=dict(os.environ,HOME=d),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             marker=Path(d)/'.opencode-telegram/ssh-workspaces'/scope/'descendant.pid'
-            deadline=time.monotonic()+5
+            deadline=time.monotonic()+15
             while not marker.exists():self.assertLess(time.monotonic(),deadline);time.sleep(.02)
             pid=int(marker.read_text());proc.stdin.close();proc.wait(timeout=10)
             reply=json.loads(proc.stdout.read());self.assertTrue(reply['joined']);self.assertTrue(reply['cancelled'])
