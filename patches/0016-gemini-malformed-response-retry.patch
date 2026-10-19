@@ -1,8 +1,9 @@
 diff --git a/packages/opencode/src/session/llm/ai-sdk.ts b/packages/opencode/src/session/llm/ai-sdk.ts
-index 0000000..0000000 100644
 --- a/packages/opencode/src/session/llm/ai-sdk.ts
 +++ b/packages/opencode/src/session/llm/ai-sdk.ts
-@@ -76,8 +76,8 @@ export function toLLMEvents(state: ReturnType<typeof adapterState>, event: AISDK
+@@ -86,8 +86,8 @@
+       return Effect.succeed([LLMEvent.stepStart({ index: state.step })])
+ 
      case "finish-step":
 -      if (event.rawFinishReason === "network_error")
 -        return Effect.fail(new ProviderError.ResponseStreamError("Provider finish_reason: network_error"))
@@ -12,30 +13,47 @@ index 0000000..0000000 100644
          const original = providerMetadata(event.providerMetadata)
          const metadata =
 diff --git a/packages/opencode/src/session/retry.ts b/packages/opencode/src/session/retry.ts
-index 0000000..0000000 100644
 --- a/packages/opencode/src/session/retry.ts
 +++ b/packages/opencode/src/session/retry.ts
-@@ -24,6 +24,7 @@ const RETRYABLE_MESSAGE_PATTERNS = [
+@@ -38,6 +38,7 @@
+   /^timeout$|\b(?:request|response|connection|network|stream|read) (?:timeout|timed out|time out)\b/i,
+   /try your request again|retry your request|resource exhausted|resource_exhausted/i,
    /\btry again (?:later|in\b)|\b(?:currently|temporarily) at capacity\b/i,
 +  /MALFORMED_RESPONSE/i,
  ]
+ 
+ function cap(ms: number) {
 diff --git a/packages/opencode/test/session/retry.test.ts b/packages/opencode/test/session/retry.test.ts
-index 0000000..0000000 100644
 --- a/packages/opencode/test/session/retry.test.ts
 +++ b/packages/opencode/test/session/retry.test.ts
-@@ -109,6 +109,7 @@ describe("session.retry.retryable", () => {
+@@ -210,6 +210,7 @@
+     "network error",
+     "network-error",
      "network_error",
 +    "MALFORMED_RESPONSE",
      "connection refused",
      "connect ECONNREFUSED",
      "request ETIMEDOUT",
 diff --git a/packages/opencode/test/session/llm.test.ts b/packages/opencode/test/session/llm.test.ts
-index 0000000..0000000 100644
 --- a/packages/opencode/test/session/llm.test.ts
 +++ b/packages/opencode/test/session/llm.test.ts
-@@ -978,6 +978,60 @@
-   )
+@@ -970,6 +970,70 @@
  
+         if (!(error instanceof ProviderError.ResponseStreamError)) throw error
+         expect(error.message).toBe("Provider finish_reason: network_error")
++      }),
++    {
++      config: () => ({
++        enabled_providers: [vivgridFixture.providerID],
++        provider: {
++          [vivgridFixture.providerID]: {
++            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
++          },
++        },
++      }),
++    },
++  )
++
 +  it.instance(
 +    "surfaces Gemini MALFORMED_RESPONSE finishes as retryable stream failures",
 +    () =>
@@ -87,17 +105,6 @@ index 0000000..0000000 100644
 +
 +        if (!(error instanceof ProviderError.ResponseStreamError)) throw error
 +        expect(error.message).toBe("Provider finish_reason: MALFORMED_RESPONSE")
-+      }),
-+    {
-+      config: () => ({
-+        enabled_providers: [vivgridFixture.providerID],
-+        provider: {
-+          [vivgridFixture.providerID]: {
-+            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
-+          },
-+        },
-+      }),
-+    },
-+  )
-+
-   const cerebrasFixture = { providerID: "cerebras", modelID: "gpt-oss-120b" }
+       }),
+     {
+       config: () => ({
