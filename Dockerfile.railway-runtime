@@ -18,7 +18,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 WORKDIR /validation
 COPY --from=build /core/dist/runtime/opencode /usr/local/bin/opencode
 COPY --from=build /core/dist/build-info.json ./build-info.json
-COPY tests/compatibility ./tests
+COPY tests/compatibility ./tests/compatibility
+COPY worker/tailscale_runtime.py ./worker/tailscale_runtime.py
+COPY runtime/linux/process-scope.c ./runtime/linux/process-scope.c
 COPY validation/railway/compiled-runtime.py ./compiled-runtime.py
 COPY tests/diagnostics/linux-process-scope/compiled_browser.py ./diagnostics/linux-process-scope/compiled_browser.py
 COPY tests/diagnostics/railway-boundary ./boundary

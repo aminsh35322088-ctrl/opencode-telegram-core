@@ -12,12 +12,12 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, '/validation/tests')
+sys.path.insert(0, '/validation/tests/compatibility')
 from session_contract import Server, Client
 from production_execution import Model
 BINARY = '/usr/local/bin/opencode'
 for test in ['headless_surface.py', 'production_execution.py']:
-    subprocess.run([sys.executable, '/validation/tests/' + test, '--binary', BINARY], check=True)
+    subprocess.run([sys.executable, '/validation/tests/compatibility/' + test, '--binary', BINARY], check=True)
 # One resident browser is the 1GB candidate capacity contract. Foreign-topic work
 # must still complete while it is paused. Two-tree isolation runs in the compiled
 # local probe; pressure rejection cannot be converted into a leak or false success.
