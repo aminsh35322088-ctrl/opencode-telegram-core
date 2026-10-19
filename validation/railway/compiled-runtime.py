@@ -17,7 +17,10 @@ from session_contract import Server, Client
 from production_execution import Model
 BINARY = '/usr/local/bin/opencode'
 for test in ['headless_surface.py', 'production_execution.py']:
-    subprocess.run([sys.executable, '/validation/tests/compatibility/' + test, '--binary', BINARY], check=True)
+    env = os.environ.copy()
+    if test == 'production_execution.py':
+        env['CORE_PROCESS_SCOPE_RUNNER'] = '/validation/runtime/linux/process-scope'
+    subprocess.run([sys.executable, '/validation/tests/compatibility/' + test, '--binary', BINARY], check=True, env=env)
 # One resident browser is the 1GB candidate capacity contract. Foreign-topic work
 # must still complete while it is paused. Two-tree isolation runs in the compiled
 # local probe; pressure rejection cannot be converted into a leak or false success.
