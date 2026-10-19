@@ -1,3 +1,13 @@
+## 1.18.33-bot.13-pre.39
+
+### Tailnet tag migration to tag:co-admin
+
+- Topic Workers now advertise `tag:co-admin` instead of `tag:opencode-bot` when
+  joining the tailnet, matching the operator-managed reusable auth key and the
+  control-plane device's tag.
+- Tailnet ACL and Tailscale SSH policies that previously allowed `tag:opencode-bot`
+  should grant the same rights to `tag:co-admin`.
+
 ## 1.18.33-bot.13-pre.38
 
 ### Authenticated GitHub API for Topic Workers
