@@ -1,3 +1,18 @@
+## 1.18.33-bot.13-pre.38
+
+### Worker-side GitHub integration
+
+- Add a Worker-local GitHub REST proxy so topic-scoped GitHub credentials issued by the Control Plane can be used by the GitHub runtime tool without exposing the token to the model process or shell environment.
+- Restrict upstream connections to GitHub API, validate API paths and methods, bound request/response sizes, reject redirects and credential reflection, and fence requests when the owning lease/Worker generation retires.
+- Materialize the GitHub tool only when the integration is configured, and start/close the proxy with the Worker lifecycle.
+- Add regression tests for route validation, lease-scoped credential injection, redirect/echo rejection, upstream errors, unconfigured integration, and retirement fencing.
+
+### Verification and rollout
+
+- This prerelease includes the Worker GitHub API proxy from Core commit `0cec59b85282a66dbc160666fae93e29c7ba0edc`. The immutable Worker container is built separately from the same verified source commit.
+- Credential leases remain the authority boundary; this does not introduce a shared/global GitHub token or bypass Control Plane authorization.
+- This is a prerelease. Core stabilization gates remain open; no stable-release claim is made.
+
 ## 1.18.33-bot.13-pre.37
 
 ### Worker execution recovery
