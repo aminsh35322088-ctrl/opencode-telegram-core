@@ -1,3 +1,23 @@
+## 1.18.33-bot.13-pre.38
+
+### Authenticated GitHub API for Topic Workers
+
+- Topic Workers now expose the authenticated `github` tool backed by a local
+  signed GitHub API proxy, so repository, issue, pull request, workflow, and
+  check operations run with the operator's bot-token credentials instead of
+  failing on unauthenticated rate limits.
+- The Worker runtime ships `runtime_tools/github.ts` and the node agent wires
+  the proxy into the Worker process, keeping credentials inside the control
+  plane and out of prompt/tool payloads.
+
+### Operator-approved Tailnet SSH from Workers
+
+- Before a Worker opens a remote SSH connection through the `network` tool,
+  the Telegram operator receives the classic Allow-for-this-Topic / Reject
+  prompt in the Topic.
+- An approval is required once per target host and user for the lifetime of
+  the Worker process; a rejection aborts before any TCP connection is made.
+
 ## 1.18.33-bot.13-pre.37
 
 ### Worker execution recovery
