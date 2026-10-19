@@ -1683,14 +1683,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def respond(self, code, payload, signed=False, boundary=None):
         raw = canonical(payload)
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(raw)))
-        self.send_header('Connection', 'close')
-        if signed:
-            self.send_header('x-node-signature', (boundary or self.server.agent.boundary).signature(raw))
-        self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(raw)))
+            self.send_header('Connection', 'close')
+            if signed:
+                self.send_header('x-node-signature', (boundary or self.server.agent.boundary).signature(raw))
+            self.end_headers()
+            self.wfile.write(raw)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # A peer that closes while the worker is replying is not a worker failure.
+            # In particular, don't let an error response recursively raise and spam
+            # the server's request-handler traceback logger.
+            self.close_connection = True
 
     def do_GET(self):
         agent = self.server.agent
