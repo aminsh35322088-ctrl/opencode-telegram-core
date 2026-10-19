@@ -20,7 +20,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-UP = ['up','--timeout=20s','--accept-dns=false','--accept-routes=false','--shields-up','--ssh=false','--advertise-tags=tag:opencode-bot']
+UP = ['up','--timeout=20s','--accept-dns=false','--accept-routes=false','--shields-up','--ssh=false','--advertise-tags=tag:co-admin']
 
 CAPABILITIES = {'connect':'device.enroll','status':'network.status','devices':'network.devices',
                 'ssh':'ssh.exec','disconnect':'network.status','logout':'device.enroll'}
