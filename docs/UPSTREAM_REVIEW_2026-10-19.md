@@ -30,6 +30,23 @@ The newest overall upstream release is OpenCode `v2.0.32`, but v2 changes the se
 - The first compiled runtime was `115,996,800` bytes against the `120,000,000`-byte ceiling, leaving only `4,003,200` bytes of headroom; avoid bundling extra large features into this baseline PR.
 - Existing runtime, SDK, and native package identities must still be rebuilt and verified as one unit. Prior Railway soak evidence does not qualify this new upstream candidate.
 
+## MCP readiness finding
+
+The v2 startup/catalog race discussed in [upstream issue #51812](https://github.com/anomalyco/opencode/issues/51812) is not a reason to add a sleep to the pinned v1.19.3 runtime. The exact v1.19.3 source follows an awaited, directory-scoped path:
+
+- `MCP.tools()` calls `InstanceState.get(state)`.
+- `InstanceState.get` awaits the directory-keyed `ScopedCache`; its lookup runs the `MCP.state` initializer.
+- `MCP.state` loads the configured MCP entries and awaits each `create(...)` operation before the initialized state exposes connected clients and cached tool definitions.
+- `SessionTools.resolve()` reads `mcp.clients()` and then `mcp.tools()` from that same state, rather than racing a detached catalog request.
+- Each connection attempt is bounded by the configured timeout or the 30-second default, and a failed connection closes its transport.
+
+Disposition: no arbitrary startup delay and no v2 initialization transplant. Keep timeout and failed-transport cleanup guarantees. Add a v1 runtime patch only if a deterministic reproduction shows the first prompt can proceed while tool initialization is still pending.
+
+Source inspection:
+- [MCP service, v1.19.3](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/mcp/index.ts)
+- [Directory-scoped instance state, v1.19.3](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/effect/instance-state.ts)
+- [Prompt tool assembly, v1.19.3](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/session/tools.ts)
+
 ## Sources
 
 - Official changelog: https://opencode.ai/changelog
