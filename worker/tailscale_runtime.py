@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 UP = ['up','--timeout=20s','--accept-dns=false','--accept-routes=false','--shields-up','--ssh=false','--advertise-tags=tag:co-admin']
 
 CAPABILITIES = {'connect':'device.enroll','status':'network.status','devices':'network.devices',
-                'ssh':'ssh.exec','disconnect':'network.status','logout':'device.enroll'}
+                'ping':'network.devices','ssh':'ssh.exec','disconnect':'network.status','logout':'device.enroll'}
 
 def eligible_devices(status):
     devices=[]
@@ -230,6 +230,7 @@ class TailscaleRuntime:
                 owner=self.authorize(capability,value.get('target') if action=='ssh' else None)
                 if value.get('sessionId')!=owner[1] or Path(value.get('directory','')).resolve()!=self.agent.workspace.resolve():raise ValueError()
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',value.get('id','')):raise ValueError()
+                if action in ('ssh','ping') and (not isinstance(value.get('target'),str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,255}',value.get('target',''))):raise ValueError()
                 if action=='ssh' and (not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',value.get('target','')) or
                     not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',value.get('user','')) or not isinstance(value.get('command'),str)
                     or not 0<len(value['command'])<=8192 or '\x00' in value['command'] or value['command'].lstrip().startswith('-')):raise ValueError()
@@ -311,13 +312,18 @@ class TailscaleRuntime:
                     op['enrollment']=lease
                     try:lease.consume(lambda auth:self.command(op,UP,auth))
                     finally:op.pop('enrollment',None)
-        elif action in ('devices','ssh'):
+        elif action in ('devices','ssh','ping'):
             self.command(op,UP)
         elif action in ('disconnect','logout'):
             self.command(op,['down' if action=='disconnect' else 'logout'])
             self.authorize(capability);return {'nodeState':'disconnected' if action=='disconnect' else 'logged-out','runtimeState':'stopped','connectionMode':'on-demand','connected':False}
         status=json.loads(self.command(op,['status','--json']))
         if action=='devices':result={'devices':eligible_devices(status)}
+        elif action=='ping':
+            peers=[peer for peer in eligible_devices(status) if request['target'] in (peer['id'],peer['name'],peer['address'])]
+            if len(peers)!=1:raise ValueError('Ping target is not an eligible online tag:ssh peer')
+            output=self.command(op,['ping','--c','1',peers[0]['address']])
+            result={'target':peers[0]['name'],'address':peers[0]['address'],'output':output[:4096]}
         elif action=='ssh':
             peers=[peer for peer in eligible_devices(status) if peer['id']==request['target']]
             if len(peers)!=1:raise ValueError('SSH peer not eligible')

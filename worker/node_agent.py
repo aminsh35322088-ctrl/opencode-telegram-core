@@ -27,6 +27,12 @@ CORE_READINESS_PROBE_TIMEOUT_S = 2.0
 CORE_BOOTSTRAP_ATTEMPTS = 3
 CORE_BOOTSTRAP_RETRY_DELAY_S = 1.0
 BROWSER_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "browser.ts"
+SEND_FILE_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "send-file.ts"
+SAFE_DOWNLOAD_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "safe-download.ts"
+TELEGRAM_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "telegram.ts"
+MEDIA_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "media.ts"
+GITHUB_CI_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "github-ci.ts"
+TAILSCALE_TOOL_SOURCE = Path(__file__).parent / "runtime_tools" / "tailscale.ts"
 
 
 def runtime_identity(filename=Path('/usr/local/share/core-build-info.json')):
@@ -148,21 +154,33 @@ def materialize_github_tool(tools):
 def materialize_railway_tool(tools):
     materialize_image_tool(tools, Path('/opt/worker/runtime_tools/railway.ts'), 'railway.ts')
 
+def materialize_file_transfer_tools(tools):
+    materialize_image_tool(tools, SEND_FILE_TOOL_SOURCE, 'send-file.ts')
+    materialize_image_tool(tools, SAFE_DOWNLOAD_TOOL_SOURCE, 'safe-download.ts')
+    materialize_image_tool(tools, TELEGRAM_TOOL_SOURCE, 'telegram.ts')
+    materialize_image_tool(tools, MEDIA_TOOL_SOURCE, 'media.ts')
+
+def materialize_github_ci_tool(tools):
+    materialize_image_tool(tools, GITHUB_CI_TOOL_SOURCE, 'github-ci.ts')
+
+def materialize_tailscale_tool(tools):
+    materialize_image_tool(tools, TAILSCALE_TOOL_SOURCE, 'tailscale.ts')
+
 
 def materialize_image_tool(tools, source_path, filename):
     # Source belongs to the immutable image, never a Topic snapshot/workspace.
     try:
         fd = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as error:
-        raise ValueError('browser adapter source unavailable or unsafe') from error
+        raise ValueError('runtime tool source unavailable or unsafe') from error
     try:
         source = os.fstat(fd)
         if not stat.S_ISREG(source.st_mode) or source.st_uid != 0 or source.st_mode & 0o022 or source.st_size > 65536:
-            raise ValueError('browser adapter source must be immutable root-owned image code')
+            raise ValueError('runtime tool source must be immutable root-owned image code')
         with os.fdopen(fd, 'rb', closefd=False) as stream:
             data = stream.read(65537)
         if len(data) > 65536:
-            raise ValueError('browser adapter source exceeds bound')
+            raise ValueError('runtime tool source exceeds bound')
     finally:
         os.close(fd)
     atomic(tools / filename, data)
@@ -774,23 +792,32 @@ class Agent:
         materialize_browser_tool(tools)
         if not self.boundary.unbound:
             materialize_railway_tool(tools)
+            materialize_file_transfer_tools(tools)
         else:
             (tools / 'railway.ts').unlink(missing_ok=True)
+            (tools / 'send-file.ts').unlink(missing_ok=True)
+            (tools / 'safe-download.ts').unlink(missing_ok=True)
+            (tools / 'telegram.ts').unlink(missing_ok=True)
+            (tools / 'media.ts').unlink(missing_ok=True)
         network_configured = not self.boundary.unbound and any(isinstance(ref,dict) and ref.get('integrationId') == 'tailscale'
             and ref.get('configured') is True for ref in snapshot['credentialReferences'])
         if network_configured:
             materialize_network_tool(tools)
+            materialize_tailscale_tool(tools)
             if self.network is None:
                 from tailscale_runtime import TailscaleRuntime
                 self.network = TailscaleRuntime(self)
         else:
             (tools / 'network.ts').unlink(missing_ok=True)
+            (tools / 'tailscale.ts').unlink(missing_ok=True)
         github_configured = not self.boundary.unbound and any(isinstance(ref,dict) and ref.get('integrationId') == 'github'
             and ref.get('configured') is True for ref in snapshot['credentialReferences'])
         if github_configured:
             materialize_github_tool(tools)
+            materialize_github_ci_tool(tools)
         else:
             (tools / 'github.ts').unlink(missing_ok=True)
+            (tools / 'github-ci.ts').unlink(missing_ok=True)
         atomic(config / 'opencode.json', canonical(runtime_config))
         atomic(runtime_root / 'global-snapshot.json', canonical(snapshot))
         skills = config / 'skills'
@@ -1294,13 +1321,29 @@ class Agent:
                 if set(payload) != {'title'} or not isinstance(payload['title'], str) or not 1 <= len(payload['title'].strip()) <= 128:
                     raise ValueError('invalid session title')
                 return self.local('PATCH', '/session/' + encoded, {'title': payload['title'].strip()})
-            if operation in ('file.list', 'file.read'):
-                if set(payload) != {'path'} or not isinstance(payload['path'], str) or len(payload['path']) > 1024:
+            if operation in ('file.list', 'file.read', 'file.stat', 'file.download'):
+                expected = {'path', 'offset', 'limit'} if operation == 'file.download' else {'path'}
+                if set(payload) != expected or not isinstance(payload.get('path'), str) or len(payload['path']) > 2048:
                     raise ValueError('invalid workspace path')
-                relative = Path(payload['path'])
-                if relative.is_absolute() or '..' in relative.parts or '\x00' in payload['path']:
+                raw_path = Path(payload['path'])
+                if '\x00' in payload['path'] or '..' in raw_path.parts:
                     raise ValueError('foreign workspace path')
-                # Open each component relative to an already opened directory.
+                if raw_path.is_absolute():
+                    try:
+                        relative = raw_path.relative_to(self.workspace)
+                    except ValueError as error:
+                        raise ValueError('foreign workspace path') from error
+                else:
+                    relative = raw_path
+                if relative.is_absolute() or '..' in relative.parts:
+                    raise ValueError('foreign workspace path')
+                offset = 0
+                limit = 0
+                if operation == 'file.download':
+                    offset, limit = payload['offset'], payload['limit']
+                    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0 or not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 2 * 1024 * 1024:
+                        raise ValueError('invalid file transfer window')
+                # Open every component relative to an already opened directory.
                 # O_NOFOLLOW closes the check/open race with model file mutations.
                 descriptor = os.open(self.workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 try:
@@ -1321,11 +1364,30 @@ class Agent:
                                 if not (stat.S_ISDIR(metadata.st_mode) or (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1)):
                                     continue
                                 nodes.append({'name': entry.name, 'path': str(relative / entry.name),
-                                              'type': 'directory' if stat.S_ISDIR(metadata.st_mode) else 'file', 'ignored': False})
+                                              'type': 'directory' if stat.S_ISDIR(metadata.st_mode) else 'file',
+                                              'size': metadata.st_size if stat.S_ISREG(metadata.st_mode) else None,
+                                              'mtimeMs': int(metadata.st_mtime * 1000) if stat.S_ISREG(metadata.st_mode) else None,
+                                              'ignored': False})
                         return sorted(nodes, key=lambda item: (item['type'] != 'directory', item['name']))
                     metadata = os.fstat(descriptor)
-                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > 262144:
-                        raise ValueError('file unavailable or too large')
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                        raise ValueError('file unavailable')
+                    if operation == 'file.stat':
+                        if metadata.st_size > 50 * 1024 * 1024:
+                            raise ValueError('file exceeds the 50 MB transfer limit')
+                        return {'name': relative.name, 'path': str(relative), 'absolutePath': str(self.workspace / relative),
+                                'size': metadata.st_size, 'mtimeMs': int(metadata.st_mtime * 1000), 'isFile': True}
+                    if operation == 'file.download':
+                        if metadata.st_size > 50 * 1024 * 1024 or offset > metadata.st_size:
+                            raise ValueError('file unavailable or too large')
+                        os.lseek(descriptor, offset, os.SEEK_SET)
+                        content = os.read(descriptor, min(limit, metadata.st_size - offset))
+                        next_offset = offset + len(content)
+                        return {'path': str(relative), 'size': metadata.st_size, 'offset': offset,
+                                'nextOffset': next_offset, 'eof': next_offset >= metadata.st_size,
+                                'data': base64.b64encode(content).decode('ascii')}
+                    if metadata.st_size > 262144:
+                        raise ValueError('file too large')
                     chunks = []
                     remaining = 262145
                     while remaining:

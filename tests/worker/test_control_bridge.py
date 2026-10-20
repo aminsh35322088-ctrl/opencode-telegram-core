@@ -22,6 +22,8 @@ class BridgeTests(unittest.TestCase):
                 self.calls.append((operation, payload, session))
                 if operation == 'railway.tool':
                     return {'action': payload.get('action'), 'access': 'read-only'}
+                if operation == 'telegram.tool':
+                    return {'ok': True, 'action': payload.get('action'), 'scope': 'current-topic'}
                 return {'approvalId': 'approval-fixture', 'preview': payload['mutation']}
         self.agent = Agent()
         self.bridge = ControlBridge(self.agent)
@@ -75,3 +77,13 @@ class BridgeTests(unittest.TestCase):
         result = self.bridge.dispatch({'sessionId': 'ses_owned', 'action': 'railway.tool', 'payload': {'action': 'projects'}})
         self.assertEqual(result, {'action': 'projects', 'access': 'read-only'})
         self.assertEqual(self.agent.calls, [('railway.tool', {'action': 'projects'}, 'ses_owned')])
+
+    def test_telegram_tool_forwards_only_the_scoped_payload_and_bound_session(self):
+        result = self.bridge.dispatch({'sessionId': 'ses_owned', 'action': 'telegram.tool', 'payload': {'action': 'context.current'}})
+        self.assertEqual(result, {'ok': True, 'action': 'context.current', 'scope': 'current-topic'})
+        self.assertEqual(self.agent.calls, [('telegram.tool', {'action': 'context.current'}, 'ses_owned')])
+
+    def test_telegram_tool_rejects_foreign_session_before_outbound(self):
+        with self.assertRaises(ValueError):
+            self.bridge.dispatch({'sessionId': 'ses_foreign', 'action': 'telegram.tool', 'payload': {'action': 'context.current'}})
+        self.assertEqual(self.agent.calls, [])

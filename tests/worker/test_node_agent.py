@@ -439,6 +439,32 @@ class LifecycleTests(SecurityTests):
         self.assertEqual({node['path'] for node in nodes}, {'note.txt', 'binary'})
         self.assertTrue(all('absolute' not in node for node in nodes))
 
+    def test_ui_file_stat_and_bounded_download_chunks(self):
+        self.agent.local = lambda *args: self.fail('retired file HTTP API called')
+        payload = bytes(range(256)) * 9000
+        (self.agent.workspace / 'artifact.bin').write_bytes(payload)
+        info = self.agent.dispatch(self.request('file.stat', {'path': 'artifact.bin'}))
+        self.assertEqual(info['size'], len(payload))
+        self.assertEqual(info['name'], 'artifact.bin')
+        self.assertTrue(info['isFile'])
+        first = self.agent.dispatch(self.request('file.download', {'path': 'artifact.bin', 'offset': 0, 'limit': 1024 * 1024}))
+        self.assertEqual(first['offset'], 0)
+        self.assertEqual(first['nextOffset'], 1024 * 1024)
+        self.assertFalse(first['eof'])
+        self.assertEqual(__import__('base64').b64decode(first['data']), payload[:1024 * 1024])
+        last = self.agent.dispatch(self.request('file.download', {'path': str(self.agent.workspace / 'artifact.bin'), 'offset': 1024 * 1024, 'limit': 2 * 1024 * 1024}))
+        self.assertEqual(__import__('base64').b64decode(last['data']), payload[1024 * 1024:])
+        self.assertTrue(last['eof'])
+        self.assertEqual(last['nextOffset'], len(payload))
+        for payload_value in (
+            {'path': '../artifact.bin', 'offset': 0, 'limit': 1024},
+            {'path': str(self.b.root / 'agent.sqlite'), 'offset': 0, 'limit': 1024},
+            {'path': 'artifact.bin', 'offset': -1, 'limit': 1024},
+            {'path': 'artifact.bin', 'offset': 0, 'limit': 3 * 1024 * 1024},
+        ):
+            with self.subTest(payload=payload_value), self.assertRaises(ValueError):
+                self.agent.dispatch(self.request('file.download', payload_value))
+
     def test_ui_file_open_rejects_symlink_swap_during_read(self):
         from unittest.mock import patch
         import os
@@ -469,7 +495,7 @@ class LifecycleTests(SecurityTests):
 
     def test_ui_all_new_operations_reject_foreign_session_before_core(self):
         self.agent.local = lambda *args: self.fail('foreign authority reached Core')
-        for op in ('models.list', 'agents.list', 'commands.list', 'session.todos', 'session.diff', 'session.children', 'session.child-messages', 'session.rename', 'file.list', 'file.read', 'permission.list', 'permission.reply', 'question.reject', 'model.inspect'):
+        for op in ('models.list', 'agents.list', 'commands.list', 'session.todos', 'session.diff', 'session.children', 'session.child-messages', 'session.rename', 'file.list', 'file.read', 'file.stat', 'file.download', 'permission.list', 'permission.reply', 'question.reject', 'model.inspect'):
             with self.subTest(operation=op), self.assertRaisesRegex(ValueError, 'foreign session'):
                 self.agent.dispatch(self.request(op, session='ses_other'))
 

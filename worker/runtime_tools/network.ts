@@ -2,7 +2,7 @@ const sshGrants = new Set<string>();
 
 export default {
   description: "Connect, inspect, or disconnect this Topic's protected Tailscale identity. Devices lists online tag:ssh peers; SSH requires their exact device ID and a remote username and prompts the Telegram operator for approval before connecting. Network processes retire after each operation, preserving identity for reconnect. No public SSH targets.",
-  args: {action:{type:"string",enum:["connect","status","devices","ssh","disconnect","logout"]},
+  args: {action:{type:"string",enum:["connect","status","devices","ping","ssh","disconnect","logout"]},
     target:{type:"string"},user:{type:"string"},command:{type:"string"}},
   async execute(args,context) {
     if (args?.action === "ssh" && typeof args.target === "string" && args.target.length > 0 && typeof args.user === "string" && args.user.length > 0) {

@@ -23,10 +23,15 @@ export default {
       path = `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${encodeURIComponent(args.ref)}/status`;
     } else if (args.action === "api") {
       method = (args.method || "GET").toUpperCase();
-      if (!args.path || !args.path.startsWith("/"))
-        throw new Error("api requires a path argument beginning with /");
+      if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported GitHub API method.");
+      if (!args.path || !args.path.startsWith("/") || args.path.length > 2048 || /[\r\n\0#]/u.test(args.path))
+        throw new Error("api requires a safe absolute GitHub API path.");
       path = args.path;
       body = args.body;
+      if (method !== "GET") {
+        if (typeof context.ask !== "function") throw new Error("Mutating GitHub API calls require explicit Telegram approval.");
+        await context.ask({ permission: "github-api-mutation", patterns: [`github-api:${method}:${path}`], always: [], metadata: { input: { method, path, repository: args.owner && args.repo ? `${args.owner}/${args.repo}` : "GitHub account", grantScope: "This request only" } } });
+      }
     } else {
       throw new Error("unknown github action");
     }
