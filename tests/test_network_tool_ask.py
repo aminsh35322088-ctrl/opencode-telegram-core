@@ -20,7 +20,7 @@ class NetworkToolAskTests(unittest.TestCase):
         if node is None:
             raise unittest.SkipTest("node is unavailable")
         result = subprocess.run(
-            [node, "--experimental-transform-types", str(TS_SUITE)],
+            [node, "--experimental-strip-types", str(TS_SUITE)],
             capture_output=True,
             text=True,
             timeout=180,
@@ -31,7 +31,7 @@ class NetworkToolAskTests(unittest.TestCase):
             0,
             msg=f"network_tool_ask suite failed:\n{result.stdout}\n{result.stderr}",
         )
-        self.assertIn("# fail 0", result.stdout)
+        self.assertRegex(result.stdout, r"(?:# fail 0|ℹ fail 0)")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,11 @@ class ControlBridge:
             if not isinstance(payload, dict):
                 raise ValueError('invalid Railway request')
             return self.agent.outbound('railway.tool', payload, session=session)
+        if action == 'telegram.tool':
+            payload = value.get('payload', {})
+            if not isinstance(payload, dict):
+                raise ValueError('invalid Telegram request')
+            return self.agent.outbound('telegram.tool', payload, session=session)
         if action in ('actions.list', 'actions.resolve', 'actions.invoke'):
             payload = value.get('payload', {})
             if not isinstance(payload, dict):

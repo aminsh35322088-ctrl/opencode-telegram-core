@@ -205,6 +205,39 @@ class RuntimeToolTests(unittest.TestCase):
                 a.materialize_browser_tool(tools)
             self.assertEqual((tools / 'browser.ts').read_text(), source.read_text())
 
+    def test_file_transfer_tools_materialize_only_from_verified_image_sources(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            send = root / 'send-file.ts'
+            download = root / 'safe-download.ts'
+            telegram = root / 'telegram.ts'
+            github_ci = root / 'github-ci.ts'
+            tailscale = root / 'tailscale.ts'
+            media = root / 'media.ts'
+            send.write_text('export default { description: "send" }')
+            download.write_text('export default { description: "download" }')
+            telegram.write_text('export default { description: "telegram" }')
+            github_ci.write_text('export default { description: "github-ci" }')
+            tailscale.write_text('export default { description: "tailscale" }')
+            media.write_text('export default { description: "media" }')
+            for source in (send, download, telegram, github_ci, tailscale, media): source.chmod(0o644)
+            tools = root / 'tools'; tools.mkdir()
+            from types import SimpleNamespace
+            original = a.os.fstat
+            def image_stat(fd):
+                value = original(fd)
+                return SimpleNamespace(st_mode=value.st_mode, st_uid=0, st_size=value.st_size)
+            with patch.object(a, 'SEND_FILE_TOOL_SOURCE', send), patch.object(a, 'SAFE_DOWNLOAD_TOOL_SOURCE', download), patch.object(a, 'TELEGRAM_TOOL_SOURCE', telegram), patch.object(a, 'GITHUB_CI_TOOL_SOURCE', github_ci), patch.object(a, 'TAILSCALE_TOOL_SOURCE', tailscale), patch.object(a, 'MEDIA_TOOL_SOURCE', media), patch.object(a.os, 'fstat', image_stat):
+                a.materialize_file_transfer_tools(tools)
+                a.materialize_github_ci_tool(tools)
+                a.materialize_tailscale_tool(tools)
+            self.assertEqual((tools / 'send-file.ts').read_text(), send.read_text())
+            self.assertEqual((tools / 'safe-download.ts').read_text(), download.read_text())
+            self.assertEqual((tools / 'telegram.ts').read_text(), telegram.read_text())
+            self.assertEqual((tools / 'github-ci.ts').read_text(), github_ci.read_text())
+            self.assertEqual((tools / 'tailscale.ts').read_text(), tailscale.read_text())
+            self.assertEqual((tools / 'media.ts').read_text(), media.read_text())
+
     def test_browser_tool_rejects_writable_or_symlink_source(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / 'browser.ts'
