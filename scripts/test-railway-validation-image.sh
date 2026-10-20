@@ -8,6 +8,7 @@ IMAGE="${CORE_VALIDATION_IMAGE:-core-railway-validation:${GITHUB_RUN_ID:-local}}
 CONTAINER="core-railway-validation-${GITHUB_RUN_ID:-local}-$$"
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 MEMORY_LIMIT_BYTES=1000000000
+MEMORY_LIMIT_TOLERANCE_BYTES=4096
 
 cleanup() {
   local status=$?
@@ -33,7 +34,7 @@ docker run --detach \
   --publish "127.0.0.1:$PORT:3000" \
   "$IMAGE" >/dev/null
 
-export CORE_SOURCE_COMMIT MEMORY_LIMIT_BYTES
+export CORE_SOURCE_COMMIT MEMORY_LIMIT_BYTES MEMORY_LIMIT_TOLERANCE_BYTES
 python3 - "$PORT" "$CONTAINER" <<'PY'
 import json
 import os
@@ -48,6 +49,7 @@ port, container = sys.argv[1], sys.argv[2]
 lock = json.loads(Path("upstream/lock.json").read_text())
 expected_commit = os.environ["CORE_SOURCE_COMMIT"]
 expected_memory_limit = int(os.environ["MEMORY_LIMIT_BYTES"])
+memory_limit_tolerance = int(os.environ["MEMORY_LIMIT_TOLERANCE_BYTES"])
 url = f"http://127.0.0.1:{port}/"
 deadline = time.monotonic() + 360
 last = None
@@ -119,8 +121,16 @@ cgroup_samples = last.get("cgroupSamples") or []
 assert len(cgroup_samples) >= 3, f"missing cgroup resource observations: {cgroup_samples}"
 recent_cgroups = cgroup_samples[-3:]
 memory_limits = [sample.get("memoryMaxBytes") for sample in recent_cgroups]
-assert all(value == expected_memory_limit for value in memory_limits), (
-    f"container memory cap mismatch: expected {expected_memory_limit}, observed {memory_limits}"
+invalid_limits = [
+    value for value in memory_limits
+    if not isinstance(value, int)
+    or value <= 0
+    or value > expected_memory_limit
+    or expected_memory_limit - value >= memory_limit_tolerance
+]
+assert not invalid_limits, (
+    f"container memory cap mismatch: requested {expected_memory_limit} bytes "
+    f"(one page of rounding allowed), observed {memory_limits}"
 )
 memory_current = [sample.get("memoryCurrentBytes") for sample in recent_cgroups]
 assert all(isinstance(value, int) and value <= expected_memory_limit for value in memory_current), (
@@ -140,7 +150,9 @@ print(json.dumps({
     "maxObservedDescendants": max(descendants or [0]),
     "browserTrees": browser.get("browserTrees"),
     "browserIsolationChecks": len(required_browser_checks),
-    "containerMemoryLimitBytes": memory_limits[-1],
+    "containerMemoryLimitRequestedBytes": expected_memory_limit,
+    "containerMemoryLimitObservedBytes": memory_limits[-1],
+    "memoryLimitRoundingBytes": expected_memory_limit - memory_limits[-1],
     "maxContainerMemoryCurrentBytes": max(memory_current),
     "failures": last["failures"],
 }, sort_keys=True), flush=True)
