@@ -145,6 +145,10 @@ def materialize_github_tool(tools):
     materialize_image_tool(tools, Path('/opt/worker/runtime_tools/github.ts'), 'github.ts')
 
 
+def materialize_railway_tool(tools):
+    materialize_image_tool(tools, Path('/opt/worker/runtime_tools/railway.ts'), 'railway.ts')
+
+
 def materialize_image_tool(tools, source_path, filename):
     # Source belongs to the immutable image, never a Topic snapshot/workspace.
     try:
@@ -768,6 +772,10 @@ class Agent:
         atomic(tools / 'bot.ts', self.bridge.tool_source().encode())
         atomic(tools / 'actions.ts', self.bridge.actions_tool_source().encode())
         materialize_browser_tool(tools)
+        if not self.boundary.unbound:
+            materialize_railway_tool(tools)
+        else:
+            (tools / 'railway.ts').unlink(missing_ok=True)
         network_configured = not self.boundary.unbound and any(isinstance(ref,dict) and ref.get('integrationId') == 'tailscale'
             and ref.get('configured') is True for ref in snapshot['credentialReferences'])
         if network_configured:
