@@ -1,0 +1,110 @@
+diff --git a/packages/opencode/src/session/llm/ai-sdk.ts b/packages/opencode/src/session/llm/ai-sdk.ts
+--- a/packages/opencode/src/session/llm/ai-sdk.ts
++++ b/packages/opencode/src/session/llm/ai-sdk.ts
+@@ -86,8 +86,8 @@
+       return Effect.succeed([LLMEvent.stepStart({ index: state.step })])
+ 
+     case "finish-step":
+-      if (event.rawFinishReason === "network_error")
+-        return Effect.fail(new ProviderError.ResponseStreamError("Provider finish_reason: network_error"))
++      if (event.rawFinishReason === "network_error" || event.rawFinishReason === "MALFORMED_RESPONSE")
++        return Effect.fail(new ProviderError.ResponseStreamError(`Provider finish_reason: ${event.rawFinishReason}`))
+       return Effect.sync(() => {
+         const original = providerMetadata(event.providerMetadata)
+         const metadata =
+diff --git a/packages/opencode/src/session/retry.ts b/packages/opencode/src/session/retry.ts
+--- a/packages/opencode/src/session/retry.ts
++++ b/packages/opencode/src/session/retry.ts
+@@ -38,6 +38,7 @@
+   /^timeout$|\b(?:request|response|connection|network|stream|read) (?:timeout|timed out|time out)\b/i,
+   /try your request again|retry your request|resource exhausted|resource_exhausted/i,
+   /\btry again (?:later|in\b)|\b(?:currently|temporarily) at capacity\b/i,
++  /MALFORMED_RESPONSE/i,
+ ]
+ 
+ function cap(ms: number) {
+diff --git a/packages/opencode/test/session/retry.test.ts b/packages/opencode/test/session/retry.test.ts
+--- a/packages/opencode/test/session/retry.test.ts
++++ b/packages/opencode/test/session/retry.test.ts
+@@ -210,6 +210,7 @@
+     "network error",
+     "network-error",
+     "network_error",
++    "MALFORMED_RESPONSE",
+     "connection refused",
+     "connect ECONNREFUSED",
+     "request ETIMEDOUT",
+diff --git a/packages/opencode/test/session/llm.test.ts b/packages/opencode/test/session/llm.test.ts
+--- a/packages/opencode/test/session/llm.test.ts
++++ b/packages/opencode/test/session/llm.test.ts
+@@ -970,6 +970,70 @@
+ 
+         if (!(error instanceof ProviderError.ResponseStreamError)) throw error
+         expect(error.message).toBe("Provider finish_reason: network_error")
++      }),
++    {
++      config: () => ({
++        enabled_providers: [vivgridFixture.providerID],
++        provider: {
++          [vivgridFixture.providerID]: {
++            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
++          },
++        },
++      }),
++    },
++  )
++
++  it.instance(
++    "surfaces Gemini MALFORMED_RESPONSE finishes as retryable stream failures",
++    () =>
++      Effect.gen(function* () {
++        const fixture = loadFixture(vivgridFixture.providerID, vivgridFixture.modelID)
++        const request = waitRequest(
++          "/chat/completions",
++          createEventResponse(
++            [
++              {
++                id: "chatcmpl-malformed-response",
++                object: "chat.completion.chunk",
++                choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: "MALFORMED_RESPONSE" }],
++              },
++            ],
++            true,
++          ),
++        )
++        const resolved = yield* Provider.use.getModel(
++          ProviderV2.ID.make(vivgridFixture.providerID),
++          ModelV2.ID.make(fixture.model.id),
++        )
++        const sessionID = SessionID.make("session-test-malformed-response")
++        const agent = {
++          name: "test",
++          mode: "primary",
++          options: {},
++          permission: [{ permission: "*", pattern: "*", action: "allow" }],
++        } satisfies Agent.Info
++        const user = {
++          id: MessageID.make("msg_user-malformed-response"),
++          sessionID,
++          role: "user",
++          time: { created: Date.now() },
++          agent: agent.name,
++          model: { providerID: ProviderV2.ID.make(vivgridFixture.providerID), modelID: resolved.id },
++        } satisfies SessionV1.User
++
++        const error = yield* drain({
++          user,
++          sessionID,
++          model: resolved,
++          agent,
++          system: ["You are a helpful assistant."],
++          messages: [{ role: "user", content: "Hello" }],
++          tools: {},
++        }).pipe(Effect.flip)
++        yield* Effect.promise(() => request)
++
++        if (!(error instanceof ProviderError.ResponseStreamError)) throw error
++        expect(error.message).toBe("Provider finish_reason: MALFORMED_RESPONSE")
+       }),
+     {
+       config: () => ({
