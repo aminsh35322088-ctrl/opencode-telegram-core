@@ -95,3 +95,5 @@ jobs:
         run: bash scripts/test-headless-runtime.sh
       - name: Verify Bot SDK surface
         run: bash scripts/build-sdk.sh
+      - name: Build and soak the compiled Railway validation image
+        run: bash scripts/test-railway-validation-image.sh
