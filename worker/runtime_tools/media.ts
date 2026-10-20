@@ -26,14 +26,23 @@ async function saveTransfer(ctx: Context, raw: unknown, relativePath: string): P
       const rawChunk = await control(ctx, "media.chunk", { transferId: t.transferId, offset, limit: Math.min(CHUNK, t.size - offset) });
       if (!rawChunk || typeof rawChunk !== "object") throw new Error("Invalid media chunk.");
       const c = rawChunk as { offset?: number; nextOffset?: number; size?: number; eof?: boolean; data?: string };
-      if (c.offset !== offset || c.size !== t.size || typeof c.data !== "string") throw new Error("Media chunk offset/size mismatch.");
+      if (c.offset !== offset || c.size !== t.size || typeof c.data !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(c.data)) throw new Error("Media chunk offset/size mismatch.");
       const bytes = Buffer.from(c.data, "base64");
-      if (!bytes.length || bytes.length > CHUNK || c.nextOffset !== offset + bytes.length || c.nextOffset > t.size) throw new Error("Media chunk length mismatch.");
-      await handle.write(bytes, 0, bytes.length, offset); offset = c.nextOffset;
-      if (offset < t.size && c.eof) throw new Error("Media transfer ended early.");
+      if (!bytes.length || bytes.length > CHUNK || c.nextOffset !== offset + bytes.length || c.nextOffset > t.size || c.eof !== (c.nextOffset >= t.size)) throw new Error("Media chunk length mismatch.");
+      let written = 0;
+      while (written < bytes.length) {
+        const result = await handle.write(bytes, written, bytes.length - written, offset + written);
+        if (result.bytesWritten <= 0) throw new Error("Could not persist media chunk.");
+        written += result.bytesWritten;
+      }
+      offset = c.nextOffset;
     }
     complete = offset === t.size;
     if (!complete) throw new Error("Media transfer was incomplete.");
+    await handle.sync();
+    const stat = await fs.stat(destination);
+    if (!stat.isFile() || stat.size !== t.size) throw new Error("Media transfer size verification failed.");
     return destination;
   } finally {
     if (handle) await handle.close();
