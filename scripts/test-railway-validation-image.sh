@@ -9,6 +9,7 @@ CONTAINER="core-railway-validation-${GITHUB_RUN_ID:-local}-$$"
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 MEMORY_LIMIT_BYTES=1000000000
 MEMORY_LIMIT_TOLERANCE_BYTES=4096
+MIN_COMPLETED_WORKLOADS=10
 
 cleanup() {
   local status=$?
@@ -34,7 +35,7 @@ docker run --detach \
   --publish "127.0.0.1:$PORT:3000" \
   "$IMAGE" >/dev/null
 
-export CORE_SOURCE_COMMIT MEMORY_LIMIT_BYTES MEMORY_LIMIT_TOLERANCE_BYTES
+export CORE_SOURCE_COMMIT MEMORY_LIMIT_BYTES MEMORY_LIMIT_TOLERANCE_BYTES MIN_COMPLETED_WORKLOADS
 python3 - "$PORT" "$CONTAINER" <<'PY'
 import json
 import os
@@ -50,6 +51,7 @@ lock = json.loads(Path("upstream/lock.json").read_text())
 expected_commit = os.environ["CORE_SOURCE_COMMIT"]
 expected_memory_limit = int(os.environ["MEMORY_LIMIT_BYTES"])
 memory_limit_tolerance = int(os.environ["MEMORY_LIMIT_TOLERANCE_BYTES"])
+minimum_workloads = int(os.environ["MIN_COMPLETED_WORKLOADS"])
 url = f"http://127.0.0.1:{port}/"
 deadline = time.monotonic() + 360
 last = None
@@ -82,12 +84,12 @@ while time.monotonic() < deadline:
 
     if last and last.get("failures"):
         raise SystemExit(f"compiled-runtime soak reported failures: {last['failures']}")
-    if last and last.get("healthy") and last.get("completedWorkloads", 0) >= 3:
+    if last and last.get("healthy") and last.get("completedWorkloads", 0) >= minimum_workloads:
         break
     time.sleep(2)
 else:
     raise SystemExit(
-        "compiled-runtime image never reached healthy state with three completed workloads; "
+        f"compiled-runtime image never reached healthy state with at least {minimum_workloads} completed workloads; "
         f"last evidence={json.dumps(last, sort_keys=True)[:4000]}"
     )
 
@@ -146,6 +148,7 @@ print(json.dumps({
     "runtimeBytes": last["runtimeBytes"],
     "runtimeMaxBytes": lock["runtimeMaxBytes"],
     "completedWorkloads": last["completedWorkloads"],
+    "minimumCompletedWorkloads": minimum_workloads,
     "maxRuntimeRssKiB": max(last.get("rssKiB") or [0]),
     "maxObservedDescendants": max(descendants or [0]),
     "browserTrees": browser.get("browserTrees"),
