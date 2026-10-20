@@ -1,0 +1,25 @@
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class RailwayValidationImageTests(unittest.TestCase):
+    def test_compiled_runtime_image_preserves_test_relative_paths(self):
+        dockerfile = (ROOT / "Dockerfile.railway-runtime").read_text()
+        entrypoint = (ROOT / "validation/railway/compiled-runtime.py").read_text()
+        self.assertIn("COPY tests/compatibility ./tests/compatibility", dockerfile)
+        self.assertIn("COPY worker/tailscale_runtime.py ./worker/tailscale_runtime.py", dockerfile)
+        self.assertIn("COPY runtime/linux/process-scope.c ./runtime/linux/process-scope.c", dockerfile)
+        self.assertIn("/validation/tests/compatibility", entrypoint)
+        self.assertNotIn("/validation/tests/' + test", entrypoint)
+        self.assertIn("cc -std=c11 -O2 runtime/linux/process-scope.c -o dist/runtime/process-scope", dockerfile)
+        self.assertIn("COPY --from=build /core/dist/runtime/process-scope ./runtime/linux/process-scope", dockerfile)
+        self.assertIn("CORE_PROCESS_SCOPE_RUNNER", entrypoint)
+        self.assertIn("COMPILED_FIXTURE_TESTS=/validation/tests/compatibility", dockerfile)
+        execution = (ROOT / "tests/compatibility/production_execution.py").read_text()
+        self.assertIn("configured_runner=os.environ.get('CORE_PROCESS_SCOPE_RUNNER')", execution)
+
+
+if __name__ == "__main__":
+    unittest.main()
