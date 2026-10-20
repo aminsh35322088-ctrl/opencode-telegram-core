@@ -27,6 +27,10 @@ class RailwayValidationImageTests(unittest.TestCase):
         self.assertIn("memoryMaxBytes", validation_script)
         self.assertIn("containerMemoryLimitObservedBytes", validation_script)
         self.assertIn("completedWorkloads", validation_script)
+        self.assertIn("MIN_COMPLETED_WORKLOADS=10", validation_script)
+        self.assertIn("minimum_workloads = int(os.environ[\"MIN_COMPLETED_WORKLOADS\"])", validation_script)
+        self.assertIn("completedWorkloads\", 0) >= minimum_workloads", validation_script)
+        self.assertIn("\"minimumCompletedWorkloads\": minimum_workloads", validation_script)
         self.assertIn("maxObservedDescendants", validation_script)
 
 
