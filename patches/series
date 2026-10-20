@@ -13,3 +13,4 @@
 0013-telegram-generated-action-context.patch
 0014-telegram-worker-runtime-selftest.patch
 0015-telegram-async-session-compaction.patch
+0016-gemini-malformed-response-retry.patch
