@@ -1,3 +1,13 @@
+## 1.18.33-bot.13-pre.41
+
+### Topic-scoped media and integration actions
+
+- Materialize image generation/editing, speech-to-text, video preparation, and bounded Telegram media-transfer tools in the immutable Worker runtime.
+- Route media operations through the signed ControlBridge with exact Topic/session ownership and bounded chunk transfers.
+- Add safe, read-only GitHub Actions inspection and approval-gated dispatch, rerun, and cancellation actions; add scoped Tailscale peer diagnostics and SSH public-key retrieval.
+- Harden atomic file publication and transfer validation to reject incomplete chunks and accidental overwrites.
+- Preserve existing Topic bindings, sessions, workspaces, and persistent volumes; deployment still requires the Bot to adopt the verified immutable Worker image.
+
 ## 1.18.33-bot.13-pre.40
 
 ### Scoped Railway access for Topic Workers
