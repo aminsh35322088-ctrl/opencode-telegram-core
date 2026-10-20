@@ -344,8 +344,12 @@ class ProductionExecution(unittest.TestCase):
         threading.Thread(target=provider.serve_forever,daemon=True).start()
         registry=plugin_registry();token=secrets.token_hex(32);calls=[];scopes=[];cancel=threading.Event()
         with tempfile.TemporaryDirectory() as directory:
-            runner=Path(directory)/'scope'
-            subprocess.run(['cc','-std=c11','-O2',str(Path(__file__).parents[2]/'runtime/linux/process-scope.c'),'-o',str(runner)],check=True)
+            configured_runner=os.environ.get('CORE_PROCESS_SCOPE_RUNNER')
+            runner=Path(configured_runner) if configured_runner else Path(directory)/'scope'
+            if configured_runner:
+                if not runner.is_file(): raise FileNotFoundError('configured process-scope runner is missing')
+            else:
+                subprocess.run(['cc','-std=c11','-O2',str(Path(__file__).parents[2]/'runtime/linux/process-scope.c'),'-o',str(runner)],check=True)
             class Delegate(BaseHTTPRequestHandler):
                 def log_message(self,*_):pass
                 def do_POST(self):

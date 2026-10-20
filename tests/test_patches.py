@@ -8,6 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 MATERIALIZE = ROOT / "scripts" / "materialize-upstream.sh"
 APPLY = ROOT / "scripts" / "apply-patches.sh"
+APPLY_HEADLESS = ROOT / "scripts" / "apply-headless-profile.sh"
 
 
 class PatchTests(unittest.TestCase):
@@ -25,6 +26,16 @@ class PatchTests(unittest.TestCase):
         debug = (tree / "packages/opencode/src/cli/cmd/debug/index.ts").read_text()
         self.assertIn('command: "build-info"', debug)
         self.assertIn("OPENCODE_TELEGRAM_CORE_VERSION", debug)
+
+    def test_headless_profile_applies_to_locked_upstream(self):
+        tree = self.materialize()
+        subprocess.run([str(APPLY), str(tree)], check=True, text=True, capture_output=True)
+        result = subprocess.run([str(APPLY_HEADLESS), str(tree)], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((tree / "packages/opencode/tsconfig.telegram.json").is_file())
+        server = (tree / "packages/opencode/src/server/routes/instance/httpapi/server.ts").read_text()
+        self.assertNotIn("ptyConnectApiRoutes", server)
+        self.assertNotIn("SessionShare.node", server)
 
     def test_drift_fails_before_partial_application(self):
         tree = self.materialize()
