@@ -21,6 +21,9 @@ class RailwayValidationImageTests(unittest.TestCase):
         self.assertIn("configured_runner=os.environ.get('CORE_PROCESS_SCOPE_RUNNER')", execution)
         validation_script = (ROOT / "scripts/test-railway-validation-image.sh").read_text()
         self.assertIn("docker build", validation_script)
+        self.assertIn("--memory", validation_script)
+        self.assertIn("MEMORY_LIMIT_BYTES=1000000000", validation_script)
+        self.assertIn("memoryMaxBytes", validation_script)
         self.assertIn("completedWorkloads", validation_script)
         self.assertIn("maxObservedDescendants", validation_script)
 
