@@ -7,6 +7,7 @@ CORE_SOURCE_COMMIT="${CORE_SOURCE_COMMIT:-${GITHUB_SHA:-$(git rev-parse HEAD)}}"
 IMAGE="${CORE_VALIDATION_IMAGE:-core-railway-validation:${GITHUB_RUN_ID:-local}}"
 CONTAINER="core-railway-validation-${GITHUB_RUN_ID:-local}-$$"
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+MEMORY_LIMIT_BYTES=1000000000
 
 cleanup() {
   local status=$?
@@ -19,18 +20,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-printf 'Building compiled Railway validation image for Core commit %s\n' "$CORE_SOURCE_COMMIT"
+printf 'Building compiled Railway validation image for Core commit %s (memory cap %s bytes)\n' "$CORE_SOURCE_COMMIT" "$MEMORY_LIMIT_BYTES"
 docker build \
   --file Dockerfile.railway-runtime \
   --build-arg "CORE_SOURCE_COMMIT=$CORE_SOURCE_COMMIT" \
   --tag "$IMAGE" .
 
 docker run --detach \
+  --memory "$MEMORY_LIMIT_BYTES" \
+  --memory-swap "$MEMORY_LIMIT_BYTES" \
   --name "$CONTAINER" \
   --publish "127.0.0.1:$PORT:3000" \
   "$IMAGE" >/dev/null
 
-export CORE_SOURCE_COMMIT
+export CORE_SOURCE_COMMIT MEMORY_LIMIT_BYTES
 python3 - "$PORT" "$CONTAINER" <<'PY'
 import json
 import os
@@ -44,6 +47,7 @@ from pathlib import Path
 port, container = sys.argv[1], sys.argv[2]
 lock = json.loads(Path("upstream/lock.json").read_text())
 expected_commit = os.environ["CORE_SOURCE_COMMIT"]
+expected_memory_limit = int(os.environ["MEMORY_LIMIT_BYTES"])
 url = f"http://127.0.0.1:{port}/"
 deadline = time.monotonic() + 360
 last = None
@@ -111,6 +115,17 @@ failed_checks = [key for key in required_browser_checks if browser.get(key) is n
 assert not failed_checks, f"browser/process-scope isolation checks failed: {failed_checks}"
 descendants = last.get("descendantCounts") or []
 assert descendants and all(value == 0 for value in descendants[-3:]), descendants[-3:]
+cgroup_samples = last.get("cgroupSamples") or []
+assert len(cgroup_samples) >= 3, f"missing cgroup resource observations: {cgroup_samples}"
+recent_cgroups = cgroup_samples[-3:]
+memory_limits = [sample.get("memoryMaxBytes") for sample in recent_cgroups]
+assert all(value == expected_memory_limit for value in memory_limits), (
+    f"container memory cap mismatch: expected {expected_memory_limit}, observed {memory_limits}"
+)
+memory_current = [sample.get("memoryCurrentBytes") for sample in recent_cgroups]
+assert all(isinstance(value, int) and value <= expected_memory_limit for value in memory_current), (
+    f"container cgroup memory exceeded its configured cap: {memory_current}"
+)
 
 print(json.dumps({
     "validation": "passed",
@@ -125,6 +140,8 @@ print(json.dumps({
     "maxObservedDescendants": max(descendants or [0]),
     "browserTrees": browser.get("browserTrees"),
     "browserIsolationChecks": len(required_browser_checks),
+    "containerMemoryLimitBytes": memory_limits[-1],
+    "maxContainerMemoryCurrentBytes": max(memory_current),
     "failures": last["failures"],
 }, sort_keys=True), flush=True)
 PY
