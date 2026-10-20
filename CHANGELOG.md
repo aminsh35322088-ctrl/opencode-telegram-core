@@ -1,3 +1,17 @@
+## 1.18.33-bot.13-pre.40
+
+### Scoped Railway access for Topic Workers
+
+- Add a built-in read-only Railway tool for workspace/project/service inspection,
+  recent deployment status, and bounded deployment logs.
+- Route every request through the authenticated signed Worker-to-Control-Plane
+  channel. Railway credentials remain exclusively in the privileged Control Plane.
+- Restrict requests to the configured workspace and verify project, service,
+  environment, and deployment ownership. Arbitrary GraphQL and mutation actions
+  are not exposed to the model.
+- Bound output and redact common secret/token patterns before returning logs or
+  service metadata. No variable values are returned.
+
 ## 1.18.33-bot.13-pre.39
 
 ### Tailnet tag migration to tag:co-admin

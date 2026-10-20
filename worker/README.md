@@ -11,7 +11,7 @@ The Topic Worker is the per-Topic runtime boundary used by the Bot Control Plane
 | bootstrap_identity.py and cloud_bootstrap.py | Install the identity, generation, signing material, and initial configuration provided by the Control Plane |
 | control_bridge.py | Calls the Bot Control Plane for narrowly scoped operations and credentials |
 | credential_broker.py and credential_transport.py | Acquire purpose- and capability-bound credential leases when a supported request needs them |
-| provider_proxy.py, github_proxy.py, mcp_proxy.py | Forward supported provider/GitHub/MCP traffic without persisting plaintext credentials in Core config |
+| provider_proxy.py, github_proxy.py, mcp_proxy.py | Forward supported provider/GitHub/MCP traffic without persisting plaintext credentials in Core config |\n| runtime_tools/railway.ts and ControlBridge railway.tool | Expose read-only Railway workspace/project/service/deployment inspection through the authenticated Control Plane; no raw GraphQL, mutations, or secret values reach the Worker model |
 | action_runtime.py and runtime_tools/ | Resolve enabled generated actions and provide explicit browser/network helper capabilities |
 | single_slot.py | Enforce one-Topic-at-a-time state and safe retirement/reuse |
 | git_shim.py, tailscale_remote.py, tailscale_runtime.py | Provide constrained Git and optional network/runtime integration bridges |
@@ -19,7 +19,7 @@ The Topic Worker is the per-Topic runtime boundary used by the Bot Control Plane
 ## Trust boundaries
 
 - The Bot Control Plane provisions the dedicated /data volume, Worker identity, generation, and per-node signing key. Railway provisioning credentials remain in the Control Plane.
-- The Worker does not receive TELEGRAM_BOT_TOKEN or RAILWAY_API_TOKEN.
+- The Worker does not receive TELEGRAM_BOT_TOKEN or RAILWAY_API_TOKEN. Railway model access is a fixed read-only action set relayed through the signed node channel; the Control Plane enforces workspace/project/service/deployment ownership before returning results.
 - The agent runs as root to own configuration, identity, and lifecycle supervision. OpenCode Core runs as UID 1000 on loopback; Topic session/workspace data remains owned by that runtime user.
 - Public HTTP exposes readiness and authenticated RPC only. The raw OpenCode API is not public.
 - NODE_SHARED_SECRET is captured before Core starts and removed from Core's environment.
