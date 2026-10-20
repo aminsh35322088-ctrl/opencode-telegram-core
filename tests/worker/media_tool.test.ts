@@ -26,10 +26,13 @@ test("image generation pulls a bounded Topic transfer and emits an artifact mark
   };
   try {
     const output = await mediaTool.execute({ action: "image.generate", prompt: "a small cat", output: "artifacts/result.png" }, { sessionID: "ses_topic", directory: root });
-    const result = JSON.parse(output) as { ok: boolean; path: string; deliveryMarker: string; mimeType: string };
+    const marker = `__TELEGRAM_ARTIFACT__ `;
+    const markerIndex = output.lastIndexOf(marker);
+    assert.ok(markerIndex > 0, "tool output includes an explicit Telegram artifact marker");
+    const result = JSON.parse(output.slice(0, markerIndex).trim()) as { ok: boolean; path: string; mimeType: string };
+    assert.equal(output.slice(markerIndex).trim(), `${marker}${result.path}`);
     assert.equal(result.ok, true);
     assert.equal(result.mimeType, "image/png");
-    assert.equal(result.deliveryMarker, `__TELEGRAM_ARTIFACT__ ${result.path}`);
     assert.deepEqual(await readFile(result.path), bytes);
     assert.deepEqual(actions, ["image.generate", "media.chunk", "media.finish"]);
   } finally {

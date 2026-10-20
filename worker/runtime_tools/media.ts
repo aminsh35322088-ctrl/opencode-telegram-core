@@ -61,7 +61,7 @@ export default {
       const ext = extension(String(metadata.mimeType ?? "application/octet-stream"));
       const raw = args.output?.trim() || `artifacts/image-${Date.now()}${ext}`;
       const saved = await saveTransfer(context, metadata, path.extname(raw) ? raw : `${raw}${ext}`);
-      return JSON.stringify({ ok: true, path: saved, mimeType: metadata.mimeType, selection: metadata.selection ?? null, deliveryMarker: `__TELEGRAM_ARTIFACT__ ${saved}` }, null, 2);
+      return `${JSON.stringify({ ok: true, path: saved, mimeType: metadata.mimeType, selection: metadata.selection ?? null }, null, 2)}\n__TELEGRAM_ARTIFACT__ ${saved}`;
     }
     if (action === "video.prepare") {
       const result = await control(context, action, { target, index }) as { source?: string; frames?: Transfer[]; audio?: Transfer | null };
