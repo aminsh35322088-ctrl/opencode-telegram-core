@@ -23,7 +23,9 @@ class RailwayValidationImageTests(unittest.TestCase):
         self.assertIn("docker build", validation_script)
         self.assertIn("--memory", validation_script)
         self.assertIn("MEMORY_LIMIT_BYTES=1000000000", validation_script)
+        self.assertIn("MEMORY_LIMIT_TOLERANCE_BYTES=4096", validation_script)
         self.assertIn("memoryMaxBytes", validation_script)
+        self.assertIn("containerMemoryLimitObservedBytes", validation_script)
         self.assertIn("completedWorkloads", validation_script)
         self.assertIn("maxObservedDescendants", validation_script)
 
